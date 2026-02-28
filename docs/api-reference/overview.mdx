@@ -1,0 +1,26 @@
+---
+title: API overview
+description: OpenAI-compatible REST API endpoints exposed by the Ferro Labs AI Gateway — chat completions, embeddings, image generation, model listing, and streaming responses.
+keywords: [AI gateway API, OpenAI compatible API, LLM REST API, chat completions API, gateway streaming API]
+---
+
+The gateway exposes an OpenAI compatible API surface so you can reuse existing clients.
+
+## Base URL
+
+Use the gateway host as the base URL, for example:
+
+```
+http://localhost:8080
+```
+
+## Common endpoints
+
+- `/v1/chat/completions`
+- `/v1/models`
+- `/v1/embeddings`
+- `/v1/images/generations`
+- `/health`
+- `/metrics`
+
+Other `/v1/*` endpoints (for example `/v1/audio/*`, `/v1/files`, `/v1/realtime`) are proxied to the selected provider while preserving payloads.

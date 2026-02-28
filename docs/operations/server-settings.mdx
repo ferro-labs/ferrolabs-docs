@@ -1,0 +1,35 @@
+---
+title: Server settings
+description: All runtime environment variables for the Ferro Labs AI Gateway — port, CORS, config path, timeouts, TLS settings, and storage backend configuration.
+keywords: [AI gateway server settings, environment variables LLM proxy, gateway runtime config, gateway port settings, CORS AI gateway, TLS configuration]
+---
+
+## Core runtime
+
+- `PORT` - server port (default `8080`)
+- `CORS_ORIGINS` - comma-separated list of allowed origins
+- `GATEWAY_CONFIG` - path to JSON or YAML config file
+- `LOG_LEVEL` - logging level (for example `debug`, `info`, `warn`, `error`)
+- `LOG_FORMAT` - log output format
+
+## Admin bootstrap
+
+- `ADMIN_BOOTSTRAP_KEY` - first-run admin bearer key
+- `ADMIN_BOOTSTRAP_READ_ONLY_KEY` - first-run read-only bearer key
+- `ADMIN_BOOTSTRAP_ENABLED` - enable or disable bootstrap keys (default enabled)
+
+Bootstrap keys are only honored while the API key store is empty.
+
+## Stores
+
+- `CONFIG_STORE_BACKEND` - `memory`, `sqlite`, `postgres`
+- `CONFIG_STORE_DSN` - SQLite file path or Postgres DSN
+- `API_KEY_STORE_BACKEND` - `memory`, `sqlite`, `postgres`
+- `API_KEY_STORE_DSN` - SQLite file path or Postgres DSN
+- `REQUEST_LOG_STORE_BACKEND` - `sqlite`, `postgres`
+- `REQUEST_LOG_STORE_DSN` - SQLite file path or Postgres DSN
+
+## Rate limiting
+
+- `RATE_LIMIT_RPS` - requests per second (enables per-IP limiting)
+- `RATE_LIMIT_BURST` - burst capacity

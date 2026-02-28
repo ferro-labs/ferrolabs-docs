@@ -1,0 +1,189 @@
+---
+title: Configuration
+description: Complete configuration reference for the Ferro Labs AI Gateway — routes, targets, model aliases, plugins, MCP servers, and environment variable overrides in config.yaml.
+keywords: [AI gateway configuration, config.yaml, LLM routing config, model aliases, YAML configuration, gateway config reference]
+---
+
+The gateway loads configuration from a YAML or JSON file at the path set by `GATEWAY_CONFIG`.
+
+```bash
+export GATEWAY_CONFIG=./config.yaml
+./ferrogw
+```
+
+Supported extensions: `.yaml`, `.yml`, `.json`.
+
+## Strategy
+
+The top-level `strategy` block controls how requests are routed.
+
+```yaml
+strategy:
+  mode: fallback  # single | fallback | loadbalance | conditional | least-latency | cost-optimized
+```
+
+| Mode | Description |
+|---|---|
+| `single` | Route every request to the first target. |
+| `fallback` | Try targets in order; retry on failure with exponential backoff. |
+| `loadbalance` | Weighted random distribution across targets. |
+| `conditional` | Rule-based: match model name or model prefix to a target. |
+| `least-latency` | Route to the target with the lowest P50 latency (rolling tracker). |
+| `cost-optimized` | Use the built-in model catalog to estimate prompt cost and pick the cheapest compatible target. |
+
+### Conditional rules
+
+```yaml
+strategy:
+  mode: conditional
+  conditions:
+    - key: model
+      value: gpt-4o-mini
+      target_key: openai
+    - key: model_prefix
+      value: claude
+      target_key: anthropic
+    - key: model
+      value: gemini-1.5-flash
+      target_key: gemini
+```
+
+Rules are evaluated in order. `model` matches the exact model ID; `model_prefix` matches any model whose name starts with the given string.
+
+## Targets
+
+Targets are provider references. Each `virtual_key` must match a registered provider (see [Provider configuration](/guides/providers-config)).
+
+```yaml
+targets:
+  - virtual_key: openai
+    weight: 70           # used by loadbalance strategy
+    retry:
+      attempts: 3
+      retry_on_status: [429, 502, 503, 504]
+    circuit_breaker:
+      failure_threshold: 5   # failures before opening
+      success_threshold: 2   # successes before closing
+      timeout: "30s"         # time in open state before half-open probe
+
+  - virtual_key: anthropic
+    weight: 30
+    retry:
+      attempts: 2
+```
+
+## Model aliases
+
+Aliases resolve before routing. They let you use short names and switch backing models without changing client code.
+
+```yaml
+aliases:
+  fast: gpt-4o-mini
+  smart: claude-3-5-sonnet-20241022
+  cheap: gemini-1.5-flash
+  code: deepseek-coder
+```
+
+A client that requests `model: cheap` will receive a response from Gemini 1.5 Flash.
+
+## Plugins
+
+Each plugin entry specifies its `name`, `type`, `stage`, and `config` map. Set `enabled: false` to disable without removing the entry.
+
+```yaml
+plugins:
+  - name: word-filter
+    type: guardrail
+    stage: before_request
+    enabled: true
+    config:
+      blocked_words: ["password", "confidential"]
+      case_sensitive: false
+
+  - name: max-token
+    type: guardrail
+    stage: before_request
+    enabled: true
+    config:
+      max_tokens: 4096
+      max_messages: 50
+
+  - name: response-cache
+    type: transform
+    stage: before_request
+    enabled: true
+    config:
+      max_age: 300
+      max_entries: 1000
+
+  - name: pii-redact
+    type: guardrail
+    stage: before_request
+    enabled: true
+    config:
+      action: redact       # redact | block
+      redact_mode: replace_type
+      apply_to: input
+
+  - name: prompt-shield
+    type: guardrail
+    stage: before_request
+    enabled: true
+    config:
+      action: block
+      threshold: 0.90
+      apply_to: user_messages
+
+  - name: schema-guard
+    type: guardrail
+    stage: after_request
+    enabled: true
+    config:
+      apply_to: output
+      action: block
+      extract_json: true
+      schema:
+        type: object
+        required: [name, confidence]
+        properties:
+          name:
+            type: string
+          confidence:
+            type: number
+            minimum: 0
+            maximum: 1
+```
+
+See [Plugins](/guides/plugins) for all 11 plugins and their full config options.
+
+## MCP servers
+
+Configure Model Context Protocol tool servers for agentic tool-calling.
+
+```yaml
+mcp_servers:
+  - name: filesystem
+    url: "http://localhost:3001/mcp"
+    timeout_seconds: 10
+    max_call_depth: 3
+
+  - name: database
+    url: "https://mcp-db.internal/mcp"
+    headers:
+      Authorization: "Bearer ${MCP_DB_TOKEN}"
+    allowed_tools:
+      - query_readonly
+      - list_tables
+    timeout_seconds: 15
+    max_call_depth: 5
+```
+
+When `mcp_servers` is present, the gateway initialises MCP connections in the background on startup (60-second timeout) and injects available tools into every chat completion request. See [MCP integration](/guides/mcp).
+
+## Complete example
+
+Copy [`config.example.yaml`](https://github.com/ferro-labs/ai-gateway/blob/main/config.example.yaml) from the repository for a full example covering all 19 providers, aliases, and all 11 plugins.
+
+## Aliases
+
+Aliases map friendly names to concrete model IDs. Aliases cannot point to other aliases.

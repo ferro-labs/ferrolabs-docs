@@ -1,0 +1,55 @@
+---
+title: Request logging
+description: Persist LLM request and response logs from the Ferro Labs AI Gateway to SQLite or PostgreSQL using the request-logger plugin for auditability and debugging.
+keywords: [LLM request logging, AI gateway audit log, SQLite AI logs, Postgres LLM logs, AI observability logging, request logger plugin]
+---
+
+## Plugin-based logging
+
+Use the `request-logger` plugin to record request lifecycle events.
+
+```yaml
+- name: request-logger
+  type: logging
+  stage: before_request
+  enabled: true
+  config:
+    level: info
+    persist: true
+    backend: sqlite
+    dsn: ferrogw-requests.db
+```
+
+## Log store backends
+
+You can also enable the request log store for the admin API.
+
+```bash
+export REQUEST_LOG_STORE_BACKEND=sqlite
+export REQUEST_LOG_STORE_DSN=ferrogw-requests.db
+```
+
+Supported backends are `sqlite` and `postgres`.
+
+When request log storage is not enabled, admin log endpoints return `501 not implemented`:
+
+- `GET /admin/logs`
+- `GET /admin/logs/stats`
+- `DELETE /admin/logs`
+
+## Admin log filters
+
+`GET /admin/logs` supports:
+
+- `limit` (default `50`, max `200`)
+- `offset` (default `0`)
+- `stage`, `model`, `provider`
+- `since` (RFC3339)
+
+`GET /admin/logs/stats` supports:
+
+- `limit` (top-N buckets, max `100`)
+- `stage`, `model`, `provider`
+- `since` (RFC3339)
+
+`DELETE /admin/logs` requires `before` (RFC3339), with optional `stage`, `model`, and `provider` filters.

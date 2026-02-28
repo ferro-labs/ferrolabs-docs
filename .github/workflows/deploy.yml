@@ -1,0 +1,87 @@
+name: Deploy to Cloudflare Pages
+
+on:
+  push:
+    branches:
+      - main          # auto-deploy production on every push to main
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Branch to deploy
+        required: true
+        default: development
+        type: choice
+        options:
+          - main
+          - development
+      environment:
+        description: Target environment
+        required: true
+        default: preview
+        type: choice
+        options:
+          - production
+          - preview
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Build & deploy
+    runs-on: ubuntu-latest
+
+    # Determine env from trigger:
+    # - push to main → production
+    # - workflow_dispatch → whatever the caller chose
+    environment:
+      name: ${{ github.event_name == 'push' && 'production' || inputs.environment }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # For manual runs, check out the chosen branch
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.branch || github.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        run: echo "dir=$(pnpm store path)" >> $GITHUB_OUTPUT
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.dir }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build docs
+        run: pnpm build
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+
+      - name: Deploy to Cloudflare Pages
+        run: |
+          npx wrangler pages project create ferrodocs --production-branch=main 2>/dev/null || true
+          npx wrangler pages deploy build \
+            --project-name=ferrodocs \
+            --branch=${{ github.event_name == 'workflow_dispatch' && inputs.branch || 'main' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

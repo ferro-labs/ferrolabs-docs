@@ -1,0 +1,110 @@
+---
+title: Monitoring and operations
+description: Monitor the Ferro Labs AI Gateway in production with Prometheus metrics, health checks, alerting rules, and operational runbooks to keep your LLM proxy healthy and performant.
+keywords: [AI gateway monitoring, LLM metrics, Prometheus AI gateway, production AI gateway, LLM proxy monitoring, gateway health checks]
+---
+
+## Metrics and health at a glance
+
+| Signal | Endpoint | Format |
+|---|---|---|
+| Prometheus metrics | `GET /metrics` | Prometheus text |
+| Deep health check | `GET /health` | JSON |
+| Provider list | `GET /admin/providers` | JSON |
+
+See [Observability](/guides/observability) for the full metrics reference and log field docs.
+
+## Prometheus scrape setup
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: ferrogw
+    static_configs:
+      - targets: ["gateway-host:8080"]
+    scrape_interval: 15s
+```
+
+## Recommended alert rules
+
+```yaml
+groups:
+  - name: ferrogw
+    rules:
+      # High error rate
+      - alert: GatewayHighErrorRate
+        expr: |
+          rate(ferrogw_errors_total[5m]) /
+          rate(ferrogw_requests_total[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Gateway error rate > 5%"
+
+      # P99 latency
+      - alert: GatewayHighLatency
+        expr: |
+          histogram_quantile(0.99,
+            rate(ferrogw_request_duration_seconds_bucket[5m])
+          ) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "P99 request latency > 10s"
+
+      # Circuit breaker open
+      - alert: GatewayCircuitBreakerOpen
+        expr: ferrogw_circuit_breaker_state == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Circuit breaker open on {{ $labels.provider }}"
+
+      # All providers unhealthy
+      - alert: GatewayNoHealthyProviders
+        expr: up{job="ferrogw"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Gateway has no healthy providers"
+```
+
+## Grafana dashboard
+
+A community Grafana dashboard JSON is available in the repository at [`docs/grafana-dashboard.json`](https://github.com/ferro-labs/ai-gateway/blob/main/docs/). Import it into your Grafana instance and point the data source to your Prometheus server.
+
+Key panels to build manually if you prefer:
+
+| Panel | Query |
+|---|---|
+| Requests / sec | `rate(ferrogw_requests_total[1m])` |
+| Error rate % | `rate(ferrogw_errors_total[5m]) / rate(ferrogw_requests_total[5m]) * 100` |
+| P50 / P95 / P99 latency | `histogram_quantile(0.99, rate(ferrogw_request_duration_seconds_bucket[5m]))` |
+| Token usage / min | `rate(ferrogw_tokens_total[1m]) * 60` |
+| Cache hit ratio | `rate(ferrogw_cache_hits_total[5m]) / (rate(ferrogw_cache_hits_total[5m]) + rate(ferrogw_cache_misses_total[5m]))` |
+| Provider breakdown | `sum by (provider) (rate(ferrogw_requests_total[5m]))` |
+
+## Logging pipeline
+
+Ship stdout JSON logs to your log aggregator:
+
+```bash
+# Pipe to a log collector
+./ferrogw 2>&1 | your-log-shipper --format=json
+
+# Or use Docker logging drivers
+docker run ... --log-driver=awslogs ghcr.io/ferro-labs/ai-gateway:latest
+```
+
+Filter gateway logs by `trace_id` in your aggregator to correlate all events for a single request across plugins and provider calls.
+
+## Resiliency controls
+
+- **Circuit breakers** — automatically exclude failing providers; see the `ferrogw_circuit_breaker_state` metric
+- **Retries** — configurable per target with status-code filtering (`retry_on_status`)
+- **Fallback strategy** — automatically promotes to the next target when primary fails
+- **Health endpoint** — integrate into your load balancer's health check for automatic traffic shifting

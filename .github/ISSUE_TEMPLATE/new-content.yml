@@ -1,0 +1,49 @@
+name: New content request
+description: Suggest a new guide, page, example, or section for the docs.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion! Please give us enough context to evaluate and prioritize it.
+
+  - type: input
+    id: title
+    attributes:
+      label: Suggested title or topic
+      placeholder: "e.g. Guide: Using the gateway with LangChain"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: section
+    attributes:
+      label: Where should it go?
+      options:
+        - Getting Started
+        - Guides
+        - Operations
+        - Security
+        - SDKs
+        - API Reference
+        - FAQ
+        - New top-level section
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe what a reader currently can't find or understand.
+    validations:
+      required: true
+
+  - type: textarea
+    id: content
+    attributes:
+      label: Proposed content or outline (optional)
+      description: If you have a draft or outline, paste it here.
+    validations:
+      required: false

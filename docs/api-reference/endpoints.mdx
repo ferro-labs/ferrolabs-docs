@@ -1,0 +1,38 @@
+---
+title: Gateway endpoints
+description: All HTTP endpoints exposed by the Ferro Labs AI Gateway — health checks, Prometheus metrics, OpenAI-compatible inference endpoints, model listing, and admin routes.
+keywords: [AI gateway endpoints, LLM proxy endpoints, OpenAI compatible endpoints, gateway HTTP API, Prometheus metrics endpoint]
+---
+
+## Core endpoints
+
+- `GET /health` - provider availability and model counts
+- `GET /metrics` - Prometheus metrics
+- `GET /dashboard` - minimal admin UI
+- `GET /v1/models` - aggregated model list
+
+## OpenAI compatible endpoints
+
+- `POST /v1/chat/completions`
+- `POST /v1/completions` (legacy)
+- `POST /v1/embeddings`
+- `POST /v1/images/generations`
+
+## Proxy pass-through
+
+All other `/v1/*` requests are proxied to the selected provider, including:
+
+- `/v1/files`
+- `/v1/batches`
+- `/v1/fine_tuning`
+- `/v1/responses`
+- `/v1/audio/*`
+- `/v1/images/edits`
+- `/v1/realtime`
+
+## Provider selection
+
+For proxy routes, the gateway resolves the provider in this order:
+
+1. `X-Provider` header (for example: `openai` or `anthropic`)
+2. `model` field in the JSON body

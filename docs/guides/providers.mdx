@@ -1,0 +1,62 @@
+---
+title: Providers
+description: All 19 AI providers supported by the Ferro Labs AI Gateway — OpenAI, Anthropic, Gemini, Mistral, Groq, DeepSeek, Ollama, AWS Bedrock, Azure OpenAI, and more with virtual key routing.
+keywords: [AI providers, OpenAI proxy, Anthropic gateway, Gemini proxy, Mistral gateway, Groq proxy, multi-LLM gateway, Ollama proxy, Bedrock gateway, DeepSeek proxy]
+---
+
+The gateway supports 19 AI providers. A provider becomes active when its required environment variables are set — no code changes or rebuilds needed.
+
+## All providers
+
+| Provider | Virtual Key | Required Environment Variables |
+|---|---|---|
+| **OpenAI** | `openai` | `OPENAI_API_KEY` |
+| **Anthropic** | `anthropic` | `ANTHROPIC_API_KEY` |
+| **Google Gemini** | `gemini` | `GEMINI_API_KEY` |
+| **Mistral** | `mistral` | `MISTRAL_API_KEY` |
+| **Groq** | `groq` | `GROQ_API_KEY` |
+| **Cohere** | `cohere` | `COHERE_API_KEY` |
+| **DeepSeek** | `deepseek` | `DEEPSEEK_API_KEY` |
+| **Together AI** | `together` | `TOGETHER_API_KEY` |
+| **Perplexity** | `perplexity` | `PERPLEXITY_API_KEY` |
+| **Fireworks AI** | `fireworks` | `FIREWORKS_API_KEY` |
+| **AI21** | `ai21` | `AI21_API_KEY` |
+| **xAI (Grok)** | `xai` | `XAI_API_KEY` |
+| **Azure OpenAI** | `azure-openai` | `AZURE_OPENAI_API_KEY` + endpoint + deployment |
+| **Azure Foundry** | `azure-foundry` | `AZURE_FOUNDRY_API_KEY` + `AZURE_FOUNDRY_ENDPOINT` |
+| **Ollama** | `ollama` | `OLLAMA_HOST` (no API key required) |
+| **AWS Bedrock** | `bedrock` | `AWS_REGION` or `AWS_ACCESS_KEY_ID` |
+| **Replicate** | `replicate` | `REPLICATE_API_TOKEN` |
+| **Vertex AI** | `vertex-ai` | `VERTEX_AI_PROJECT_ID` |
+| **Hugging Face** | `hugging-face` | `HUGGING_FACE_API_KEY` |
+
+## Provider capabilities
+
+All providers support chat completions and streaming. Capability support varies by provider:
+
+- **Embeddings** — OpenAI, Cohere, Mistral, Azure OpenAI, Hugging Face
+- **Image generation** — OpenAI (DALL·E), Replicate, Fireworks
+- **Local / self-hosted** — Ollama
+- **Managed cloud inference** — AWS Bedrock, Vertex AI, Azure Foundry
+
+## Provider selection at runtime
+
+The gateway selects a provider using the configured routing strategy. You can also force a specific provider for a single request using the `X-Provider` request header:
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "X-Provider: anthropic" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "claude-3-5-sonnet-20241022", "messages": [{"role": "user", "content": "Hi"}]}'
+```
+
+If `X-Provider` is set, the routing strategy is bypassed for that request.
+
+## Model catalog
+
+The gateway ships with a built-in catalog of 2,500+ model entries used for cost estimation and the `/v1/models` response. Run `GET /v1/models` to see all available models given your configured providers.
+
+## Next steps
+
+- [Provider configuration](/guides/providers-config) — environment variables for each provider
+- [Routing policies](/guides/routing-policies) — how to route across providers

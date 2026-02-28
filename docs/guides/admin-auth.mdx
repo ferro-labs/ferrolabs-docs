@@ -1,0 +1,28 @@
+---
+title: Admin authentication
+description: Secure the Ferro Labs AI Gateway admin API with scoped bearer token authentication — create, rotate, and revoke admin keys for managing gateway configuration and logs.
+keywords: [AI gateway admin auth, LLM proxy admin API, bearer token gateway, admin API security, gateway admin keys]
+---
+
+Admin endpoints require a bearer token in the `Authorization` header.
+
+```bash
+Authorization: Bearer <api-key>
+```
+
+## Scopes
+
+- `admin` - full access
+- `read_only` - read-only access to admin endpoints
+
+## First run bootstrap
+
+Bootstrap keys are only honored while the API key store is empty:
+
+```bash
+export ADMIN_BOOTSTRAP_KEY=change-me
+export ADMIN_BOOTSTRAP_READ_ONLY_KEY=change-me
+export ADMIN_BOOTSTRAP_ENABLED=true
+```
+
+Disable bootstrap keys after creating persistent API keys.

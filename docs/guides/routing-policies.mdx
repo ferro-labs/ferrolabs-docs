@@ -1,0 +1,134 @@
+---
+title: Routing policies
+description: All 6 LLM routing strategies in the Ferro Labs AI Gateway — single, fallback, weighted, conditional, least-latency, and cost-optimized routing for multi-provider AI traffic.
+keywords: [LLM routing strategies, AI fallback routing, weighted LLM routing, cost-optimized AI routing, AI load balancing, least-latency routing]
+---
+
+The gateway implements six routing strategies. Set `strategy.mode` in `config.yaml` to choose one.
+
+## Single
+
+Always routes to the first target. Best for single-provider setups.
+
+```yaml
+strategy:
+  mode: single
+
+targets:
+  - virtual_key: openai
+```
+
+## Fallback
+
+Tries targets in order. On failure (error or retryable status code), the next target is attempted with exponential backoff. Use this for high-availability setups.
+
+```yaml
+strategy:
+  mode: fallback
+
+targets:
+  - virtual_key: openai
+    retry:
+      attempts: 3
+      retry_on_status: [429, 502, 503, 504]
+  - virtual_key: anthropic
+    retry:
+      attempts: 2
+  - virtual_key: gemini
+```
+
+If all targets fail, the last error is returned to the client.
+
+## Weighted load balancing
+
+Distributes requests across targets by weight. Weights are relative — a weight of `70` and `30` sends 70% to the first target and 30% to the second.
+
+```yaml
+strategy:
+  mode: loadbalance
+
+targets:
+  - virtual_key: openai
+    weight: 70
+  - virtual_key: anthropic
+    weight: 30
+```
+
+Only targets that support the requested model are candidates for selection.
+
+## Conditional
+
+Evaluates rules in order. The first matching rule determines the target. Use `model` for exact match or `model_prefix` for prefix match.
+
+```yaml
+strategy:
+  mode: conditional
+  conditions:
+    - key: model
+      value: gpt-4o
+      target_key: openai
+    - key: model
+      value: gpt-4o-mini
+      target_key: openai
+    - key: model_prefix
+      value: claude
+      target_key: anthropic
+    - key: model_prefix
+      value: gemini
+      target_key: gemini
+
+targets:
+  - virtual_key: openai
+  - virtual_key: anthropic
+  - virtual_key: gemini
+```
+
+If no rule matches, the request falls through to the first target.
+
+## Least-latency
+
+Routes to the target with the lowest P50 latency as measured by a rolling latency tracker. On a cold start (no latency data yet) it picks a target randomly.
+
+```yaml
+strategy:
+  mode: least-latency
+
+targets:
+  - virtual_key: openai
+  - virtual_key: groq
+  - virtual_key: anthropic
+```
+
+Useful when you have multiple fast providers and want to minimise time-to-first-token automatically.
+
+## Cost-optimized
+
+Uses the built-in model catalog (2,500+ entries with pricing data) to estimate the input token cost for each target, then routes to the cheapest compatible provider. Falls back to the first compatible target if cost data is unavailable.
+
+```yaml
+strategy:
+  mode: cost-optimized
+
+targets:
+  - virtual_key: openai
+  - virtual_key: together
+  - virtual_key: deepseek
+  - virtual_key: gemini
+```
+
+Cost estimation uses the model name in the request and the catalog's `input_cost_per_token` field. The target with the lowest estimated cost for the matched model wins.
+
+## Combining strategies with circuit breakers
+
+All strategies respect per-target circuit breakers. A target whose circuit breaker is open is excluded from selection.
+
+```yaml
+targets:
+  - virtual_key: openai
+    circuit_breaker:
+      failure_threshold: 5
+      success_threshold: 2
+      timeout: "30s"
+```
+
+The circuit breaker opens after `failure_threshold` consecutive failures, stays open for `timeout`, then enters half-open state where it allows one probe request. After `success_threshold` successes it closes again.

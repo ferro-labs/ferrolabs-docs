@@ -1,0 +1,29 @@
+---
+title: SDK usage
+description: Use any OpenAI-compatible SDK with the Ferro Labs AI Gateway by changing only the base URL — Python openai, Node.js, Go, curl, LangChain, and LlamaIndex all work without code changes.
+keywords: [OpenAI SDK proxy, LangChain AI gateway, Python AI gateway, Node.js LLM proxy, LlamaIndex gateway, SDK base URL]
+---
+
+You can keep your existing OpenAI SDK and only change the base URL and API key.
+
+## JavaScript
+
+```js
+import OpenAI from "openai";
+
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+  baseURL: "http://localhost:8080"
+});
+```
+
+## Python
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-your-key",
+    base_url="http://localhost:8080"
+)
+```

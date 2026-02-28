@@ -1,0 +1,82 @@
+---
+title: Admin API
+description: Manage API keys, gateway configuration, request logs, and provider health via the Ferro Labs AI Gateway admin REST API. All endpoints require a scoped bearer token.
+keywords: [AI gateway admin API, gateway management API, provider health API, gateway REST API, admin bearer token]
+---
+
+Admin endpoints are mounted under `/admin` and protected with a bearer token.
+
+```bash
+Authorization: Bearer <api-key>
+```
+
+## Scopes
+
+- `admin` - full access
+- `read_only` - read endpoints only
+
+## Read endpoints
+
+- `GET /admin/dashboard`
+- `GET /admin/keys`
+- `GET /admin/keys/usage`
+- `GET /admin/keys/{id}`
+- `GET /admin/logs`
+- `GET /admin/logs/stats`
+- `GET /admin/providers`
+- `GET /admin/health`
+- `GET /admin/config`
+- `GET /admin/config/history`
+
+## Write endpoints (admin scope)
+
+- `POST /admin/keys`
+- `PUT /admin/keys/{id}`
+- `DELETE /admin/keys/{id}`
+- `POST /admin/keys/{id}/revoke`
+- `POST /admin/keys/{id}/rotate`
+- `DELETE /admin/logs`
+- `POST /admin/config`
+- `PUT /admin/config`
+- `DELETE /admin/config`
+- `POST /admin/config/rollback/{version}`
+
+## Query parameters
+
+`GET /admin/keys/usage`:
+
+- `limit` (default `20`, max `100`)
+- `offset` (default `0`)
+- `sort` (`usage` or `last_used`, default `usage`)
+- `active` (`true` or `false`)
+- `since` (RFC3339)
+
+`GET /admin/logs`:
+
+- `limit` (default `50`, max `200`)
+- `offset` (default `0`)
+- `stage`, `model`, `provider`
+- `since` (RFC3339)
+
+`GET /admin/logs/stats`:
+
+- `limit` (top-N buckets, max `100`)
+- `stage`, `model`, `provider`
+- `since` (RFC3339)
+
+`DELETE /admin/logs`:
+
+- required: `before` (RFC3339)
+- optional: `stage`, `model`, `provider`
+
+When request log storage is disabled, log endpoints return `501 not implemented`.
+
+## Bootstrap keys
+
+Use bootstrap keys to access admin endpoints on first run. They are only honored when the API key store is empty.
+
+```bash
+export ADMIN_BOOTSTRAP_KEY=change-me
+export ADMIN_BOOTSTRAP_READ_ONLY_KEY=change-me
+export ADMIN_BOOTSTRAP_ENABLED=true
+```

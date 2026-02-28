@@ -1,0 +1,33 @@
+---
+title: Rate limiting
+description: Control AI request volume in the Ferro Labs AI Gateway with per-IP HTTP rate limiting and pipeline-level token and request count limits to protect your LLM budget.
+keywords: [AI rate limiting, LLM rate limit, per-IP rate limiting, AI gateway throttling, token rate limiting, request budget control]
+---
+
+The gateway supports rate limiting in two layers.
+
+## HTTP middleware (per IP)
+
+Enable per IP limits with environment variables:
+
+```bash
+export RATE_LIMIT_RPS=20
+export RATE_LIMIT_BURST=40
+```
+
+Requests beyond the limit receive a `429` with an OpenAI style error response.
+
+## Plugin rate limiting (per request)
+
+Add the `rate-limit` plugin to reject traffic before it hits a provider:
+
+```yaml
+plugins:
+  - name: rate-limit
+    type: ratelimit
+    stage: before_request
+    enabled: true
+    config:
+      requests_per_second: 50
+      burst: 100
+```

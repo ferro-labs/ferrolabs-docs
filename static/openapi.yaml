@@ -1,0 +1,1222 @@
+openapi: 3.0.3
+info:
+  title: Ferro Labs AI Gateway
+  version: 0.8.0
+  description: |
+    The Ferro Labs AI Gateway is an open-source, high-performance LLM proxy that provides a
+    unified OpenAI-compatible API across 19 providers and 2,500+ models.
+
+    Point any OpenAI-compatible client at `http://localhost:8080` — provider credentials are
+    managed server-side via environment variables. No code changes needed.
+
+    Use the `X-Provider` header to override the routing strategy and force a specific provider
+    per-request.
+
+    ## Authentication
+
+    Inference endpoints do not require authentication. Admin endpoints (`/admin/*`) require a
+    bearer token obtained via `ADMIN_BOOTSTRAP_KEY` on first run or `POST /admin/keys`:
+
+    ```
+    Authorization: Bearer <admin-api-key>
+    ```
+
+  contact:
+    name: Ferro Labs
+    url: https://github.com/ferro-labs/ai-gateway
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  - url: http://localhost:8080
+    description: Local / self-hosted
+  - url: https://your-gateway.example.com
+    description: Production
+
+tags:
+  - name: Inference
+    description: OpenAI-compatible chat, completion, embedding, and image generation endpoints.
+  - name: Models
+    description: Enumerate available models across all active providers.
+  - name: Operations
+    description: Health checks and Prometheus metrics.
+  - name: Admin – Keys
+    description: Manage API keys — create, rotate, revoke, and view usage. Requires admin auth.
+  - name: Admin – Logs
+    description: Query and manage per-request audit logs. Requires admin auth.
+  - name: Admin – Config
+    description: Hot-reload gateway routing configuration. Requires admin auth.
+  - name: Admin – Providers
+    description: List active providers and their health. Requires admin auth.
+
+paths:
+  /v1/chat/completions:
+    post:
+      operationId: createChatCompletion
+      summary: Create chat completion
+      description: |
+        Creates a chat completion via the configured routing strategy.
+        Identical to the OpenAI `POST /v1/chat/completions` endpoint.
+
+        - Use `X-Provider: anthropic` to force a specific provider.
+        - Set `stream: true` for SSE streaming.
+        - Model names follow each provider's native identifiers.
+      tags: [Inference]
+      parameters:
+        - name: X-Provider
+          in: header
+          required: false
+          description: Override routing strategy and force a specific provider (e.g. `openai`, `anthropic`, `gemini`).
+          schema:
+            type: string
+            example: anthropic
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatCompletionRequest'
+            examples:
+              basic:
+                summary: Basic chat
+                value:
+                  model: gpt-4o
+                  messages:
+                    - role: user
+                      content: "What is the Ferro Labs AI Gateway?"
+              streaming:
+                summary: Streaming response
+                value:
+                  model: claude-3-5-sonnet-20241022
+                  stream: true
+                  messages:
+                    - role: system
+                      content: "You are a helpful assistant."
+                    - role: user
+                      content: "Summarize the key benefits of AI gateways."
+              multimodal:
+                summary: Image input (vision)
+                value:
+                  model: gpt-4o
+                  messages:
+                    - role: user
+                      content:
+                        - type: text
+                          text: "What is in this image?"
+                        - type: image_url
+                          image_url:
+                            url: "https://example.com/image.png"
+      responses:
+        '200':
+          description: Chat completion response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatCompletionResponse'
+            text/event-stream:
+              schema:
+                type: string
+                description: "SSE stream of `ChatCompletionChunk` events when `stream: true`."
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '502':
+          $ref: '#/components/responses/ProviderError'
+
+  /v1/completions:
+    post:
+      operationId: createCompletion
+      summary: Create text completion (legacy)
+      description: Legacy text completion endpoint. Proxied to the selected provider.
+      tags: [Inference]
+      parameters:
+        - name: X-Provider
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [model, prompt]
+              properties:
+                model:
+                  type: string
+                  example: gpt-3.5-turbo-instruct
+                prompt:
+                  type: string
+                  example: "Once upon a time"
+                max_tokens:
+                  type: integer
+                  example: 256
+                temperature:
+                  type: number
+                  example: 0.7
+                stream:
+                  type: boolean
+                  default: false
+      responses:
+        '200':
+          description: Completion response
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '502':
+          $ref: '#/components/responses/ProviderError'
+
+  /v1/embeddings:
+    post:
+      operationId: createEmbedding
+      summary: Create embedding
+      description: Creates vector embeddings for the provided input. Proxied to the selected provider.
+      tags: [Inference]
+      parameters:
+        - name: X-Provider
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [model, input]
+              properties:
+                model:
+                  type: string
+                  example: text-embedding-3-small
+                input:
+                  oneOf:
+                    - type: string
+                    - type: array
+                      items:
+                        type: string
+                encoding_format:
+                  type: string
+                  enum: [float, base64]
+                  default: float
+            examples:
+              single:
+                summary: Single string
+                value:
+                  model: text-embedding-3-small
+                  input: "The quick brown fox"
+              batch:
+                summary: Batch of strings
+                value:
+                  model: text-embedding-3-small
+                  input:
+                    - "First document"
+                    - "Second document"
+      responses:
+        '200':
+          description: Embedding response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  object:
+                    type: string
+                    example: list
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        object:
+                          type: string
+                          example: embedding
+                        index:
+                          type: integer
+                        embedding:
+                          type: array
+                          items:
+                            type: number
+                  model:
+                    type: string
+                  usage:
+                    $ref: '#/components/schemas/Usage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '502':
+          $ref: '#/components/responses/ProviderError'
+
+  /v1/images/generations:
+    post:
+      operationId: createImage
+      summary: Create image
+      description: Generates images from a text prompt. Proxied to the selected provider (OpenAI DALL-E, Stability AI, Replicate, etc.).
+      tags: [Inference]
+      parameters:
+        - name: X-Provider
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [prompt]
+              properties:
+                prompt:
+                  type: string
+                  description: Text description of the image to generate.
+                  example: "A photorealistic red panda sitting on a log in a forest"
+                model:
+                  type: string
+                  example: dall-e-3
+                n:
+                  type: integer
+                  default: 1
+                  minimum: 1
+                  maximum: 10
+                size:
+                  type: string
+                  example: "1024x1024"
+                quality:
+                  type: string
+                  enum: [standard, hd]
+                  default: standard
+                response_format:
+                  type: string
+                  enum: [url, b64_json]
+                  default: url
+      responses:
+        '200':
+          description: Image generation response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  created:
+                    type: integer
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        url:
+                          type: string
+                        b64_json:
+                          type: string
+                        revised_prompt:
+                          type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '502':
+          $ref: '#/components/responses/ProviderError'
+
+  /v1/models:
+    get:
+      operationId: listModels
+      summary: List available models
+      description: |
+        Returns all models available across active providers.
+        The list is aggregated from each provider's registered model catalog.
+      tags: [Models]
+      responses:
+        '200':
+          description: List of models
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  object:
+                    type: string
+                    example: list
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Model'
+              example:
+                object: list
+                data:
+                  - id: gpt-4o
+                    object: model
+                    created: 1710000000
+                    owned_by: openai
+                  - id: claude-3-5-sonnet-20241022
+                    object: model
+                    created: 1710000000
+                    owned_by: anthropic
+
+  /health:
+    get:
+      operationId: getHealth
+      summary: Health check
+      description: |
+        Returns per-provider health status and aggregated model counts.
+        Use as a Kubernetes readiness probe or load balancer health check.
+        Returns HTTP 200 even when some providers are degraded — check the `status` field.
+      tags: [Operations]
+      responses:
+        '200':
+          description: Health status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: healthy
+                providers:
+                  openai:
+                    status: healthy
+                    model_count: 24
+                    latency_p50_ms: 142
+                  anthropic:
+                    status: healthy
+                    model_count: 8
+                    latency_p50_ms: 198
+                  groq:
+                    status: degraded
+                    model_count: 6
+                    latency_p50_ms: 510
+                    last_error: "rate_limit_exceeded"
+                total_models: 2531
+                uptime_seconds: 86400
+
+  /metrics:
+    get:
+      operationId: getMetrics
+      summary: Prometheus metrics
+      description: |
+        Returns Prometheus-format metrics for scraping.
+        Add this to your `prometheus.yml` scrape_configs.
+
+        Key metrics:
+        - `gateway_requests_total` — requests by provider, model, and status
+        - `gateway_request_duration_seconds` — latency histogram
+        - `gateway_provider_errors_total` — provider-level error counts
+        - `gateway_active_connections` — current in-flight requests
+      tags: [Operations]
+      responses:
+        '200':
+          description: Prometheus text format metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  # ── Admin – Keys ────────────────────────────────────────────────────────────
+
+  /admin/keys:
+    get:
+      operationId: listApiKeys
+      summary: List API keys
+      tags: [Admin – Keys]
+      security:
+        - adminAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: active
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: List of API keys
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ApiKey'
+                  total:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      operationId: createApiKey
+      summary: Create API key
+      description: Creates a new API key. The raw key is returned **only once** — store it securely.
+      tags: [Admin – Keys]
+      security:
+        - adminAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  example: "production-app"
+                scope:
+                  type: string
+                  enum: [admin, read_only]
+                  default: read_only
+                expires_at:
+                  type: string
+                  format: date-time
+                rate_limit_rpm:
+                  type: integer
+      responses:
+        '201':
+          description: API key created — raw key returned only here
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyCreate'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /admin/keys/{id}:
+    get:
+      operationId: getApiKey
+      summary: Get API key
+      tags: [Admin – Keys]
+      security:
+        - adminAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: API key details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKey'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      operationId: updateApiKey
+      summary: Update API key
+      tags: [Admin – Keys]
+      security:
+        - adminAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                scope:
+                  type: string
+                  enum: [admin, read_only]
+                expires_at:
+                  type: string
+                  format: date-time
+                rate_limit_rpm:
+                  type: integer
+      responses:
+        '200':
+          description: Updated API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKey'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    delete:
+      operationId: deleteApiKey
+      summary: Delete API key
+      tags: [Admin – Keys]
+      security:
+        - adminAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Key deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /admin/keys/{id}/revoke:
+    post:
+      operationId: revokeApiKey
+      summary: Revoke API key
+      description: Immediately revokes the key. All subsequent requests using this key return 401.
+      tags: [Admin – Keys]
+      security:
+        - adminAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Key revoked
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /admin/keys/{id}/rotate:
+    post:
+      operationId: rotateApiKey
+      summary: Rotate API key
+      description: Issues a new key value, invalidates the old one. New raw key returned only once.
+      tags: [Admin – Keys]
+      security:
+        - adminAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Rotated key — new raw key returned only here
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyCreate'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /admin/keys/usage:
+    get:
+      operationId: getApiKeyUsage
+      summary: API key usage stats
+      description: Per-key usage statistics sorted by request count or last usage.
+      tags: [Admin – Keys]
+      security:
+        - adminAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [usage, last_used]
+            default: usage
+        - name: since
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Usage stats per key
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    key_id:
+                      type: string
+                      format: uuid
+                    name:
+                      type: string
+                    request_count:
+                      type: integer
+                    last_used_at:
+                      type: string
+                      format: date-time
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ── Admin – Logs ────────────────────────────────────────────────────────────
+
+  /admin/logs:
+    get:
+      operationId: listLogs
+      summary: List request logs
+      description: Query per-request audit logs with filtering by provider, model, status, and time range.
+      tags: [Admin – Logs]
+      security:
+        - adminAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: provider
+          in: query
+          schema:
+            type: string
+        - name: model
+          in: query
+          schema:
+            type: string
+        - name: stage
+          in: query
+          description: Filter by request stage (e.g. `request`, `response`).
+          schema:
+            type: string
+        - name: since
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: until
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Paginated request logs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  logs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RequestLog'
+                  total:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    delete:
+      operationId: deleteLogs
+      summary: Delete request logs
+      description: Permanently delete logs matching the given filters. Irreversible.
+      tags: [Admin – Logs]
+      security:
+        - adminAuth: []
+      parameters:
+        - name: before
+          in: query
+          description: Delete logs created before this timestamp.
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '204':
+          description: Logs deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /admin/logs/stats:
+    get:
+      operationId: getLogStats
+      summary: Log statistics
+      description: Aggregated statistics — request counts, error rates, and token usage grouped by provider/model.
+      tags: [Admin – Logs]
+      security:
+        - adminAuth: []
+      parameters:
+        - name: since
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: until
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: group_by
+          in: query
+          schema:
+            type: string
+            enum: [provider, model]
+            default: provider
+      responses:
+        '200':
+          description: Aggregated stats
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ── Admin – Providers ───────────────────────────────────────────────────────
+
+  /admin/providers:
+    get:
+      operationId: listProviders
+      summary: List providers
+      description: Lists all configured providers and their current health status.
+      tags: [Admin – Providers]
+      security:
+        - adminAuth: []
+      responses:
+        '200':
+          description: Provider list with health status
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  $ref: '#/components/schemas/ProviderStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ── Admin – Config ──────────────────────────────────────────────────────────
+
+  /admin/config:
+    get:
+      operationId: getConfig
+      summary: Get active config
+      description: Returns the currently active gateway routing configuration.
+      tags: [Admin – Config]
+      security:
+        - adminAuth: []
+      responses:
+        '200':
+          description: Active configuration
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      operationId: createConfig
+      summary: Create config
+      description: Creates a new configuration version and hot-reloads the gateway. Previous version is preserved in history.
+      tags: [Admin – Config]
+      security:
+        - adminAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '201':
+          description: Config created and applied
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    put:
+      operationId: updateConfig
+      summary: Update config
+      description: Replaces the active configuration and hot-reloads the gateway.
+      tags: [Admin – Config]
+      security:
+        - adminAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Config updated and applied
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    delete:
+      operationId: deleteConfig
+      summary: Delete config
+      description: Removes the stored configuration. Gateway reverts to file-based config on next restart.
+      tags: [Admin – Config]
+      security:
+        - adminAuth: []
+      responses:
+        '204':
+          description: Config deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /admin/config/history:
+    get:
+      operationId: getConfigHistory
+      summary: Config version history
+      description: Returns the list of previous configuration versions.
+      tags: [Admin – Config]
+      security:
+        - adminAuth: []
+      responses:
+        '200':
+          description: Configuration history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    version:
+                      type: integer
+                    created_at:
+                      type: string
+                      format: date-time
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /admin/config/rollback/{version}:
+    post:
+      operationId: rollbackConfig
+      summary: Rollback to config version
+      description: Hot-reloads the gateway with a previous configuration version.
+      tags: [Admin – Config]
+      security:
+        - adminAuth: []
+      parameters:
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Rolled back successfully
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    adminAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: API Key
+      description: Obtain via `ADMIN_BOOTSTRAP_KEY` env var on first run, or `POST /admin/keys`.
+
+  responses:
+    BadRequest:
+      description: Bad request — malformed JSON, missing required fields, or validation error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Missing or invalid admin bearer token.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Request blocked by a guardrail plugin (e.g. prompt-shield, pii-redact).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ProviderError:
+      description: All configured providers returned errors.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    ChatCompletionRequest:
+      type: object
+      required: [model, messages]
+      properties:
+        model:
+          type: string
+          description: Model identifier using the provider's native model ID.
+          example: gpt-4o
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+        temperature:
+          type: number
+          minimum: 0
+          maximum: 2
+          example: 0.7
+        max_tokens:
+          type: integer
+          example: 1024
+        stream:
+          type: boolean
+          default: false
+          description: "If true, returns a stream of `data:` SSE events terminated with `data: [DONE]`."
+        top_p:
+          type: number
+          minimum: 0
+          maximum: 1
+        frequency_penalty:
+          type: number
+          minimum: -2
+          maximum: 2
+        presence_penalty:
+          type: number
+          minimum: -2
+          maximum: 2
+        stop:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: string
+        user:
+          type: string
+        tools:
+          type: array
+          items:
+            type: object
+        tool_choice:
+          oneOf:
+            - type: string
+            - type: object
+
+    Message:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [system, user, assistant, tool]
+        content:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: object
+        name:
+          type: string
+        tool_call_id:
+          type: string
+
+    ChatCompletionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          example: chatcmpl-abc123
+        object:
+          type: string
+          example: chat.completion
+        created:
+          type: integer
+        model:
+          type: string
+          example: gpt-4o
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              index:
+                type: integer
+              message:
+                $ref: '#/components/schemas/AssistantMessage'
+              finish_reason:
+                type: string
+                enum: [stop, length, tool_calls, content_filter]
+        usage:
+          $ref: '#/components/schemas/Usage'
+        x_provider:
+          type: string
+          description: Which provider served this request (added by the gateway).
+          example: anthropic
+
+    AssistantMessage:
+      type: object
+      properties:
+        role:
+          type: string
+          example: assistant
+        content:
+          type: string
+        tool_calls:
+          type: array
+          items:
+            type: object
+
+    Usage:
+      type: object
+      properties:
+        prompt_tokens:
+          type: integer
+        completion_tokens:
+          type: integer
+        total_tokens:
+          type: integer
+
+    Model:
+      type: object
+      properties:
+        id:
+          type: string
+          example: gpt-4o
+        object:
+          type: string
+          example: model
+        created:
+          type: integer
+        owned_by:
+          type: string
+          example: openai
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        providers:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ProviderStatus'
+        total_models:
+          type: integer
+        uptime_seconds:
+          type: integer
+
+    ProviderStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        model_count:
+          type: integer
+        latency_p50_ms:
+          type: integer
+        last_error:
+          type: string
+
+    ApiKey:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        scope:
+          type: string
+          enum: [admin, read_only]
+        active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_used_at:
+          type: string
+          format: date-time
+          nullable: true
+        rate_limit_rpm:
+          type: integer
+          nullable: true
+        hash:
+          type: string
+          description: SHA-256 of the key value (raw key is never stored).
+
+    ApiKeyCreate:
+      allOf:
+        - $ref: '#/components/schemas/ApiKey'
+        - type: object
+          properties:
+            key:
+              type: string
+              description: The raw API key. Returned **only once** — store it securely.
+              example: "sk-ferro-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+    RequestLog:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        trace_id:
+          type: string
+        provider:
+          type: string
+        model:
+          type: string
+        status_code:
+          type: integer
+        input_tokens:
+          type: integer
+        output_tokens:
+          type: integer
+        latency_ms:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        api_key_id:
+          type: string
+          format: uuid
+          nullable: true
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            message:
+              type: string
+              example: "provider unavailable: all targets exhausted"
+            type:
+              type: string
+              example: provider_error
+            code:
+              type: string
+              nullable: true

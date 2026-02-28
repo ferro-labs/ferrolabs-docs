@@ -1,0 +1,26 @@
+---
+title: Data handling
+description: Security and data handling in the Ferro Labs AI Gateway — storage backends, secret management, least privilege access, TLS termination, and provider credential isolation.
+keywords: [AI gateway security, LLM data handling, PII protection AI, secure LLM proxy, credential isolation, AI gateway TLS]
+---
+
+## Storage backends
+
+The gateway supports memory, SQLite, and Postgres stores for config, API keys, and request logs.
+
+```bash
+export CONFIG_STORE_BACKEND=sqlite
+export CONFIG_STORE_DSN=./ferrogw-config.db
+
+export API_KEY_STORE_BACKEND=sqlite
+export API_KEY_STORE_DSN=./ferrogw-keys.db
+
+export REQUEST_LOG_STORE_BACKEND=sqlite
+export REQUEST_LOG_STORE_DSN=./ferrogw-requests.db
+```
+
+## Least privilege
+
+- Use dedicated credentials for each provider.
+- Restrict database permissions to only the required tables.
+- Prefer TLS for external database connections.

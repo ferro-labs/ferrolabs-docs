@@ -1,0 +1,76 @@
+---
+title: Architecture
+description: Reference architecture for deploying the Ferro Labs AI Gateway in production — component diagrams, traffic flow, scaling boundaries, and multi-provider routing design.
+keywords: [AI gateway architecture, LLM proxy design, AI control plane, multi-provider routing, AI infrastructure, gateway deployment architecture]
+---
+
+This page gives a practical architecture view similar to modern AI gateway docs: control points, traffic flow, and scaling boundaries.
+
+## High-level architecture
+
+```mermaid
+flowchart LR
+    A[Client Apps\nSDKs / Services] --> B[AI Gateway]
+    B --> C[Routing Engine]
+    B --> D[Policy Layer\nAuth / Rate Limits / Guardrails]
+    B --> E[Observability\nLogs / Metrics / Traces]
+    C --> F[Provider: OpenAI]
+    C --> G[Provider: Anthropic]
+    C --> H[Provider: Gemini]
+    C --> I[Provider: Others]
+```
+
+## Request path
+
+```mermaid
+sequenceDiagram
+    participant App as Application
+    participant GW as AI Gateway
+    participant Policy as Policy Layer
+    participant Route as Routing Engine
+    participant Provider as Provider API
+
+    App->>GW: OpenAI-compatible request
+    GW->>Policy: Validate auth + limits + plugins
+    Policy-->>GW: Allow / Reject
+    GW->>Route: Select provider strategy
+    Route-->>GW: Primary target + fallback plan
+    GW->>Provider: Forward normalized request
+    Provider-->>GW: Response / Error
+    GW-->>App: Final response
+```
+
+## Core components
+
+### API compatibility layer
+
+- Accepts OpenAI-compatible request/response formats.
+- Lets application code remain stable while backend models/providers change.
+
+### Routing engine
+
+- Supports single, fallback, weighted, and conditional strategies.
+- Separates model selection policy from app logic.
+
+### Policy and controls
+
+- Handles authentication, rate limiting, and plugin-level checks.
+- Applies policy consistently for every provider.
+
+### Observability
+
+- Emits logs for every request and upstream outcome.
+- Exposes metrics for latency, error rate, and provider health.
+
+## Deployment recommendations
+
+- Start with one gateway instance behind a reverse proxy.
+- Move to multiple gateway replicas with shared configuration for HA.
+- Add provider-level fallback before introducing weighted distribution.
+- Use metrics + request logs to tune routing rules over time.
+
+## Related pages
+
+- [Request lifecycle](/getting-started/request-lifecycle)
+- [Routing policies](/guides/routing-policies)
+- [Observability](/guides/observability)

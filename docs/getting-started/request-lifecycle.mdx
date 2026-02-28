@@ -1,0 +1,82 @@
+---
+title: Request lifecycle
+description: Step-by-step lifecycle of a request through the Ferro Labs AI Gateway — from client ingress through plugin execution, provider routing, retries, and response streaming.
+keywords: [AI gateway request lifecycle, LLM proxy request flow, AI middleware pipeline, gateway request processing, plugin pipeline]
+---
+
+This page explains the full lifecycle from client request to provider response, including retries and fallback.
+
+## Lifecycle stages
+
+1. **Ingress**: Gateway receives an OpenAI-compatible request.
+2. **Validation**: Authentication and request shape checks run.
+3. **Policy checks**: Rate limits, plugins, and controls are applied.
+4. **Routing decision**: Strategy picks primary provider/model.
+5. **Execution**: Request is sent upstream.
+6. **Recovery**: Retry/fallback runs on eligible failures.
+7. **Egress**: Response and metadata are returned to client.
+8. **Telemetry**: Logs and metrics are emitted.
+
+## Detailed sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant G as Gateway
+    participant P as Plugins/Policies
+    participant R as Router
+    participant U as Upstream Provider
+
+    C->>G: POST /v1/chat/completions
+    G->>P: Auth + limits + guardrails
+    alt Rejected
+        P-->>G: Deny
+        G-->>C: 4xx/5xx error
+    else Allowed
+        P-->>G: Allow
+        G->>R: Resolve route
+        R-->>G: Primary target
+        G->>U: Forward request
+        alt Success
+            U-->>G: Completion
+            G-->>C: Completion response
+        else Retry/Fallback eligible
+            U-->>G: Timeout/5xx/overload
+            G->>R: Next candidate
+            R-->>G: Fallback target
+            G->>U: Retry on fallback
+            U-->>G: Completion or final error
+            G-->>C: Final outcome
+        end
+    end
+```
+
+## Error handling state flow
+
+```mermaid
+stateDiagram-v2
+    [*] --> Received
+    Received --> Validated
+    Validated --> Routed
+    Routed --> UpstreamCall
+    UpstreamCall --> Success: 2xx
+    UpstreamCall --> RetryableFailure: timeout/429/5xx
+    RetryableFailure --> Routed: fallback available
+    RetryableFailure --> TerminalFailure: no fallback
+    Success --> Logged
+    TerminalFailure --> Logged
+    Logged --> [*]
+```
+
+## Practical notes
+
+- Keep retries bounded to avoid amplifying upstream incidents.
+- Prefer fallback across providers, not only models in one provider.
+- Track per-stage latency to spot bottlenecks early.
+
+## Related pages
+
+- [Architecture](/getting-started/architecture)
+- [Configuration](/getting-started/configuration)
+- [Operations monitoring](/operations/monitoring)

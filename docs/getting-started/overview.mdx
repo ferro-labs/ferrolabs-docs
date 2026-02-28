@@ -1,0 +1,28 @@
+---
+title: Overview
+description: Learn what the Ferro Labs AI Gateway does, when to use it, and how it fits into your AI infrastructure stack as a single OpenAI-compatible control plane for all LLM traffic.
+keywords: [AI gateway overview, LLM proxy introduction, OpenAI compatible gateway, AI routing layer, AI control plane, multi-provider LLM]
+---
+
+The AI Gateway sits between your applications and upstream model providers. It exposes a single OpenAI compatible API and handles routing, authentication, observability, and resiliency in one place.
+
+For a deeper technical view, start with [Architecture](/getting-started/architecture) and [Request lifecycle](/getting-started/request-lifecycle).
+
+## When to use it
+
+- You need multiple providers with a consistent interface.
+- You want failover and load balancing without rewriting app code.
+- You want centralized logs, metrics, and request tracing.
+
+## How it works
+
+1. Your app sends OpenAI format requests to the gateway.
+2. The gateway applies routing, auth, and policy checks.
+3. The gateway forwards traffic to the selected provider.
+4. Responses and metrics are recorded and returned to your app.
+
+## Learn by depth
+
+- **Architecture**: Understand components and system boundaries.
+- **Request lifecycle**: Follow each processing stage and fallback path.
+- **Guides**: Configure provider auth, routing policies, and controls.

@@ -1,0 +1,192 @@
+---
+title: Enterprise
+description: Enterprise-grade features for the Ferro Labs AI Gateway — dedicated support SLAs, private cloud deployment, SSO, audit logs, custom rate limits, and on-premise options for teams.
+keywords: [enterprise AI gateway, enterprise LLM proxy, enterprise AI infrastructure, SSO AI gateway, on-premise LLM, dedicated AI support]
+sidebar_position: 99
+---
+
+import styles from './enterprise.module.css';
+
+# Enterprise
+
+<div className={styles.hero}>
+  <p className={styles.heroText}>
+    Everything in the open-source gateway, plus the infrastructure, support, and compliance
+    tooling that production teams need.
+  </p>
+  <span className={styles.comingSoonBadge}>Coming Soon</span>
+</div>
+
+---
+
+## Why Enterprise?
+
+The open-source gateway is fully featured and production-ready for solo developers and small teams.
+Enterprise adds the operational layer required by organizations with strict security, compliance,
+and reliability requirements.
+
+<div className={styles.featureGrid}>
+
+<div className={styles.card}>
+
+### 🔒 SSO & SAML 2.0
+
+Single sign-on via your existing identity provider — Okta, Azure AD, Google Workspace, or any
+SAML 2.0 / OIDC-compliant IdP. Directory sync, just-in-time provisioning, and MFA enforcement
+are all included.
+
+</div>
+
+<div className={styles.card}>
+
+### 🏢 Advanced RBAC
+
+Role-based access control with custom roles, resource-level permissions, and hierarchical
+policy inheritance. Separate permissions for gateway configuration, API key management,
+log access, and billing.
+
+</div>
+
+<div className={styles.card}>
+
+### 📋 Audit Logs
+
+Immutable, tamper-evident audit logs for every configuration change, key rotation, and
+administrative action. Export to SIEM tools (Splunk, Datadog, OpenSearch) via webhook or
+direct integration.
+
+</div>
+
+<div className={styles.card}>
+
+### ⚡ Priority SLA
+
+Guaranteed response SLAs with dedicated Slack or Teams channel access. Escalation paths
+to senior engineers for P0 / P1 incidents with defined RTO/RPO commitments for production
+outages.
+
+</div>
+
+<div className={styles.card}>
+
+### 🌍 Multi-Region Deployment
+
+Active-active and active-passive configurations across multiple cloud regions. Automated
+failover, global load balancing, and data-residency controls to meet GDPR, HIPAA, and
+regional data sovereignty requirements.
+
+</div>
+
+<div className={styles.card}>
+
+### 🔧 Custom Plugins
+
+Private, first-party plugin development on request. Build bespoke middleware for your
+specific routing logic, compliance checks, or data transformation requirements — shipped
+as Go plugins or WASM modules.
+
+</div>
+
+<div className={styles.card}>
+
+### 🛡 Compliance Packs
+
+Pre-built configuration profiles for SOC 2 Type II, GDPR, HIPAA, and ISO 27001.
+Includes PII inventory, data-flow maps, retention policies, and templated security
+questionnaire responses for your vendor review process.
+
+</div>
+
+<div className={styles.card}>
+
+### ☸ Kubernetes Operators
+
+Official Helm chart + Kubernetes Operator for fully declarative gateway management.
+GitOps-ready CRDs for routing rules, API keys, and plugins. Horizontal pod autoscaling
+and PodDisruptionBudget templates included.
+
+</div>
+
+<div className={styles.card}>
+
+### 🏠 On-Premises Deployment
+
+Air-gapped deployment packages for fully isolated environments. Includes offline model
+registry sync, self-hosted update server, and network-policy templates for zero-trust
+architectures.
+
+</div>
+
+<div className={styles.card}>
+
+### 📊 Advanced Analytics
+
+Request-level cost attribution, per-team usage dashboards, budget alerting, and
+cost forecasting across providers. ClickHouse-backed time-series storage for
+long-retention query analytics.
+
+</div>
+
+<div className={styles.card}>
+
+### 🏷 White-Labeling
+
+Deploy the gateway under your own brand. Custom UI, custom domain, and custom documentation
+site available for resellers and platform teams embedding the gateway into a larger product.
+
+</div>
+
+<div className={styles.card}>
+
+### 🤝 Dedicated Onboarding
+
+Hands-on migration from your current LLM infrastructure. Architecture review, configuration
+tuning, load testing, and runbook creation by a Ferro Labs solutions engineer.
+
+</div>
+
+</div>
+
+---
+
+## Comparison
+
+| Feature | Open Source | Enterprise |
+|---|---|---|
+| All 19 providers | ✅ | ✅ |
+| All routing strategies | ✅ | ✅ |
+| All 11 plugins | ✅ | ✅ |
+| MCP integration | ✅ | ✅ |
+| Prometheus metrics | ✅ | ✅ |
+| Community support | ✅ | ✅ |
+| SSO / SAML 2.0 | — | ✅ |
+| Advanced RBAC | — | ✅ |
+| Audit logs + SIEM export | — | ✅ |
+| SLA with dedicated support | — | ✅ |
+| Multi-region & HA deployment | — | ✅ |
+| Custom plugins | — | ✅ |
+| Compliance packs (SOC2, GDPR …) | — | ✅ |
+| Kubernetes Operator | — | ✅ |
+| On-premises / air-gapped | — | ✅ |
+| Advanced analytics + cost attribution | — | ✅ |
+| White-labeling | — | ✅ |
+| Dedicated onboarding | — | ✅ |
+
+---
+
+## Get Started
+
+<div className={styles.ctaBlock}>
+  <div>
+    <strong>Coming Soon</strong><br />
+    Enterprise plans are in the works. Join our Discord to stay updated.
+  </div>
+  <a href="https://discord.gg/yCAeYvJeDV" className={styles.ctaBtn} target="_blank" rel="noopener noreferrer">
+    Join Discord →
+  </a>
+</div>
+
+:::info Open-source first
+Every feature in this list is additive. The open-source gateway is complete on its own — enterprise
+is for teams that need organizational controls, compliance tooling, or commercial support on top.
+:::

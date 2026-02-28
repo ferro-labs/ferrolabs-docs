@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: OSS Gateway repo
+    url: https://github.com/ferro-labs/ai-gateway
+    about: For gateway bugs, feature requests, and provider issues — open an issue there.
+  - name: Community discussions
+    url: https://github.com/ferro-labs/ai-gateway/discussions
+    about: Questions, ideas, and general discussion about the AI Gateway.
