@@ -36,6 +36,7 @@ const sidebars: SidebarsConfig = {
         'guides/providers',
         'guides/providers-config',
         'guides/auth',
+        'guides/workspace-sign-in-domains',
         'guides/routing-policies',
         'guides/observability',
         'guides/plugins',

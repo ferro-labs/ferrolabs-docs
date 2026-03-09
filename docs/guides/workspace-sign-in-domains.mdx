@@ -1,0 +1,65 @@
+---
+title: Workspace sign-in domains
+description: Claim and verify work email domains so members are routed into workspace SSO.
+---
+
+Workspace owners and admins can claim a company email domain so the public sign-in page can route users into the correct workspace authentication flow.
+
+This affects sign-in routing only. It does not grant access by itself. Team members still need an invite or an existing membership in the workspace.
+
+## Before you start
+
+- Configure your workspace SSO provider first.
+- Use a domain your team controls, such as `example.com`.
+- Make sure you can edit DNS records for that domain.
+
+## Claim a domain
+
+1. Open the backend panel.
+2. Go to `Settings` and then `Access`.
+3. In `Login domains`, enter the work email domain you want to claim.
+4. Save the domain.
+
+FerroCloud will create a pending verification record and show you the DNS TXT record that must be added before the domain becomes active.
+
+## Add the DNS TXT record
+
+After saving the domain, the Access page shows two values:
+
+- Host: `_ferrocloud-challenge.<your-domain>`
+- Value: the verification token generated for that domain
+
+Create a TXT record in your DNS provider with exactly that host and value.
+
+Example:
+
+```dns
+Type: TXT
+Host: _ferrocloud-challenge.example.com
+Value: ferrocloud-verification-token
+```
+
+FerroCloud checks the TXT record on `_ferrocloud-challenge.<domain>`. It also accepts the same token on the root domain if your DNS provider has limited host support.
+
+## Verify the domain
+
+1. Wait for DNS propagation.
+2. Return to `Settings` → `Access`.
+3. Click `Verify` for the pending domain.
+
+When verification succeeds, the domain is marked as verified and email-first sign-in can route matching users into the workspace SSO flow automatically.
+
+## What users see
+
+Once a domain is verified:
+
+- A user enters their work email on the public sign-in page.
+- FerroCloud resolves the domain to the workspace.
+- The user is routed to password, OIDC, or SAML sign-in based on the workspace configuration.
+
+## Troubleshooting
+
+- If verification fails, confirm the TXT record host and value match the panel exactly.
+- DNS changes may take time to propagate; wait a few minutes and verify again.
+- If your SSO provider is not configured yet, users may still see a routing error even after the domain is verified.
+- Removing a verified domain stops automatic workspace routing for that email domain.
