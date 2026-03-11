@@ -86,7 +86,7 @@ docs/
 - **Front matter** — every doc needs `title` and optional `description`, `sidebar_position`
 - **Code blocks** — use language tags (`go`, `bash`, `yaml`, `typescript`, `python`)
 - **Admonitions** — use `:::note`, `:::tip`, `:::warning`, `:::danger` for callouts
-- **Links** — internal links use relative paths (`./quickstart.mdx`), external use full URLs
+- **Links** — internal links use absolute route paths without `.mdx` extension (e.g. `/getting-started/quickstart`), external links use full URLs
 - **Images** — place in `static/` and reference with absolute paths (`/img/...`)
 
 ## CI / GitHub Actions
@@ -119,5 +119,5 @@ Contributors must open PRs against `development`, not `main`.
 | OSS Gateway repo | https://github.com/ferro-labs/ai-gateway |
 | Website | https://www.ferrolabs.ai |
 | Twitter/X | https://x.com/ferroLabsAI |
-| Contributing guide | CONTRIBUTING.md |
-| Code of Conduct | CODE_OF_CONDUCT.md |
+| Contributing guide | https://github.com/ferro-labs/docs/blob/main/CONTRIBUTING.md |
+| Code of Conduct | https://github.com/ferro-labs/docs/blob/main/CODE_OF_CONDUCT.md |
