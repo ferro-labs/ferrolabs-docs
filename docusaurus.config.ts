@@ -187,6 +187,7 @@ const config: Config = {
             { label: '⭐  Star on GitHub', href: 'https://github.com/ferro-labs/ai-gateway' },
             { label: '🐛  Report an Issue', href: 'https://github.com/ferro-labs/ai-gateway/issues' },
             { label: '💬  Discussions', href: 'https://github.com/ferro-labs/ai-gateway/discussions' },
+            { label: '🎮  Discord', href: 'https://discord.gg/yCAeYvJeDV' },
             { label: '𝕏  Follow on X', href: 'https://x.com/ferroLabsAI' },
           ],
         },
