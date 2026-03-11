@@ -1,0 +1,207 @@
+/* Custom footer styles */
+
+.footer {
+  background: #06101f;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  color: #94a3b8;
+  padding: 4rem 2rem 0;
+}
+
+.inner {
+  max-width: 1180px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 1.8fr 1fr 1fr 1.4fr;
+  gap: 3rem;
+  padding-bottom: 3.5rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* ─── Brand ──────────────────────────────────────────────────── */
+.brand {}
+
+.brandLogo {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #e2e8f0;
+  margin-bottom: 0.875rem;
+  letter-spacing: -0.01em;
+}
+
+.brandDot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #0f766e 0%, #0891b2 100%);
+  flex-shrink: 0;
+  box-shadow: 0 0 8px rgba(15, 118, 110, 0.6);
+}
+
+.brandDesc {
+  font-size: 0.875rem;
+  line-height: 1.75;
+  color: #64748b;
+  max-width: 280px;
+  margin: 0 0 1.5rem;
+}
+
+.socialRow {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.socialBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #64748b;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  text-decoration: none;
+}
+
+.socialBtn:hover {
+  background: rgba(15, 118, 110, 0.15);
+  border-color: rgba(15, 118, 110, 0.35);
+  color: #2dd4bf;
+}
+
+/* ─── Columns ────────────────────────────────────────────────── */
+.col {}
+
+.colTitle {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #e2e8f0;
+  margin-bottom: 1.1rem;
+}
+
+.linkList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.footerLink {
+  font-size: 0.875rem;
+  color: #64748b !important;
+  text-decoration: none !important;
+  display: inline-flex;
+  align-items: center;
+  transition: color 0.15s;
+}
+
+.footerLink:hover {
+  color: #e2e8f0 !important;
+}
+
+/* ─── GitHub card ────────────────────────────────────────────── */
+.githubCard {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 0.875rem 1rem;
+  text-decoration: none !important;
+  color: #94a3b8 !important;
+  margin-bottom: 1rem;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.githubCard:hover {
+  border-color: rgba(15, 118, 110, 0.4);
+  background: rgba(15, 118, 110, 0.07);
+  color: #e2e8f0 !important;
+}
+
+.githubCardTitle {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  line-height: 1.2;
+}
+
+.githubCardSub {
+  font-size: 0.72rem;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #2dd4bf;
+  background: rgba(45, 212, 191, 0.07);
+  border: 1px solid rgba(45, 212, 191, 0.15);
+  border-radius: 100px;
+  padding: 3px 9px;
+  white-space: nowrap;
+}
+
+/* ─── Bottom bar ─────────────────────────────────────────────── */
+.bottom {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 1.25rem 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  color: #334155;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.bottomLinks {
+  display: flex;
+  gap: 1.25rem;
+}
+
+.bottomLink {
+  color: #334155 !important;
+  text-decoration: none !important;
+  transition: color 0.15s;
+}
+
+.bottomLink:hover {
+  color: #64748b !important;
+}
+
+/* ─── Responsive ─────────────────────────────────────────────── */
+@media (max-width: 996px) {
+  .inner {
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .inner {
+    grid-template-columns: 1fr;
+    gap: 2rem;
+  }
+  .bottom {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

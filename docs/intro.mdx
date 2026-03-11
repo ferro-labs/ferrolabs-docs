@@ -1,30 +1,70 @@
 ---
-title: Ferro Labs AI Gateway
-description: Unified gateway for model providers with routing, policies, and observability.
+title: Introduction
+description: Ferro Labs AI Gateway is an open-source LLM proxy with an OpenAI-compatible API. Route traffic across 19 AI providers, 2,500+ models, 11 safety plugins, and MCP tool-calling — no client code changes needed.
+keywords: [AI gateway, LLM proxy, OpenAI compatible, open source AI, LLM routing, multi-provider AI, self-hosted AI gateway, AI middleware, LangChain proxy, AI reverse proxy]
 ---
 
-Ferro Labs AI Gateway is a high performance control plane for AI traffic. It provides a single OpenAI compatible API to route, secure, and observe requests across many model providers.
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
-## Quick links
+# Ferro Labs AI Gateway
 
-- [Quickstart](/getting-started/quickstart)
-- [Architecture](/getting-started/architecture)
-- [Request lifecycle](/getting-started/request-lifecycle)
-- [Providers](/guides/providers)
-- [Routing policies](/guides/routing-policies)
-- [Observability](/guides/observability)
-- [API overview](/api-reference/overview)
+**Ferro Labs AI Gateway** is an open-source, high-performance control plane for AI traffic. It exposes a single OpenAI-compatible API that routes requests across 19 providers and 2,500+ models, enforces safety policies with 11 built-in plugins, and emits full production observability — all without changing your existing client code.
 
-## What you can do
+:::tip Ready to jump in?
+[Quickstart — up and running in 30 seconds →](/getting-started/quickstart)
+:::
 
-- Route traffic across providers with fallback, weighted, and conditional strategies.
-- Keep existing OpenAI SDK usage and change only the base URL.
-- Collect structured logs, metrics, and health checks out of the box.
-- Add request level controls with plugins for guardrails and rate limits.
+## What is it?
 
-## Detailed docs map
+Drop the gateway in front of your LLM traffic. Set `base_url` to the gateway endpoint. That's it — your OpenAI SDK, LangChain, LlamaIndex, or curl commands continue to work unchanged.
 
-- **Architecture**: System-level component and data flow diagrams.
-- **Request lifecycle**: End-to-end sequence and fallback behavior.
-- **Guides**: Provider configuration, auth, routing, plugins, and operations.
-- **API reference**: Endpoint behavior and admin surface.
+```bash
+docker run -d -p 8080:8080 \
+  -e OPENAI_API_KEY=sk-... \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  ghcr.io/ferro-labs/ai-gateway:latest
+```
+
+Then send requests to `http://localhost:8080/v1/chat/completions` exactly as you would to OpenAI.
+
+## Key capabilities
+
+| Capability | Details |
+|---|---|
+| **19 AI providers** | OpenAI, Anthropic, Gemini, Mistral, Groq, Cohere, DeepSeek, Together, Perplexity, Fireworks, AI21, Azure OpenAI, Azure Foundry, xAI, Ollama, Replicate, AWS Bedrock, Vertex AI, Hugging Face |
+| **6 routing strategies** | Single, Fallback, Weighted, Conditional, Least-Latency, Cost-Optimized |
+| **11 built-in plugins** | Word filter, max-token, response cache, request logger, rate limit, PII redact, secret scan, prompt shield, schema guard, regex guard |
+| **MCP integration** | Agentic tool-calling loop via Model Context Protocol servers (v0.8.0+) |
+| **Observability** | Prometheus metrics, structured JSON logs with trace IDs, deep `/health` per provider |
+| **Resiliency** | Per-target circuit breakers, retry with exponential backoff, per-status-code retry config |
+| **OpenAI compatible** | Chat completions, embeddings, images, and model listing — same wire format |
+
+## Docs map
+
+### Getting started
+- [Overview](/getting-started/overview) — When and why to use the gateway
+- [Architecture](/getting-started/architecture) — Component diagrams and data flow
+- [Request lifecycle](/getting-started/request-lifecycle) — Step-by-step request flow
+- [Quickstart](/getting-started/quickstart) — Docker, build from source, first request
+- [Concepts](/getting-started/concepts) — Core ideas: routing, plugins, observability, MCP
+- [Configuration](/getting-started/configuration) — Full config reference
+
+### Guides
+- [Providers](/guides/providers) — Provider table and supported capabilities
+- [Provider configuration](/guides/providers-config) — Environment variables per provider
+- [Authentication](/guides/auth) — API key configuration
+- [Routing policies](/guides/routing-policies) — All 6 routing strategies with examples
+- [Plugins](/guides/plugins) — All 11 plugins with YAML config
+- [MCP integration](/guides/mcp) — Model Context Protocol tool servers
+- [Observability](/guides/observability) — Metrics, logs, health checks
+- [Rate limiting](/guides/rate-limiting) — IP-level and request-level limiting
+- [Admin auth](/guides/admin-auth) — Admin API scopes and tokens
+
+### Operations & reference
+- [Monitoring](/operations/monitoring) — Prometheus queries, alerting, dashboards
+- [Request logging](/operations/request-logging) — Persistent log backends
+- [Server settings](/operations/server-settings) — All environment variables
+- [API reference](/api-reference/overview) — Endpoints, request format, admin API
+- [Security](/security/data-handling) — Data handling and least-privilege configuration
+- [FAQ](/faq) — Common questions

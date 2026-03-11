@@ -1,21 +1,22 @@
 ---
 title: Plugins
-description: Extend the request pipeline with guardrails and logging.
+description: All 11 built-in plugins in the Ferro Labs AI Gateway — PII redaction, prompt safety shield, response caching, request logging, rate limiting, secret scanning, and schema validation.
+keywords: [AI gateway plugins, LLM guardrails, PII redaction AI, prompt safety AI, response caching LLM, secret scanning, prompt shield, AI safety]
 ---
 
-Plugins run at specific stages in the request lifecycle:
+Plugins extend the request pipeline at three lifecycle stages:
 
-- `before_request`
-- `after_request`
-- `on_error`
+- `before_request` — runs before the request is forwarded to the provider
+- `after_request` — runs after the provider response is received
+- `on_error` — runs when the provider returns an error
 
-Each plugin is identified by name and type and configured in `config.yaml`.
+Each plugin entry in `config.yaml` has `name`, `type`, `stage`, `enabled`, and an optional `config` map. Disabled plugins (`enabled: false`) are ignored at runtime.
 
-## Built-in plugins
+## Guardrail plugins
 
-### Word filter
+### word-filter
 
-Blocks requests containing matching words or phrases.
+Blocks requests whose messages contain any of the configured words or phrases. Case sensitivity is optional.
 
 ```yaml
 - name: word-filter
@@ -23,13 +24,13 @@ Blocks requests containing matching words or phrases.
   stage: before_request
   enabled: true
   config:
-    blocked_words: ["password", "secret"]
+    blocked_words: ["confidential", "password", "secret"]
     case_sensitive: false
 ```
 
-### Max token
+### max-token
 
-Enforces max tokens, max messages, and optional input length.
+Enforces limits on token count, message count, and raw input length before the request reaches the provider.
 
 ```yaml
 - name: max-token
@@ -37,14 +38,106 @@ Enforces max tokens, max messages, and optional input length.
   stage: before_request
   enabled: true
   config:
-    max_tokens: 4096
-    max_messages: 100
-    max_input_length: 20000
+    max_tokens: 4096          # maximum output tokens to request
+    max_messages: 50          # maximum messages in the conversation
+    max_input_length: 20000   # maximum raw characters in user input
 ```
 
-### Response cache
+### pii-redact
 
-Caches exact match responses in memory.
+Detects Personally Identifiable Information (PII) in the request and either redacts it or blocks the request entirely.
+
+```yaml
+- name: pii-redact
+  type: guardrail
+  stage: before_request
+  enabled: true
+  config:
+    action: redact           # redact | block
+    redact_mode: replace_type  # replace detected entity with its type label
+    apply_to: input          # input | output | both
+    entities: []             # empty = detect all entity types
+```
+
+With `action: redact`, detected PII is replaced in-place before the request is forwarded. With `action: block`, the entire request is rejected with a `400` error.
+
+### secret-scan
+
+Scans request content for leaked credentials, API keys, and secrets using pattern matching and (optionally) entropy analysis.
+
+```yaml
+- name: secret-scan
+  type: guardrail
+  stage: before_request
+  enabled: true
+  config:
+    action: block            # block | warn
+    entropy_check: true      # also flag high-entropy strings
+```
+
+### prompt-shield
+
+Scores user messages for prompt injection attempts and blocks requests that exceed a configurable confidence threshold.
+
+```yaml
+- name: prompt-shield
+  type: guardrail
+  stage: before_request
+  enabled: true
+  config:
+    action: block
+    threshold: 0.90          # 0.0–1.0; higher = stricter
+    apply_to: user_messages
+```
+
+### schema-guard
+
+Validates the model's JSON output against a JSON Schema. Runs `after_request`. Optionally extracts JSON from a text response before validating.
+
+```yaml
+- name: schema-guard
+  type: guardrail
+  stage: after_request
+  enabled: true
+  config:
+    apply_to: output
+    action: block
+    extract_json: true       # attempt to parse JSON from a markdown code block
+    schema:
+      type: object
+      required: [name, confidence]
+      properties:
+        name:
+          type: string
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+```
+
+### regex-guard
+
+Blocks or warns on requests matching one or more regular expressions. Useful for custom business rules not covered by other guardrails.
+
+```yaml
+- name: regex-guard
+  type: guardrail
+  stage: before_request
+  enabled: true
+  config:
+    action: block            # block | warn
+    rules:
+      - pattern: "(?i)(ssn|social security)\\s*:?\\s*\\d{3}-\\d{2}-\\d{4}"
+        message: "SSN pattern detected"
+      - pattern: "(?i)jailbreak|ignore previous instructions"
+        message: "Potential jailbreak attempt"
+```
+
+## Transform plugins
+
+### response-cache
+
+Caches exact-match responses in memory. Identical requests (same model + messages) served from cache skip the provider entirely.
 
 ```yaml
 - name: response-cache
@@ -52,13 +145,15 @@ Caches exact match responses in memory.
   stage: before_request
   enabled: true
   config:
-    max_age: 300
-    max_entries: 1000
+    max_age: 300      # seconds before a cache entry expires
+    max_entries: 1000 # maximum number of cached responses
 ```
 
-### Request logger
+## Logging plugins
 
-Emits structured logs and can persist to SQLite or Postgres.
+### request-logger
+
+Emits structured per-request logs. Optionally persists request and response data to SQLite or Postgres for later querying via the admin API.
 
 ```yaml
 - name: request-logger
@@ -68,13 +163,17 @@ Emits structured logs and can persist to SQLite or Postgres.
   config:
     level: info
     persist: true
-    backend: sqlite
-    dsn: ferrogw-requests.db
+    backend: sqlite      # sqlite | postgres
+    dsn: ferrogw-requests.db   # SQLite path or Postgres DSN
 ```
 
-### Rate limit
+When `persist: true`, requests are queryable at `GET /admin/logs`. See [Request logging](/operations/request-logging).
 
-Rejects requests using a token bucket.
+## Rate limit plugins
+
+### rate-limit
+
+Token-bucket rate limiting applied per request. Rejects requests with `429 Too Many Requests` when the bucket is empty.
 
 ```yaml
 - name: rate-limit
@@ -85,3 +184,9 @@ Rejects requests using a token bucket.
     requests_per_second: 50
     burst: 100
 ```
+
+For IP-level rate limiting (HTTP middleware layer), see [Rate limiting](/guides/rate-limiting).
+
+## Plugin execution order
+
+Plugins are executed in the order they appear in `config.yaml`. Within a stage, if any plugin sets `reject: true`, execution stops and an error is returned to the client. The `skip` flag causes only the current plugin to be bypassed.

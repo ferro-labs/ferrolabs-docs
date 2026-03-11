@@ -1,8 +1,79 @@
 ---
 title: Changelog
-description: Release history for Ferro Labs AI Gateway.
+description: Release history for the Ferro Labs AI Gateway — new providers, routing strategies, plugins, MCP integration, performance improvements, and bug fixes across all versions.
+keywords: [AI gateway changelog, LLM proxy releases, AI gateway version history, gateway updates, MCP integration release]
 ---
 
-See the GitHub releases page for the latest changes.
+Full release notes are also on [GitHub Releases](https://github.com/ferro-labs/ai-gateway/releases).
 
-- https://github.com/ferro-labs/ai-gateway/releases
+## v0.8.0 — 2026-03-10
+
+### MCP integration (Phase 1)
+
+- Added `mcp_servers` configuration block for Model Context Protocol tool servers
+- Gateway injects available tools into every chat completion request automatically
+- Full agentic loop: gateway handles all `tool_calls` rounds internally, returns final text to client
+- Background MCP initialisation on startup with 60-second timeout; gateway is ready immediately
+- `MCPInitDone()` channel on `Gateway` struct for sync when needed
+- Per-server `allowed_tools` whitelist for access control
+- Per-server `max_call_depth` limit to prevent infinite loops
+- Environment variable interpolation (`${VAR}`) in MCP server headers
+- 29 new tests covering MCP lifecycle and agentic loop behaviour
+- Bug fixes: nil-safe circuit breaker map init, empty config array handling, streaming fix for empty delta content
+
+## v0.7.0 — 2026-03-08
+
+- Comprehensive regression test suite (50+ end-to-end scenarios)
+- Fixed: race condition in concurrent provider health checks
+- Fixed: weight normalisation with single-target load balancer
+- Fixed: `least-latency` cold-start selecting excluded targets
+- Fixed: `cost-optimized` panic on missing catalog entry
+- Fixed: admin API pagination off-by-one on last page
+
+## v0.6.6 — 2026-03-07
+
+- Refactored `providers/core` subpackage; `providers_list.go` split for clarity
+- All `Name*` constants re-exported from `providers` top-level package
+- Dashboard XSS hardening (output encoding on all admin UI fields)
+- Added CORS origin validation warning on startup for wildcard origins
+- Removed 19 deprecated provider shim files
+
+## v0.6.5 — 2026-03-07 — 5 new providers
+
+- **xAI (Grok)** — `XAI_API_KEY`
+- **Azure AI Foundry** — `AZURE_FOUNDRY_API_KEY` + `AZURE_FOUNDRY_ENDPOINT`
+- **Hugging Face** — `HUGGING_FACE_API_KEY`
+- **Google Vertex AI** — `VERTEX_AI_PROJECT_ID` (ADC)
+- **AWS Bedrock (static credentials)** — `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` option
+- Provider subpackage refactor: unified factory pattern across all 19 providers
+- Total providers: **19**; total models in catalog: **2,531**
+
+## v0.6.1 — 2026-03-06
+
+- CI GitHub Actions version bumps
+- Go dependency refresh (net/http, crypto)
+
+## v0.6.0 — 2026-03-06 — 5 new guardrail plugins
+
+- **pii-redact** — detect and redact PII entities before forwarding
+- **secret-scan** — block requests containing credentials or high-entropy secrets
+- **prompt-shield** — score and block prompt injection attempts
+- **schema-guard** — validate model output against JSON Schema (after_request)
+- **regex-guard** — block requests matching configurable regex patterns
+- Total built-in plugins: **11** (5 new + 6 existing)
+- All new plugins ship disabled (`enabled: false`) in `config.example.yaml`
+
+## v0.5.0 — 2026-03-03
+
+- **Streaming cost tracking** — token usage counted during streamed responses
+- **Least-latency strategy** — P50 rolling latency tracker, routes to fastest provider
+- **Cost-optimized strategy** — model catalog cost estimation, routes to cheapest provider
+- Per-target `retry_on_status` codes list (customise which HTTP status codes trigger retry)
+- CLI overhaul using Cobra — `ferrogw-cli` with `admin`, `models`, and `keys` subcommands
+
+## v0.4.5 — 2026-02-28
+
+- Built-in model catalog with **2,531 model entries** (pricing, context window, capabilities)
+- Cost calculator (`models.Calculate()`) used by `cost-optimized` strategy
+- `/v1/models` response enriched with catalog metadata (context window, max tokens, cost)
+- GitHub Actions catalog CI check — fails the build if catalog format is invalid

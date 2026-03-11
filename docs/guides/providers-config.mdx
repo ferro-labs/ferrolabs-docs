@@ -1,62 +1,103 @@
 ---
 title: Provider configuration
-description: Environment variables for each provider.
+description: Environment variables and credentials for all 19 AI providers in the Ferro Labs AI Gateway — API keys, base URLs, and model lists for OpenAI, Anthropic, Gemini, Ollama, and more.
+keywords: [AI provider configuration, OpenAI API key setup, Anthropic setup, LLM provider credentials, gateway environment variables, provider API keys]
 ---
 
-The gateway registers providers based on environment variables. Set at least one provider key before starting the server.
+Providers are automatically registered when their required environment variables are present at startup. Set at least one provider key before starting the gateway.
 
-## Core provider keys
+## Simple providers (API key only)
 
-- `OPENAI_API_KEY`
-- `ANTHROPIC_API_KEY`
-- `GROQ_API_KEY`
-- `GEMINI_API_KEY`
-- `MISTRAL_API_KEY`
-- `TOGETHER_API_KEY`
-- `COHERE_API_KEY`
-- `DEEPSEEK_API_KEY`
-- `PERPLEXITY_API_KEY`
-- `FIREWORKS_API_KEY`
-- `AI21_API_KEY`
+These providers require a single API key:
+
+```bash
+export OPENAI_API_KEY=sk-...
+export ANTHROPIC_API_KEY=sk-ant-...
+export GEMINI_API_KEY=...
+export MISTRAL_API_KEY=...
+export GROQ_API_KEY=gsk-...
+export COHERE_API_KEY=...
+export DEEPSEEK_API_KEY=...
+export TOGETHER_API_KEY=...
+export PERPLEXITY_API_KEY=pplx-...
+export FIREWORKS_API_KEY=fw-...
+export AI21_API_KEY=...
+export XAI_API_KEY=xai-...
+export HUGGING_FACE_API_KEY=hf-...
+```
 
 ## Azure OpenAI
 
-Azure requires additional fields:
+Requires endpoint, deployment name, and API version in addition to the key:
 
 ```bash
 export AZURE_OPENAI_API_KEY=...
 export AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
-export AZURE_OPENAI_DEPLOYMENT=your-deployment
+export AZURE_OPENAI_DEPLOYMENT=gpt-4o
 export AZURE_OPENAI_API_VERSION=2024-10-21
 ```
 
-## Ollama
+## Azure AI Foundry
 
-Ollama does not need an API key.
+```bash
+export AZURE_FOUNDRY_API_KEY=...
+export AZURE_FOUNDRY_ENDPOINT=https://your-project.services.ai.azure.com
+```
+
+## Ollama (local / self-hosted)
+
+Ollama does not require an API key. The host defaults to `http://localhost:11434`.
 
 ```bash
 export OLLAMA_HOST=http://localhost:11434
-export OLLAMA_MODELS=llama3.2,llama3.1
+export OLLAMA_MODELS=llama3.2,llama3.1,mistral
 ```
+
+`OLLAMA_MODELS` is a comma-separated list of model tags to expose at `/v1/models`.
 
 ## Replicate
 
 ```bash
-export REPLICATE_API_TOKEN=...
-export REPLICATE_TEXT_MODELS=meta/llama-3-8b-instruct
+export REPLICATE_API_TOKEN=r8_...
+export REPLICATE_TEXT_MODELS=meta/llama-3-8b-instruct,mistralai/mistral-7b-instruct-v0.2
 export REPLICATE_IMAGE_MODELS=stability-ai/sdxl
 ```
 
+`REPLICATE_TEXT_MODELS` and `REPLICATE_IMAGE_MODELS` are comma-separated lists of Replicate model IDs to register.
+
 ## AWS Bedrock
 
-Bedrock uses the AWS credential chain. Set `AWS_REGION` or AWS credentials:
+Bedrock uses the standard AWS credential chain. Configure either `AWS_REGION` alone (for IAM roles / instance profiles) or full static credentials:
 
 ```bash
+# Option 1 — IAM role or instance profile
 export AWS_REGION=us-east-1
-export AWS_ACCESS_KEY_ID=...
+
+# Option 2 — static credentials
+export AWS_REGION=us-east-1
+export AWS_ACCESS_KEY_ID=AKIA...
 export AWS_SECRET_ACCESS_KEY=...
 ```
 
-## Validate providers
+## Google Vertex AI
 
-Check `/v1/models` for the current model list and `/health` for provider availability.
+Vertex AI uses Application Default Credentials (ADC). Set the project ID and ensure ADC is configured:
+
+```bash
+export VERTEX_AI_PROJECT_ID=my-gcp-project
+# ADC must be configured via gcloud or GOOGLE_APPLICATION_CREDENTIALS
+```
+
+## Validate configured providers
+
+After starting the gateway, confirm which providers are active:
+
+```bash
+# List all registered models (grouped by provider)
+curl http://localhost:8080/v1/models
+
+# Deep health check with per-provider status
+curl http://localhost:8080/health
+```
+
+The `/health` endpoint returns `200 OK` if at least one provider is reachable and includes per-provider latency in the JSON body.

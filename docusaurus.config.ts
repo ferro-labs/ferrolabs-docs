@@ -6,7 +6,7 @@ import type * as Preset from '@docusaurus/preset-classic';
 
 const config: Config = {
   title: 'Ferro Labs AI Gateway',
-  tagline: 'Fast, provider-agnostic AI gateway',
+  tagline: 'One gateway for every AI model — 19 providers, 2,500+ models, 11 plugins.',
   favicon: 'assets/branding/favicon.ico',
 
   // Future flags, see https://docusaurus.io/docs/api/docusaurus-config#future
@@ -22,7 +22,7 @@ const config: Config = {
 
   // GitHub pages deployment config.
   // If you aren't using GitHub pages, you don't need these.
-  organizationName: 'ferro-labs',
+  organizationName: 'ferro-labs-ai',
   projectName: 'ai-gateway',
 
   onBrokenLinks: 'throw',
@@ -39,7 +39,43 @@ const config: Config = {
     mermaid: true,
   },
 
-  themes: ['@docusaurus/theme-mermaid'],
+  themes: [
+    '@docusaurus/theme-mermaid',
+    [
+      '@easyops-cn/docusaurus-search-local',
+      {
+        hashed: true,
+        indexDocs: true,
+        indexPages: true,
+        docsRouteBasePath: '/',
+        searchBarShortcutHint: false,
+      },
+    ],
+  ],
+
+  plugins: [
+    [
+      '@scalar/docusaurus',
+      {
+        label: 'API Reference',
+        route: '/api',
+        showNavLink: false,
+        configuration: {
+          spec: { url: '/openapi.yaml' },
+          defaultHttpClient: { targetKey: 'shell', clientKey: 'curl' },
+          layout: 'modern',
+          hideModels: false,
+          customCss: `
+            /* Hide Share and Deploy toolbar buttons */
+            .api-reference-toolbar > div > *:nth-last-child(1),
+            .api-reference-toolbar > div > *:nth-last-child(2) {
+              display: none !important;
+            }
+          `,
+        },
+      },
+    ],
+  ],
 
   presets: [
     [
@@ -53,23 +89,43 @@ const config: Config = {
         theme: {
           customCss: './src/css/custom.css',
         },
+        gtag: {
+          trackingID: 'G-5F8673S5L5',
+          anonymizeIP: true,
+        },
       } satisfies Preset.Options,
     ],
   ],
 
   themeConfig: {
-    // Replace with your project's social card
-    image: 'img/docusaurus-social-card.jpg',
+    image: 'assets/branding/logo-light.png',
+    titleDelimiter: '|',
+    metadata: [
+      { name: 'keywords', content: 'AI gateway, LLM proxy, OpenAI compatible, open source AI, LLM routing, multi-provider AI, self-hosted AI gateway, AI middleware' },
+      { property: 'og:type', content: 'website' },
+      { property: 'og:site_name', content: 'Ferro Labs AI Gateway Docs' },
+      { name: 'twitter:card', content: 'summary_large_image' },
+      { name: 'twitter:site', content: '@ferroLabsAI' },
+    ],
+    announcementBar: {
+      id: 'v080-mcp',
+      content:
+        '✨ <strong>v0.8.0</strong> is out — MCP integration (Model Context Protocol) is now available. <a href="/guides/mcp">Read the docs →</a>',
+      backgroundColor: '#ecfdf5',
+      textColor: '#065f46',
+      isCloseable: true,
+    },
     colorMode: {
       defaultMode: 'light',
       disableSwitch: false,
-      respectPrefersColorScheme: false,
+      respectPrefersColorScheme: true,
     },
     navbar: {
       logo: {
-        alt: 'Ferro Labs Logo',
+        alt: 'Ferro Labs AI Gateway',
         src: 'assets/branding/logo-light.png',
         srcDark: 'assets/branding/logo-dark.png',
+        href: '/',
       },
       items: [
         {
@@ -79,52 +135,76 @@ const config: Config = {
           label: 'Docs',
         },
         {
+          to: '/enterprise',
+          label: 'Enterprise',
+          position: 'left',
+        },
+        {
+          href: '/api',
+          label: 'API Reference',
+          position: 'left',
+        },
+        {
+          to: '/changelog',
+          label: 'Changelog',
+          position: 'left',
+        },
+        {
           href: 'https://github.com/ferro-labs/ai-gateway',
-          label: 'GitHub',
           position: 'right',
+          className: 'navbar-github-link',
+          'aria-label': 'GitHub repository',
+          label: 'GitHub',
         },
       ],
     },
     footer: {
-      style: 'light',
+      style: 'dark',
       links: [
         {
           title: 'Docs',
           items: [
-            {
-              label: 'Getting Started',
-              to: '/intro',
-            },
+            { label: 'Introduction', to: '/intro' },
+            { label: 'Quickstart', to: '/getting-started/quickstart' },
+            { label: 'Providers', to: '/guides/providers' },
+            { label: 'Routing Policies', to: '/guides/routing-policies' },
+            { label: 'Plugins', to: '/guides/plugins' },
+            { label: 'MCP Integration', to: '/guides/mcp' },
           ],
         },
         {
-          title: 'Social',
+          title: 'Resources',
           items: [
-            {
-              label: 'X',
-              href: 'https://x.com/ferroLabsAI',
-            },
-            {
-              label: 'GitHub',
-              href: 'https://github.com/ferro-labs/ai-gateway',
-            },
+            { label: 'Changelog', to: '/changelog' },
+            { label: 'API Reference', href: '/api' },
+            { label: 'FAQ', to: '/faq' },
+            { label: 'GitHub', href: 'https://github.com/ferro-labs/ai-gateway' },
+          ],
+        },
+        {
+          title: 'Community',
+          items: [
+            { label: '⭐  Star on GitHub', href: 'https://github.com/ferro-labs/ai-gateway' },
+            { label: '🐛  Report an Issue', href: 'https://github.com/ferro-labs/ai-gateway/issues' },
+            { label: '💬  Discussions', href: 'https://github.com/ferro-labs/ai-gateway/discussions' },
+            { label: '𝕏  Follow on X', href: 'https://x.com/ferroLabsAI' },
           ],
         },
         {
           title: 'Ferro Labs',
           items: [
-            {
-              label: 'Website',
-              href: 'https://www.ferrolabs.ai',
-            },
+            { label: '🏠  Website', href: 'https://www.ferrolabs.ai' },
+            { label: '⚡  Enterprise', to: '/enterprise' },
+            { label: '📊  Status', href: 'https://status.ferrolabs.ai' },
           ],
         },
       ],
-      copyright: `Copyright © ${new Date().getFullYear()} Ferro Labs. Built with Docusaurus.`,
+      copyright: `Copyright © ${new Date().getFullYear()} Ferro Labs. Apache 2.0 Open Source.`,
     },
     prism: {
       theme: prismThemes.github,
       darkTheme: prismThemes.dracula,
+      additionalLanguages: ['bash', 'yaml', 'go', 'python', 'json', 'promql'],
     },
   } satisfies Preset.ThemeConfig,
 };

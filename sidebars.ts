@@ -1,17 +1,5 @@
 import type {SidebarsConfig} from '@docusaurus/plugin-content-docs';
 
-// This runs in Node.js - Don't use client-side code here (browser APIs, JSX...)
-
-/**
- * Creating a sidebar enables you to:
- - create an ordered group of docs
- - render a sidebar for each doc of that group
- - provide next/previous navigation
-
- The sidebars can be generated from the filesystem, or explicitly defined here.
-
- Create as many sidebars as you want.
- */
 const sidebars: SidebarsConfig = {
   tutorialSidebar: [
     'intro',
@@ -21,9 +9,9 @@ const sidebars: SidebarsConfig = {
       collapsed: false,
       items: [
         'getting-started/overview',
+        'getting-started/quickstart',
         'getting-started/architecture',
         'getting-started/request-lifecycle',
-        'getting-started/quickstart',
         'getting-started/concepts',
         'getting-started/configuration',
       ],
@@ -33,31 +21,62 @@ const sidebars: SidebarsConfig = {
       label: 'Guides',
       collapsed: false,
       items: [
-        'guides/providers',
-        'guides/providers-config',
-        'guides/auth',
-        'guides/workspace-sign-in-domains',
-        'guides/routing-policies',
-        'guides/observability',
-        'guides/plugins',
-        'guides/rate-limiting',
-        'guides/admin-auth',
+        {
+          type: 'category',
+          label: 'Providers',
+          collapsed: false,
+          items: [
+            'guides/providers',
+            'guides/providers-config',
+          ],
+        },
+        {
+          type: 'category',
+          label: 'Routing',
+          collapsed: false,
+          items: [
+            'guides/routing-policies',
+          ],
+        },
+        {
+          type: 'category',
+          label: 'Features',
+          collapsed: false,
+          items: [
+            'guides/plugins',
+            'guides/mcp',
+            'guides/rate-limiting',
+          ],
+        },
+        {
+          type: 'category',
+          label: 'Auth & Access',
+          collapsed: false,
+          items: [
+            'guides/auth',
+            'guides/admin-auth',
+            'guides/workspace-sign-in-domains',
+          ],
+        },
+        {
+          type: 'category',
+          label: 'Observability',
+          collapsed: false,
+          items: [
+            'guides/observability',
+          ],
+        },
       ],
     },
     {
-      type: 'category',
-      label: 'API Reference',
-      collapsed: false,
-      items: [
-        'api-reference/overview',
-        'api-reference/endpoints',
-        'api-reference/admin',
-      ],
+      type: 'link',
+      label: 'API Reference ↗',
+      href: '/api',
     },
     {
       type: 'category',
       label: 'SDKs',
-      collapsed: false,
+      collapsed: true,
       items: ['sdks/overview'],
     },
     {
@@ -75,12 +94,6 @@ const sidebars: SidebarsConfig = {
       label: 'Security',
       collapsed: false,
       items: ['security/data-handling'],
-    },
-    {
-      type: 'category',
-      label: 'FAQ',
-      collapsed: false,
-      items: ['faq/index'],
     },
     'changelog',
   ],

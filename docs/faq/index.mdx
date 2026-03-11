@@ -1,16 +1,287 @@
 ---
 title: FAQ
-description: Common questions about the AI Gateway.
+description: Frequently asked questions about the Ferro Labs AI Gateway — setup, provider compatibility, streaming support, Docker deployment, routing strategies, and plugin configuration.
+keywords: [AI gateway FAQ, LLM proxy questions, OpenAI compatible FAQ, AI gateway help, gateway troubleshooting]
+hide_table_of_contents: true
 ---
 
-## Do I need to change my SDK?
+import styles from './faq.module.css';
 
-No. The gateway speaks the OpenAI API format. Set the base URL to the gateway and keep your client code.
+<div className={styles.faqWrap}>
 
-## Does it support multiple providers?
+# Frequently Asked Questions
 
-Yes. The gateway integrates with many providers and can route across them.
+<div className={styles.section}>
 
-## Can I run it locally?
+## Setup & Compatibility
 
-Yes. Use Docker or build from source and run on `localhost:8080`.
+<details className={styles.item}>
+<summary className={styles.q}>Do I need to change my SDK or application code?</summary>
+<div className={styles.a}>
+
+No. The gateway uses the OpenAI wire format. Change only `base_url` in your client:
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://localhost:8080/v1", api_key="any")
+```
+
+The `api_key` field is required by the OpenAI SDK but the gateway ignores it — provider credentials are set via environment variables on the server.
+
+</div>
+</details>
+
+<details className={styles.item}>
+<summary className={styles.q}>Which model names should I use?</summary>
+<div className={styles.a}>
+
+Use the model IDs native to each provider — `claude-3-5-sonnet-20241022` for Anthropic, `gemini-1.5-pro` for Gemini, `gpt-4o` for OpenAI, etc. You can also define [model aliases](/getting-started/configuration#model-aliases) like `fast` or `smart` in your config to decouple your application from specific model names.
+
+</div>
+</details>
+
+<details className={styles.item}>
+<summary className={styles.q}>Can I run it locally?</summary>
+<div className={styles.a}>
+
+Yes. Use Docker or build from source:
+
+```bash
+# Docker
+docker run -p 8080:8080 -e OPENAI_API_KEY=sk-... ghcr.io/ferro-labs/ai-gateway:latest
+
+# From source
+git clone https://github.com/ferro-labs/ai-gateway && cd ai-gateway && make run
+```
+
+</div>
+</details>
+
+<details className={styles.item}>
+<summary className={styles.q}>Does it support streaming?</summary>
+<div className={styles.a}>
+
+Yes. Set `stream: true` in your request body. The gateway streams the response from the provider to your client using Server-Sent Events (SSE), identical to the OpenAI streaming format. This works across all supported providers.
+
+</div>
+</details>
+
+<details className={styles.item}>
+<summary className={styles.q}>What Go version is required?</summary>
+<div className={styles.a}>
+
+Go 1.21 or later. The gateway binary is statically compiled and has no runtime dependencies. Pre-built binaries and a Docker image are available on the [GitHub releases page](https://github.com/ferro-labs/ai-gateway/releases).
+
+</div>
+</details>
+
+</div>
+
+<div className={styles.section}>
+
+## Providers
+
+<details className={styles.item}>
+<summary className={styles.q}>How do I enable a provider?</summary>
+<div className={styles.a}>
+
+Set the provider's environment variable before starting the gateway. For example:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+export GROQ_API_KEY=gsk_...
+```
+
+No config file changes are needed to enable providers — setting the environment variable is sufficient. See [Provider configuration](/guides/providers-config) for all variables.
+
+</div>
+</details>
+
+<details className={styles.item}>
+<summary className={styles.q}>Can I use multiple providers at the same time?</summary>
+<div className={styles.a}>
+
+Yes. Set credentials for as many providers as you want. The gateway discovers enabled providers at startup based on which environment variables are set. Use [routing strategies](/guides/routing-policies) to control which provider gets each request — combine multiple providers in a single route for fallback, load balancing, or cost optimization.
+
+</div>
+</details>
+
+<details className={styles.item}>
+<summary className={styles.q}>Can I use Ollama or other self-hosted models?</summary>
+<div className={styles.a}>
+
+Yes. Set `OLLAMA_HOST=http://localhost:11434` and `OLLAMA_MODELS=llama3.2,mistral`. Ollama requires no API key. The gateway supports any provider that exposes an OpenAI-compatible HTTP API via the `openai-compatible` provider type — set `CUSTOM_PROVIDER_BASE_URL` and optionally `CUSTOM_PROVIDER_API_KEY`.
+
+</div>
+</details>
+
+<details className={styles.item}>
+<summary className={styles.q}>Can I force a specific provider for one request?</summary>
+<div className={styles.a}>
+
+Yes. Add the `X-Provider` header to your request:
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "X-Provider: anthropic" \
+  -d '{"model": "claude-3-5-sonnet-20241022", "messages": [...]}'
+```
+
+This overrides the routing strategy for that single request.
+
+</div>
+</details>
+
+</div>
+
+<div className={styles.section}>
+
+## Routing
+
+<details className={styles.item}>
+<summary className={styles.q}>What happens if a provider is down?</summary>
+<div className={styles.a}>
+
+With the `fallback` strategy, the gateway automatically retries the next configured target with exponential backoff. With `single`, the error is returned to the client immediately. Circuit breakers automatically exclude failing providers across all strategies once the error threshold is exceeded — they self-recover after the configured timeout.
+
+</div>
+</details>
+
+<details className={styles.item}>
+<summary className={styles.q}>How does cost-optimized routing work?</summary>
+<div className={styles.a}>
+
+The gateway ships with a catalog of 2,500+ models with input/output cost data per million tokens. For each request, it estimates the cost for each configured target based on the model name and routes to the cheapest compatible provider. No external API calls are made for cost data — it ships embedded in the binary.
+
+</div>
+</details>
+
+<details className={styles.item}>
+<summary className={styles.q}>What is the difference between `least-latency` and `fallback`?</summary>
+<div className={styles.a}>
+
+`fallback` is **reactive** — it switches providers only after a failure or timeout. `least-latency` is **proactive** — it continuously measures P50 latency from successful requests and always prefers the fastest available provider, even when all providers are healthy. Use `least-latency` when minimizing response time is more important than cost.
+
+</div>
+</details>
+
+<details className={styles.item}>
+<summary className={styles.q}>Can I route different request types to different providers?</summary>
+<div className={styles.a}>
+
+Yes. The `conditional` strategy allows routing based on request attributes — model name, request headers, or custom metadata. For example, you can route requests with `X-Tier: premium` to GPT-4o and all others to a cheaper model. See [Routing policies](/guides/routing-policies) for full examples.
+
+</div>
+</details>
+
+</div>
+
+<div className={styles.section}>
+
+## Plugins & Safety
+
+<details className={styles.item}>
+<summary className={styles.q}>Do plugins affect latency?</summary>
+<div className={styles.a}>
+
+Guardrail plugins (`before_request`) add minimal overhead — typically under 1ms for pattern-matching plugins (`word-filter`, `regex-guard`). `pii-redact` and `prompt-shield` may add 1–5ms depending on content size. `response-cache` can dramatically reduce latency on cache hits by returning responses without hitting any provider.
+
+</div>
+</details>
+
+<details className={styles.item}>
+<summary className={styles.q}>Can I write custom plugins?</summary>
+<div className={styles.a}>
+
+Yes. Implement the `plugin.Plugin` interface in Go and register it with the plugin manager. The interface requires `Name()`, `Type()`, `Init()`, and `Execute()` methods. See the [examples directory](https://github.com/ferro-labs/ai-gateway/tree/main/examples/custom-plugin) for a working example.
+
+</div>
+</details>
+
+<details className={styles.item}>
+<summary className={styles.q}>Will plugins block my requests in production?</summary>
+<div className={styles.a}>
+
+Yes, if a guardrail with `action: block` is triggered, the request is rejected immediately with a `400` or `403` response. You can also configure `action: warn` to log without blocking. Test your guardrail configuration in a staging environment and review logs at `/admin/logs` before enabling in production.
+
+</div>
+</details>
+
+</div>
+
+<div className={styles.section}>
+
+## MCP (Model Context Protocol)
+
+<details className={styles.item}>
+<summary className={styles.q}>What is MCP?</summary>
+<div className={styles.a}>
+
+Model Context Protocol (MCP) is an open standard for connecting AI models to external tools and data sources. The gateway implements MCP as a client — it connects to your MCP tool servers, injects available tools into chat completion requests, and runs the agentic tool-calling loop automatically. See the [MCP guide](/guides/mcp).
+
+</div>
+</details>
+
+<details className={styles.item}>
+<summary className={styles.q}>Do my clients need to implement the tool loop?</summary>
+<div className={styles.a}>
+
+No. The gateway handles the full agentic loop internally. Your client sends a standard chat completion request and receives a final text response. All intermediate tool calls happen transparently inside the gateway. This means any OpenAI-compatible client automatically gains tool-use capability without code changes.
+
+</div>
+</details>
+
+<details className={styles.item}>
+<summary className={styles.q}>Which MCP server implementations are supported?</summary>
+<div className={styles.a}>
+
+The gateway supports MCP servers using the 2025-11-25 Streamable HTTP transport. Popular compatible servers include the [MCP filesystem server](https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem), [PostgreSQL server](https://github.com/modelcontextprotocol/servers/tree/main/src/postgres), and [Fetch server](https://github.com/modelcontextprotocol/servers/tree/main/src/fetch). See [MCP integration](/guides/mcp) for full setup instructions.
+
+</div>
+</details>
+
+</div>
+
+<div className={styles.section}>
+
+## Operations
+
+<details className={styles.item}>
+<summary className={styles.q}>How do I know which providers are active?</summary>
+<div className={styles.a}>
+
+Call `GET /health` for per-provider health status, latency, and model counts. Call `GET /v1/models` for all available models grouped by provider. Both endpoints are unauthenticated and suitable for readiness probes.
+
+</div>
+</details>
+
+<details className={styles.item}>
+<summary className={styles.q}>Is there an admin API?</summary>
+<div className={styles.a}>
+
+Yes. The gateway exposes an admin API at `/admin/*` for managing API keys, querying request logs, viewing provider status, and hot-reloading config. Protect it with `ADMIN_API_KEY`. See the [Admin auth guide](/guides/admin-auth) and [interactive API reference](/api).
+
+</div>
+</details>
+
+<details className={styles.item}>
+<summary className={styles.q}>Can I use PostgreSQL instead of SQLite?</summary>
+<div className={styles.a}>
+
+Yes. For request logs, set `backend: postgres` and `dsn: postgres://...` in the `request-logger` plugin config. For the admin API key store, set `STORE_BACKEND=postgres` and `STORE_DSN=postgres://...`. See [Server settings](/operations/server-settings) for all environment variables.
+
+</div>
+</details>
+
+<details className={styles.item}>
+<summary className={styles.q}>Is it production-ready?</summary>
+<div className={styles.a}>
+
+Yes. The gateway is used in production with circuit breakers, retries with exponential backoff, Prometheus monitoring, structured request logging, and an admin API. See [Monitoring](/operations/monitoring) for recommended Prometheus alert rules and a Grafana dashboard layout.
+
+</div>
+</details>
+
+</div>
+
+</div>

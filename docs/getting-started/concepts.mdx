@@ -1,23 +1,70 @@
 ---
 title: Concepts
-description: Core ideas you need to configure the gateway.
+description: Core concepts of the Ferro Labs AI Gateway — OpenAI-compatible routing, plugin pipeline, observability, MCP tool-calling, and the difference between routes, targets, and strategies.
+keywords: [AI gateway concepts, LLM routing strategies, AI plugins, MCP tool calling, OpenAI wire format, gateway routing]
 ---
 
-## OpenAI compatible API
+## OpenAI-compatible API
 
-The gateway speaks the OpenAI API format. That lets you reuse existing SDKs while the gateway handles provider specific credentials and routing.
+The gateway speaks the OpenAI wire format for chat completions, embeddings, images, and model listing. Any client that works with OpenAI will work with the gateway after changing only the `base_url`. Provider credentials, model routing, and policy enforcement happen inside the gateway — your application code is unaffected.
 
 ## Routing strategies
 
-- Single: Always use one provider or model.
-- Fallback: Retry a secondary provider with backoff if the primary fails.
-- Weighted: Distribute traffic by weight across providers.
-- Conditional: Route based on model or request metadata.
+The strategy controls which provider target receives each request. Configure it with the `strategy.mode` key in your config file.
+
+| Strategy | Description |
+|---|---|
+| `single` | Always route to the first target. Simplest setup. |
+| `fallback` | Try targets in order; retry the next on failure with exponential backoff. |
+| `loadbalance` | Distribute requests across targets by weight. |
+| `conditional` | Evaluate rules (model name, model prefix) to pick a target per request. |
+| `least-latency` | Route to the target with the lowest P50 latency, using a rolling tracker. |
+| `cost-optimized` | Estimate input cost from the model catalog and route to the cheapest compatible target. |
+
+See [Routing policies](/guides/routing-policies) for YAML examples of each strategy.
+
+## Providers and targets
+
+A **provider** is a registered AI API backend (e.g., OpenAI, Anthropic). Providers are enabled by setting environment variables — no code needed.
+
+A **target** is a reference to a provider in your config. Targets carry optional fields: `weight` (for load balancing), `retry` (attempts + status codes), and `circuit_breaker` (thresholds + timeout).
+
+## Model aliases
+
+Aliases map short names to full model IDs. They are resolved before routing, so `cheap` can map to `gemini-1.5-flash` and every request to `model: cheap` is transparently sent to Gemini.
 
 ## Plugins
 
-Plugins let you add request level controls, such as guardrails, rate limits, caching, or request logging.
+Plugins run at three lifecycle stages: `before_request`, `after_request`, and `on_error`.
+
+Plugin types and the 11 built-in implementations:
+
+| Plugin | Type | Stage | Purpose |
+|---|---|---|---|
+| `word-filter` | guardrail | before_request | Block requests containing banned words |
+| `max-token` | guardrail | before_request | Enforce token and message count limits |
+| `pii-redact` | guardrail | before_request | Detect and redact PII entities |
+| `secret-scan` | guardrail | before_request | Block requests containing secrets/credentials |
+| `prompt-shield` | guardrail | before_request | Score and block prompt injection attempts |
+| `schema-guard` | guardrail | after_request | Validate model output against a JSON Schema |
+| `regex-guard` | guardrail | before_request | Block requests matching regex patterns |
+| `response-cache` | transform | before_request | Cache exact-match responses in memory |
+| `request-logger` | logging | before_request | Emit structured logs, optionally persist to SQLite/Postgres |
+| `rate-limit` | ratelimit | before_request | Token-bucket rate limiting per request |
+| `max-token` | guardrail | before_request | Enforce input and output token limits |
+
+See [Plugins](/guides/plugins) for full configuration examples.
+
+## MCP integration
+
+Model Context Protocol (MCP) lets you connect external tool servers to the gateway. When `mcp_servers` are configured, the gateway injects available tools into every chat completion request and runs an agentic loop when the model returns `tool_calls`. This works transparently — clients receive the final text response without needing to implement the tool loop themselves.
+
+See [MCP integration](/guides/mcp) for setup and examples.
 
 ## Observability
 
-The gateway exposes structured JSON logs, Prometheus metrics at `/metrics`, and a health endpoint at `/health`.
+- **Prometheus metrics** — scraped at `/metrics`. Includes request counts, latency histograms, token usage, and cache hit rates.
+- **Structured JSON logs** — emitted to stdout with a per-request `trace_id` for log correlation.
+- **Health endpoint** — `GET /health` returns per-provider availability with latency measurements.
+
+See [Observability](/guides/observability) and [Monitoring](/operations/monitoring) for details.

@@ -1,16 +1,121 @@
 ---
 title: Observability
-description: Logs, metrics, and health checks.
+description: Full observability for your LLM traffic — Prometheus metrics, structured JSON logs with trace IDs, and a deep per-provider health endpoint in the Ferro Labs AI Gateway.
+keywords: [LLM observability, AI gateway metrics, Prometheus LLM, AI gateway monitoring, structured logging AI, LLM tracing]
 ---
 
-## Logs
+The gateway ships with three observability layers: Prometheus metrics, structured log output, and a deep health endpoint.
 
-The gateway emits structured JSON logs with per request trace IDs for correlation.
+## Prometheus metrics
 
-## Metrics
+Metrics are exposed at `GET /metrics` in the standard Prometheus text format. Scrape this endpoint with your Prometheus server.
 
-Prometheus metrics are exposed at `/metrics`, including request counts and latency histograms.
+### Available metrics
 
-## Health
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `ferrogw_requests_total` | Counter | `provider`, `model`, `status` | Total requests processed |
+| `ferrogw_errors_total` | Counter | `provider`, `model`, `error_type` | Total errors by type |
+| `ferrogw_request_duration_seconds` | Histogram | `provider`, `model` | End-to-end request latency |
+| `ferrogw_provider_latency_seconds` | Histogram | `provider` | Provider round-trip latency |
+| `ferrogw_tokens_total` | Counter | `provider`, `model`, `type` | Token usage (`type`: `prompt`\|`completion`) |
+| `ferrogw_cache_hits_total` | Counter | | Response cache hits |
+| `ferrogw_cache_misses_total` | Counter | | Response cache misses |
+| `ferrogw_circuit_breaker_state` | Gauge | `provider` | Circuit breaker state (`0`=closed, `1`=open, `2`=half-open) |
+| `ferrogw_plugin_blocks_total` | Counter | `plugin`, `reason` | Requests blocked by a plugin |
 
-`/health` provides a deep health check with per provider status.
+### Example Prometheus scrape config
+
+```yaml
+scrape_configs:
+  - job_name: ferrogw
+    static_configs:
+      - targets: ["localhost:8080"]
+    metrics_path: /metrics
+    scrape_interval: 15s
+```
+
+### Useful PromQL queries
+
+```promql
+# Request rate by provider
+rate(ferrogw_requests_total[5m])
+
+# P99 request latency
+histogram_quantile(0.99, rate(ferrogw_request_duration_seconds_bucket[5m]))
+
+# Error rate percentage
+rate(ferrogw_errors_total[5m]) / rate(ferrogw_requests_total[5m]) * 100
+
+# Token usage per minute
+rate(ferrogw_tokens_total[1m]) * 60
+
+# Cache hit ratio
+rate(ferrogw_cache_hits_total[5m]) /
+  (rate(ferrogw_cache_hits_total[5m]) + rate(ferrogw_cache_misses_total[5m]))
+
+# Open circuit breakers
+ferrogw_circuit_breaker_state == 1
+```
+
+## Structured JSON logs
+
+The gateway writes structured JSON to stdout. Each log line includes:
+
+| Field | Description |
+|---|---|
+| `time` | ISO 8601 timestamp |
+| `level` | `debug`, `info`, `warn`, `error` |
+| `trace_id` | Per-request UUID for log correlation |
+| `msg` | Log message |
+| `provider` | Provider name (on request/response lines) |
+| `model` | Model ID |
+| `latency_ms` | Provider round-trip latency in milliseconds |
+| `status` | HTTP status code |
+| `tokens_prompt` | Prompt token count |
+| `tokens_completion` | Completion token count |
+
+Example log line:
+
+```json
+{
+  "time": "2026-03-11T10:23:45Z",
+  "level": "info",
+  "trace_id": "a3f9b1c2-d4e5-4678-8901-abcdef012345",
+  "msg": "request complete",
+  "provider": "anthropic",
+  "model": "claude-3-5-sonnet-20241022",
+  "latency_ms": 412,
+  "status": 200,
+  "tokens_prompt": 312,
+  "tokens_completion": 87
+}
+```
+
+### Log level
+
+Set the log level with `LOG_LEVEL` (default: `info`). Use `LOG_FORMAT=text` for human-readable output during development.
+
+```bash
+export LOG_LEVEL=debug
+export LOG_FORMAT=text
+```
+
+## Health endpoint
+
+`GET /health` returns a deep health check with per-provider availability and latency:
+
+```json
+{
+  "status": "ok",
+  "providers": {
+    "openai": { "healthy": true, "latency_ms": 245 },
+    "anthropic": { "healthy": true, "latency_ms": 312 },
+    "groq": { "healthy": false, "error": "connection refused" }
+  }
+}
+```
+
+Returns `200 OK` if at least one provider is healthy, `503 Service Unavailable` if all providers are down.
+
+For monitoring in production, see [Monitoring](/operations/monitoring).
