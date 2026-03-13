@@ -1,10 +1,10 @@
 ---
 title: Routing policies
-description: All 6 LLM routing strategies in the Ferro Labs AI Gateway — single, fallback, weighted, conditional, least-latency, and cost-optimized routing for multi-provider AI traffic.
-keywords: [LLM routing strategies, AI fallback routing, weighted LLM routing, cost-optimized AI routing, AI load balancing, least-latency routing]
+description: All 8 LLM routing strategies in the Ferro Labs AI Gateway — single, fallback, weighted, conditional, least-latency, cost-optimized, content-based, and A/B testing for multi-provider AI traffic.
+keywords: [LLM routing strategies, AI fallback routing, weighted LLM routing, cost-optimized AI routing, AI load balancing, least-latency routing, content-based routing, AB testing LLM]
 ---
 
-The gateway implements six routing strategies. Set `strategy.mode` in `config.yaml` to choose one.
+The gateway implements eight routing strategies. Set `strategy.mode` in `config.yaml` to choose one.
 
 ## Single
 
@@ -117,6 +117,66 @@ targets:
 ```
 
 Cost estimation uses the model name in the request and the catalog's `input_cost_per_token` field. The target with the lowest estimated cost for the matched model wins.
+
+## Content-based routing
+
+Evaluates the text content of user role prompt messages against a set of rules and routes to the matching target. Rules are evaluated in declaration order — the first match wins. Unmatched requests fall back to the first configured target.
+
+Three condition types are available:
+
+| Type | Behaviour |
+|---|---|
+| `prompt_contains` | Case-insensitive substring match |
+| `prompt_not_contains` | Inverted case-insensitive substring match |
+| `prompt_regex` | Go regular expression match |
+
+Regex patterns are compiled at gateway startup. An invalid regex is a startup error (no silent misrouting).
+
+```yaml
+strategy:
+  mode: content-based
+  content_conditions:
+    - type: prompt_contains
+      value: "write code"
+      target_key: deepseek
+    - type: prompt_contains
+      value: "summarize"
+      target_key: gemini
+    - type: prompt_regex
+      value: "(?i)(sql|database|query)"
+      target_key: openai
+
+targets:
+  - virtual_key: openai
+  - virtual_key: deepseek
+  - virtual_key: gemini
+```
+
+The first target (`openai`) is also the fallback for requests that match no rule.
+
+## A/B testing
+
+Splits traffic across two or more named variants using weighted random sampling. Every routed request is tagged with the variant's `label` as the structured log field `ab_variant`, enabling per-variant quality and cost analysis in Grafana, Datadog, or any other log pipeline.
+
+```yaml
+strategy:
+  mode: ab-test
+  ab_variants:
+    - target_key: openai
+      weight: 80
+      label: control
+    - target_key: anthropic
+      weight: 20
+      label: challenger
+
+targets:
+  - virtual_key: openai
+  - virtual_key: anthropic
+```
+
+Weights are relative (they are summed and each variant receives `weight/total` of traffic). Zero-weight variants participate with weight 1 (equal distribution). Negative weights are rejected at startup.
+
+All traffic goes to a live provider — this is not a shadow/dark-launch mode.
 
 ## Combining strategies with circuit breakers
 

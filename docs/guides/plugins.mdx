@@ -1,7 +1,7 @@
 ---
 title: Plugins
-description: All 11 built-in plugins in the Ferro Labs AI Gateway — PII redaction, prompt safety shield, response caching, request logging, rate limiting, secret scanning, and schema validation.
-keywords: [AI gateway plugins, LLM guardrails, PII redaction AI, prompt safety AI, response caching LLM, secret scanning, prompt shield, AI safety]
+description: All 12 built-in plugins in the Ferro Labs AI Gateway — PII redaction, prompt safety shield, response caching, request logging, rate limiting, budget controls, secret scanning, and schema validation.
+keywords: [AI gateway plugins, LLM guardrails, PII redaction AI, prompt safety AI, response caching LLM, secret scanning, prompt shield, AI safety, budget plugin, per-key rate limit]
 ---
 
 Plugins extend the request pipeline at three lifecycle stages:
@@ -173,7 +173,7 @@ When `persist: true`, requests are queryable at `GET /admin/logs`. See [Request 
 
 ### rate-limit
 
-Token-bucket rate limiting applied per request. Rejects requests with `429 Too Many Requests` when the bucket is empty.
+Token-bucket rate limiting with global, per-API-key, and per-user granularity. Rejects requests with `429 Too Many Requests` when any applicable bucket is empty. Checks execute in order: global → per-key → per-user.
 
 ```yaml
 - name: rate-limit
@@ -181,11 +181,50 @@ Token-bucket rate limiting applied per request. Rejects requests with `429 Too M
   stage: before_request
   enabled: true
   config:
-    requests_per_second: 50
-    burst: 100
+    requests_per_second: 50   # global limit; token bucket
+    burst: 100                # maximum burst above the steady-state rate
+    key_rpm: 60               # per-API-key limit (requests per minute)
+    user_rpm: 30              # per-user limit (requests per minute)
 ```
 
+`key_rpm` uses the API key from `pctx.Metadata["api_key"]`. Requests without an API key skip the per-key check. `user_rpm` uses `Request.User`; requests without a user skip the per-user check. All three limits are independent — you can configure any combination.
+
 For IP-level rate limiting (HTTP middleware layer), see [Rate limiting](/guides/rate-limiting).
+
+## Budget plugins
+
+### budget
+
+Tracks cumulative USD spend per API key in an in-memory store and rejects requests once the configured limit is reached. Register the plugin at **both** lifecycle stages for full enforcement.
+
+```yaml
+plugins:
+  - name: budget-check
+    type: budget
+    stage: before_request
+    enabled: true
+    config:
+      store_id: default           # shared ID; instances with the same store_id share spend data
+      spend_limit_usd: 50.0       # max cumulative spend per API key (USD); 0 = unlimited
+      input_per_m_tokens: 3.0     # cost per 1M prompt tokens (USD)
+      output_per_m_tokens: 15.0   # cost per 1M completion tokens (USD)
+      max_keys: 10000             # max tracked keys; evicts lowest-spend key at cap
+
+  - name: budget-record
+    type: budget
+    stage: after_request
+    enabled: true
+    config:
+      store_id: default           # same store_id → shares accumulated spend
+      input_per_m_tokens: 3.0
+      output_per_m_tokens: 15.0
+```
+
+- The `before_request` instance checks the key's accumulated spend against `spend_limit_usd` and sets `reject: true` with reason `"budget exceeded"` if over limit.
+- The `after_request` instance records the cost of the completed request from `Response.Usage` token counts.
+- Two instances with the same `store_id` share the same spend store, so the check and record instances stay in sync.
+- `spend_limit_usd: 0` means unlimited — spend is tracked but requests are never rejected.
+- Spend data is in-memory and does not survive process restarts. For durable per-tenant billing enforcement, use FerroCloud's server-side budget controls.
 
 ## Plugin execution order
 

@@ -1,10 +1,10 @@
 ---
 title: Rate limiting
-description: Control AI request volume in the Ferro Labs AI Gateway with per-IP HTTP rate limiting and pipeline-level token and request count limits to protect your LLM budget.
-keywords: [AI rate limiting, LLM rate limit, per-IP rate limiting, AI gateway throttling, token rate limiting, request budget control]
+description: Control AI request volume in the Ferro Labs AI Gateway with per-IP HTTP rate limiting, global token-bucket limits, and per-API-key and per-user rate limits to protect your LLM budget.
+keywords: [AI rate limiting, LLM rate limit, per-IP rate limiting, per-key rate limiting, per-user rate limiting, AI gateway throttling, token rate limiting, request budget control]
 ---
 
-The gateway supports rate limiting in two layers.
+The gateway supports rate limiting in three layers.
 
 ## HTTP middleware (per IP)
 
@@ -19,7 +19,7 @@ Requests beyond the limit receive a `429` with an OpenAI style error response.
 
 ## Plugin rate limiting (per request)
 
-Add the `rate-limit` plugin to reject traffic before it hits a provider:
+Add the `rate-limit` plugin to apply global token-bucket limits before traffic hits a provider:
 
 ```yaml
 plugins:
@@ -31,3 +31,30 @@ plugins:
       requests_per_second: 50
       burst: 100
 ```
+
+## Per-key and per-user rate limiting
+
+Extend the `rate-limit` plugin with `key_rpm` and `user_rpm` to enforce per-identity limits in addition to (or instead of) the global bucket:
+
+```yaml
+plugins:
+  - name: rate-limit
+    type: ratelimit
+    stage: before_request
+    enabled: true
+    config:
+      requests_per_second: 100   # global limit (optional)
+      burst: 200
+      key_rpm: 60                # max 60 req/min per API key
+      user_rpm: 30               # max 30 req/min per user ID
+```
+
+Rate checks execute in order: **global → per-key → per-user**. The request is rejected at the first exceeded limiter with a distinct reason string so you can distinguish which limit was hit in your logs.
+
+| Config key | Granularity | Source field |
+|---|---|---|
+| `requests_per_second` + `burst` | Global (all traffic) | — |
+| `key_rpm` | Per API key | `pctx.Metadata["api_key"]` |
+| `user_rpm` | Per user ID | `Request.User` |
+
+Requests without an API key skip the per-key check. Requests without a `user` field skip the per-user check. All three limits are independent — configure any combination.

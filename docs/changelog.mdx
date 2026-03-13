@@ -1,10 +1,38 @@
 ---
 title: Changelog
-description: Release history for the Ferro Labs AI Gateway — new providers, routing strategies, plugins, MCP integration, performance improvements, and bug fixes across all versions.
+description: Release history for the Ferro Labs AI Gateway — content-based routing, A/B testing, per-key rate limiting, budget controls, MCP integration, new providers, plugins, and bug fixes across all versions.
 keywords: [AI gateway changelog, LLM proxy releases, AI gateway version history, gateway updates, MCP integration release]
 ---
 
 Full release notes are also on [GitHub Releases](https://github.com/ferro-labs/ai-gateway/releases).
+
+## v0.8.5 — 2026-03-12
+
+### Content-based routing strategy
+
+- New `strategy.mode: content-based` selects a provider target based on user-role prompt content
+- Three condition types: `prompt_contains` (case-insensitive), `prompt_not_contains`, and `prompt_regex` (Go regexp)
+- Rules evaluated in declaration order — first match wins; unmatched requests fall back to the first target
+- Regex patterns compiled at startup for zero-cost hot-path matching; invalid patterns surface as a startup error
+
+### A/B testing strategy
+
+- New `strategy.mode: ab-test` splits traffic across two or more named variants using weighted random sampling
+- Each variant carries a `label` (e.g. `"control"`, `"challenger"`) emitted as the `ab_variant` structured log field on every routed request
+- Zero-weight variants participate with weight 1 (equal distribution)
+
+### Per-key and per-user rate limiting
+
+- Extended `rate-limit` plugin with `key_rpm` (requests per minute per API key) and `user_rpm` (requests per minute per user ID)
+- Rate checks execute in order: global → per-key → per-user; request rejected at first exceeded limiter with a distinct reason string
+
+### Per-key budget controls plugin
+
+- New `budget` plugin tracks cumulative USD spend per API key in an in-memory store
+- Register at `before_request` to reject over-limit keys and `after_request` to record token costs
+- Two instances sharing the same `store_id` share accumulated spend data
+- `spend_limit_usd: 0` (or unset) means unlimited — spend is tracked without rejection
+- Spend data is in-memory; does not survive process restarts
 
 ## v0.8.0 — 2026-03-10
 
