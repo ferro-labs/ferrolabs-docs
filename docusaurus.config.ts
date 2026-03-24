@@ -154,46 +154,6 @@ const config: Config = {
     },
     footer: {
       style: 'dark',
-      links: [
-        {
-          title: 'Docs',
-          items: [
-            { label: 'Introduction', to: '/intro' },
-            { label: 'Quickstart', to: '/getting-started/quickstart' },
-            { label: 'Providers', to: '/guides/providers' },
-            { label: 'Routing Policies', to: '/guides/routing-policies' },
-            { label: 'Plugins', to: '/guides/plugins' },
-            { label: 'MCP Integration', to: '/guides/mcp' },
-          ],
-        },
-        {
-          title: 'Resources',
-          items: [
-            { label: 'Changelog', to: '/changelog' },
-            { label: 'API Reference', href: '/api' },
-            { label: 'FAQ', to: '/faq' },
-            { label: 'GitHub', href: 'https://github.com/ferro-labs/ai-gateway' },
-          ],
-        },
-        {
-          title: 'Community',
-          items: [
-            { label: '⭐  Star on GitHub', href: 'https://github.com/ferro-labs/ai-gateway' },
-            { label: '🐛  Report an Issue', href: 'https://github.com/ferro-labs/ai-gateway/issues' },
-            { label: '💬  Discussions', href: 'https://discord.gg/yCAeYvJeDV' },
-            { label: '🎮  Discord', href: 'https://discord.gg/yCAeYvJeDV' },
-            { label: '𝕏  Follow on X', href: 'https://x.com/ferroLabsAI' },
-          ],
-        },
-        {
-          title: 'Ferro Labs',
-          items: [
-            { label: '⚡  Enterprise', to: '/enterprise' },
-            { label: '📊  Status', href: 'https://status.ferrolabs.ai' },
-          ],
-        },
-      ],
-      copyright: `Copyright © ${new Date().getFullYear()} Ferro Labs. Apache 2.0 Open Source.`,
     },
     algolia: {
       appId: process.env.ALGOLIA_APP_ID ?? 'YOUR_APP_ID',
