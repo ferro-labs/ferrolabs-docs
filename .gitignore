@@ -10,6 +10,9 @@
 /.docusaurus/
 .cache-loader
 
+#superpowers
+/superpowers
+
 # Misc
 .DS_Store
 .env.local
