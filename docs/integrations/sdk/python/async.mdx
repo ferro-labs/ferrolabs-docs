@@ -1,0 +1,130 @@
+---
+title: "Async Usage"
+description: "Use AsyncFerroClient for non-blocking AI requests — async chat completions, streaming, embeddings, and context manager patterns."
+keywords: [async Python SDK, AsyncFerroClient, async AI gateway, asyncio LLM, async streaming Python, non-blocking AI requests]
+---
+
+# Async Usage
+
+The `AsyncFerroClient` provides the same API as `FerroClient` using `httpx.AsyncClient` under the hood. Use it in async frameworks like FastAPI, Starlette, or any asyncio application.
+
+## Setup
+
+```python
+from ferrolabsai import AsyncFerroClient
+
+client = AsyncFerroClient(
+    api_key="sk-ferro-...",
+    base_url="http://localhost:8080",
+)
+```
+
+## Basic request
+
+```python
+response = await client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Hello from async!"}],
+)
+print(response.content)
+```
+
+## Async streaming
+
+```python
+stream = await client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Count from 1 to 10"}],
+    stream=True,
+)
+
+async for chunk in stream:
+    print(chunk.choices[0].delta.content or "", end="", flush=True)
+```
+
+## Async context manager
+
+```python
+async with AsyncFerroClient() as client:
+    response = await client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hello"}],
+    )
+    print(response.content)
+# httpx.AsyncClient is closed automatically
+```
+
+## Async embeddings
+
+```python
+response = await client.embeddings.create(
+    model="text-embedding-3-small",
+    input=["async embedding request"],
+)
+print(len(response.data[0].embedding))
+```
+
+## FastAPI example
+
+```python
+from fastapi import FastAPI
+from ferrolabsai import AsyncFerroClient
+
+app = FastAPI()
+client = AsyncFerroClient()
+
+@app.post("/chat")
+async def chat(message: str):
+    response = await client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": message}],
+    )
+    return {
+        "reply": response.content,
+        "provider": response.provider,
+        "cost": response.usage.cost_usd,
+    }
+```
+
+## Parallel requests
+
+```python
+import asyncio
+from ferrolabsai import AsyncFerroClient
+
+async def main():
+    async with AsyncFerroClient() as client:
+        tasks = [
+            client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": f"What is {i} * {i}?"}],
+            )
+            for i in range(5)
+        ]
+        results = await asyncio.gather(*tasks)
+
+        for r in results:
+            print(f"{r.content} (via {r.provider})")
+
+asyncio.run(main())
+```
+
+## Current async coverage
+
+| Resource | Async support |
+|----------|--------------|
+| chat.completions | ✅ Full (including streaming) |
+| embeddings | ✅ Full |
+| images | ⏳ Coming soon (uses sync internally) |
+| models | ⏳ Coming soon (uses sync internally) |
+| admin | ⏳ Coming soon (uses sync internally) |
+
+:::info
+Full async coverage for images, models, and admin is planned for v0.2.0. In the meantime, these namespaces work but use synchronous HTTP under the hood.
+:::
+
+## Next steps
+
+- [API Reference](/integrations/sdk/python/reference) — Full method signatures and response types
+- [Error Handling](/integrations/sdk/python/error-handling) — Exception hierarchy and retry behavior
+- [Quickstart](/integrations/sdk/python/quickstart) — Synchronous usage and basic examples

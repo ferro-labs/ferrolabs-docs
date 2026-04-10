@@ -1,0 +1,135 @@
+---
+title: "OpenAI-Compatible SDKs"
+description: "Use any OpenAI-compatible SDK with the Ferro Labs AI Gateway — Python, Node.js, Go, curl, LangChain, and LlamaIndex all work by changing only the base URL."
+keywords: [OpenAI SDK proxy, LangChain AI gateway, Python AI gateway, Node.js LLM proxy, LlamaIndex gateway, SDK base URL, Go LLM client, curl LLM proxy]
+---
+
+You can keep your existing OpenAI SDK and only change the base URL and API key. The gateway is a drop-in replacement for the OpenAI API — all models, routing, and plugins are transparent to the client.
+
+## JavaScript / TypeScript
+
+```ts
+import OpenAI from "openai";
+
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+  baseURL: "http://localhost:8080",
+});
+
+const response = await client.chat.completions.create({
+  model: "gpt-4o-mini",
+  messages: [{ role: "user", content: "Hello from the gateway!" }],
+});
+console.log(response.choices[0].message.content);
+```
+
+## Python
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-your-key",
+    base_url="http://localhost:8080",
+)
+
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Hello from the gateway!"}],
+)
+print(response.choices[0].message.content)
+```
+
+## Go
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+
+    "github.com/sashabaranov/go-openai"
+)
+
+func main() {
+    cfg := openai.DefaultConfig("sk-your-key")
+    cfg.BaseURL = "http://localhost:8080/v1"
+    client := openai.NewClientWithConfig(cfg)
+
+    resp, err := client.CreateChatCompletion(context.Background(),
+        openai.ChatCompletionRequest{
+            Model: "gpt-4o-mini",
+            Messages: []openai.ChatCompletionMessage{
+                {Role: openai.ChatMessageRoleUser, Content: "Hello from the gateway!"},
+            },
+        },
+    )
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println(resp.Choices[0].Message.Content)
+}
+```
+
+## curl
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-your-key" \
+  -d '{
+    "model": "gpt-4o-mini",
+    "messages": [{"role": "user", "content": "Hello from the gateway!"}]
+  }'
+```
+
+## LangChain (Python)
+
+```python
+from langchain_openai import ChatOpenAI
+
+llm = ChatOpenAI(
+    model="gpt-4o-mini",
+    openai_api_key="sk-your-key",
+    openai_api_base="http://localhost:8080/v1",
+)
+
+response = llm.invoke("What is the Ferro Labs AI Gateway?")
+print(response.content)
+```
+
+## LlamaIndex (Python)
+
+```python
+from llama_index.llms.openai import OpenAI as LlamaOpenAI
+from llama_index.core import Settings
+
+Settings.llm = LlamaOpenAI(
+    model="gpt-4o-mini",
+    api_key="sk-your-key",
+    api_base="http://localhost:8080/v1",
+)
+```
+
+## Streaming
+
+All SDKs support streaming — set `stream=True` / `stream: true` as normal. Streaming works through all routing strategies and plugins. When MCP tool servers are configured, the gateway runs the full agentic loop and returns the final answer as a single-chunk SSE stream. See [MCP integration](/guides/mcp#streaming-requests) for details.
+
+```python
+stream = client.chat.completions.create(
+    model="gpt-4o-mini",
+    stream=True,
+    messages=[{"role": "user", "content": "Count from 1 to 5."}],
+)
+for chunk in stream:
+    print(chunk.choices[0].delta.content or "", end="", flush=True)
+```
+
+## Native SDKs
+
+For typed access to Ferro-specific features (trace IDs, cost tracking, admin API, prompt templates), use a native SDK:
+
+- **[Python SDK (ferrolabsai)](/integrations/sdk/python/quickstart)** — Sync and async clients with streaming, embeddings, images, models, and admin API
+- **[Go SDK](/integrations/sdk/go)** — Embed the gateway as a library, write custom plugins, extract trace IDs
+

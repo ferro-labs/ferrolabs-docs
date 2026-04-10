@@ -3,158 +3,83 @@ import type {SidebarsConfig} from '@docusaurus/plugin-content-docs';
 const sidebars: SidebarsConfig = {
   tutorialSidebar: [
     'intro',
+
+    // ── Get Started ──
+    {type: 'html', value: '<div class="sidebar-divider">Get Started</div>'},
+    'getting-started/overview',
+    'getting-started/quickstart',
+    'getting-started/architecture',
+    'getting-started/request-lifecycle',
+    'getting-started/concepts',
+    'getting-started/configuration',
+
+    // ── Integrations ──
+    {type: 'html', value: '<div class="sidebar-divider">Integrations</div>'},
+    'integrations/overview',
     {
       type: 'category',
-      label: 'Getting Started',
-      collapsed: false,
-      items: [
-        'getting-started/overview',
-        'getting-started/quickstart',
-        'getting-started/architecture',
-        'getting-started/request-lifecycle',
-        'getting-started/concepts',
-        'getting-started/configuration',
-      ],
-    },
-    {
-      type: 'category',
-      label: 'Guides',
-      collapsed: false,
-      items: [
-        {
-          type: 'category',
-          label: 'Providers',
-          collapsed: false,
-          items: [
-            'guides/providers',
-            'guides/providers-config',
-          ],
-        },
-        {
-          type: 'category',
-          label: 'Routing',
-          collapsed: false,
-          items: [
-            'guides/routing-policies',
-            'guides/use-cases',
-          ],
-        },
-        {
-          type: 'category',
-          label: 'Features',
-          collapsed: false,
-          items: [
-            'guides/plugins',
-            'guides/mcp',
-            'guides/prompt-templates',
-            'guides/rate-limiting',
-          ],
-        },
-        {
-          type: 'category',
-          label: 'Auth & Access',
-          collapsed: false,
-          items: [
-            'guides/auth',
-            'guides/admin-auth',
-            'guides/workspace-sign-in-domains',
-          ],
-        },
-        {
-          type: 'category',
-          label: 'Observability',
-          collapsed: false,
-          items: [
-            'guides/observability',
-          ],
-        },
-        {
-          type: 'category',
-          label: 'Migration',
-          collapsed: true,
-          items: [
-            'guides/migration-litellm',
-            'guides/migration-portkey',
-          ],
-        },
-        {
-          type: 'category',
-          label: 'Deployment',
-          collapsed: false,
-          items: [
-            'guides/kubernetes',
-            'guides/deployment/docker-compose',
-            'guides/deployment/fly-io',
-            'guides/deployment/railway',
-          ],
-        },
-        {
-          type: 'category',
-          label: 'Compare',
-          collapsed: true,
-          items: [
-            'guides/why-ferro',
-            'guides/oss-vs-ferrocloud',
-          ],
-        },
-        'guides/go-sdk',
-      ],
-    },
-    {
-      type: 'category',
-      label: 'Performance',
-      collapsed: false,
-      items: [
-        'benchmarks',
-      ],
-    },
-    {
-      type: 'category',
-      label: 'Ferro Labs Managed',
-      collapsed: false,
-      items: [
-        'ferrocloud/overview',
-        'ferrocloud/semantic-cache',
-      ],
-    },
-    {
-      type: 'link',
-      label: 'API Reference ↗',
-      href: '/api',
-    },
-    {
-      type: 'category',
-      label: 'SDKs',
+      label: 'Python SDK',
       collapsed: true,
-      items: ['sdks/overview'],
-    },
-    {
-      type: 'category',
-      label: 'Operations',
-      collapsed: false,
       items: [
-        'operations/monitoring',
-        'operations/request-logging',
-        'operations/server-settings',
+        'integrations/sdk/python/quickstart',
+        'integrations/sdk/python/reference',
+        'integrations/sdk/python/async',
+        'integrations/sdk/python/error-handling',
       ],
     },
-    {
-      type: 'category',
-      label: 'Security',
-      collapsed: false,
-      items: ['security/data-handling'],
-    },
-    {
-      type: 'category',
-      label: 'Support',
-      collapsed: false,
-      items: [
-        'guides/troubleshooting',
-        'faq/index',
-      ],
-    },
-    'enterprise',
+    'integrations/sdk/go',
+    'integrations/sdk/openai-compatible',
+
+    // ── Self Hosting ──
+    {type: 'html', value: '<div class="sidebar-divider">Self Hosting</div>'},
+    'integrations/deployment/railway',
+    'integrations/deployment/render',
+    'integrations/deployment/docker-compose',
+    'integrations/deployment/kubernetes',
+    'integrations/deployment/fly-io',
+
+    // ── Guides ──
+    {type: 'html', value: '<div class="sidebar-divider">Guides</div>'},
+    'guides/providers',
+    'guides/providers-config',
+    'guides/routing-policies',
+    'guides/use-cases',
+    'guides/plugins',
+    'guides/mcp',
+    'guides/prompt-templates',
+    'guides/rate-limiting',
+
+    // ── Auth & Security ──
+    {type: 'html', value: '<div class="sidebar-divider">Auth & Security</div>'},
+    'guides/auth',
+    'guides/admin-auth',
+    'guides/workspace-sign-in-domains',
+    'security/data-handling',
+
+    // ── Observability ──
+    {type: 'html', value: '<div class="sidebar-divider">Observability</div>'},
+    'guides/observability',
+    'operations/monitoring',
+    'operations/request-logging',
+    'operations/server-settings',
+
+    // ── Reference ──
+    {type: 'html', value: '<div class="sidebar-divider">Reference</div>'},
+    {type: 'link', label: 'API Reference ↗', href: '/api'},
+    'benchmarks',
     'changelog',
+
+    // ── More ──
+    {type: 'html', value: '<div class="sidebar-divider">More</div>'},
+    'ferrocloud/overview',
+    'ferrocloud/semantic-cache',
+    'enterprise',
+    'guides/why-ferro',
+    'guides/oss-vs-ferrocloud',
+    'guides/migration-litellm',
+    'guides/migration-portkey',
+    'guides/troubleshooting',
+    'faq/index',
   ],
 };
 

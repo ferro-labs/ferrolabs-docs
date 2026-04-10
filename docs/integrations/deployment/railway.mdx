@@ -1,0 +1,162 @@
+---
+title: "Deploy to Railway"
+description: "One-click Railway deployment for the Ferro Labs AI Gateway — choose SQLite for simplicity or PostgreSQL for production workloads."
+keywords: [Railway AI gateway, deploy LLM proxy Railway, one-click AI gateway, Railway LLM gateway, Railway PostgreSQL, Railway SQLite]
+---
+
+# Deploy to Railway
+
+Railway turns a Docker image into a running service with zero infrastructure config. Choose between SQLite (simplest) or PostgreSQL (production-ready) storage.
+
+## One-click deploy
+
+<div style={{display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '1.5rem'}}>
+  <a href="https://railway.com/deploy/ferro-labs-ai-sqlite-storage?referralCode=KblxKX" target="_blank" rel="noopener noreferrer">
+    <img src="https://railway.com/button.svg" alt="Deploy on Railway: SQLite" />
+  </a>
+  <a href="https://railway.com/deploy/ferro-labs-ai-postgresql-storage?referralCode=KblxKX" target="_blank" rel="noopener noreferrer">
+    <img src="https://railway.com/button.svg" alt="Deploy on Railway: PostgreSQL" />
+  </a>
+</div>
+
+| Template | Storage | Best for |
+|----------|---------|----------|
+| **SQLite** | File-based on Railway Volume | Development, single-instance, low traffic |
+| **PostgreSQL** | Managed Railway Postgres | Production, multiple instances, durability |
+
+Both templates prompt you for provider API keys and configure storage automatically.
+
+## SQLite template
+
+The SQLite template attaches a Railway Volume at `/data` for persistent file storage. Environment variables:
+
+```bash
+MASTER_KEY=fgw_your-master-key          # auto-generated
+OPENAI_API_KEY=sk-your-key              # you provide
+PORT=8080
+
+# SQLite storage — persisted to Railway Volume
+API_KEY_STORE_BACKEND=sqlite
+API_KEY_STORE_DSN=/data/keys.db
+CONFIG_STORE_BACKEND=sqlite
+CONFIG_STORE_DSN=/data/config.db
+REQUEST_LOG_STORE_BACKEND=sqlite
+REQUEST_LOG_STORE_DSN=/data/logs.db
+RAILWAY_RUN_UID=0
+```
+
+:::tip When to use SQLite
+SQLite is the fastest path to a running gateway. It works well for development, demos, and low-traffic production workloads. For high availability or multi-replica deployments, use PostgreSQL.
+:::
+
+## PostgreSQL template
+
+The PostgreSQL template provisions a managed Postgres instance and wires all three store backends automatically:
+
+```bash
+MASTER_KEY=fgw_your-master-key
+OPENAI_API_KEY=sk-your-key
+PORT=8080
+
+# PostgreSQL storage — auto-wired to Railway Postgres
+API_KEY_STORE_BACKEND=postgres
+API_KEY_STORE_DSN=${{Postgres.DATABASE_URL}}
+CONFIG_STORE_BACKEND=postgres
+CONFIG_STORE_DSN=${{Postgres.DATABASE_URL}}
+REQUEST_LOG_STORE_BACKEND=postgres
+REQUEST_LOG_STORE_DSN=${{Postgres.DATABASE_URL}}
+```
+
+## Manual setup
+
+### Step 1: Install the Railway CLI
+
+```bash
+npm install -g @railway/cli
+railway login
+```
+
+### Step 2: Create the project
+
+```bash
+railway init
+```
+
+### Step 3: Deploy the gateway image
+
+```bash
+railway up --image ghcr.io/ferro-labs/ai-gateway:latest
+```
+
+Or create a minimal `Dockerfile`:
+
+```dockerfile title="Dockerfile"
+FROM ghcr.io/ferro-labs/ai-gateway:latest
+```
+
+### Step 4: Set environment variables
+
+```bash
+railway variables set MASTER_KEY=fgw_your-master-key
+railway variables set OPENAI_API_KEY=sk-your-key
+railway variables set PORT=8080
+railway variables set API_KEY_STORE_BACKEND=sqlite
+railway variables set API_KEY_STORE_DSN=/data/keys.db
+railway variables set CONFIG_STORE_BACKEND=sqlite
+railway variables set CONFIG_STORE_DSN=/data/config.db
+railway variables set REQUEST_LOG_STORE_BACKEND=sqlite
+railway variables set REQUEST_LOG_STORE_DSN=/data/logs.db
+```
+
+:::warning
+Never hardcode API keys in your Dockerfile or config files. Always use Railway environment variables — they are encrypted at rest.
+:::
+
+### Step 5: Attach a volume (SQLite only)
+
+In the Railway dashboard, go to your service → **Settings** → **Volumes** and mount a volume at `/data`.
+
+### Step 6: Deploy
+
+```bash
+railway up
+```
+
+## Adding more providers
+
+Add provider keys as environment variables:
+
+```bash
+railway variables set ANTHROPIC_API_KEY=sk-ant-...
+railway variables set GEMINI_API_KEY=...
+railway variables set MISTRAL_API_KEY=...
+```
+
+The gateway picks up new keys on restart.
+
+## Verify the deployment
+
+```bash
+# Health check
+curl https://your-project.up.railway.app/health
+
+# Test request
+curl https://your-project.up.railway.app/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $MASTER_KEY" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [{"role": "user", "content": "Hello from Railway!"}]
+  }'
+```
+
+:::tip
+Your Railway URL is shown in the dashboard under your service's **Settings** tab, or in the output of `railway up`.
+:::
+
+## Related pages
+
+- [Deploy to Render](/integrations/deployment/render) — One-click deploy with managed PostgreSQL on Render
+- [Docker Compose](/integrations/deployment/docker-compose) — Full local stack with PostgreSQL
+- [Deploy to Fly.io](/integrations/deployment/fly-io) — Lightweight cloud deployment
+- [Quickstart](/getting-started/quickstart) — Run locally in 30 seconds

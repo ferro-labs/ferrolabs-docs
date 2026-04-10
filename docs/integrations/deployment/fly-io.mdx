@@ -1,0 +1,246 @@
+---
+title: Deploy to Fly.io
+description: "Deploy the Ferro Labs AI Gateway to Fly.io in under 5 minutes. Step-by-step fly.toml, secrets, Postgres, and health check configuration."
+keywords:
+  - Fly.io AI gateway
+  - deploy LLM proxy Fly
+  - self-hosted AI gateway cloud
+  - Fly.io LLM gateway
+---
+
+# Deploy to Fly.io
+
+Fly.io runs Docker containers on bare-metal servers worldwide with sub-second boot times. It is one of the fastest ways to get a self-hosted AI Gateway into production without managing infrastructure.
+
+This guide walks through launching the Ferro Labs AI Gateway on Fly.io with secrets management, optional Fly Postgres for request logging, and health checks -- all in under 5 minutes.
+
+## Prerequisites
+
+- [Fly CLI](https://fly.io/docs/hands-on/install-flyctl/) (`flyctl`) installed
+- A Fly.io account (`fly auth signup` or `fly auth login`)
+- API keys for at least one upstream provider (OpenAI, Anthropic, etc.)
+
+## Step 1: Initialize the app
+
+Create a new directory and set up the Fly app:
+
+```bash
+mkdir ferro-gateway-fly && cd ferro-gateway-fly
+fly launch --no-deploy
+```
+
+When prompted, choose a region close to your users (e.g., `iad` for US East, `lhr` for Europe).
+
+Replace the generated `fly.toml` with the following:
+
+```toml title="fly.toml"
+app = "ferro-ai-gateway"
+primary_region = "iad"
+
+[build]
+  image = "ghcr.io/ferro-labs/ai-gateway:latest"
+
+[env]
+  CONFIG_PATH = "/etc/ferro/config.yaml"
+  LOG_LEVEL = "info"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.checks]
+    [http_service.checks.health]
+      interval = "10s"
+      timeout = "5s"
+      grace_period = "5s"
+      method = "GET"
+      path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+```
+
+:::tip
+Change the `app` value to something unique. Fly app names are global, so `ferro-ai-gateway` may already be taken. Try something like `ferro-gateway-yourname`.
+:::
+
+Next, create a minimal gateway configuration file:
+
+```yaml title="config.yaml"
+listeners:
+  - address: 0.0.0.0
+    port: 8080
+
+providers:
+  - name: openai
+    type: openai
+    api_key: ${OPENAI_API_KEY}
+    models:
+      - gpt-4o
+      - gpt-4o-mini
+
+  - name: anthropic
+    type: anthropic
+    api_key: ${ANTHROPIC_API_KEY}
+    models:
+      - claude-sonnet-4-20250514
+      - claude-haiku-4-20250414
+
+plugins:
+  - name: rate-limit
+    type: rate-limit
+    requests_per_minute: 60
+    burst: 10
+
+routes:
+  - path: /v1/chat/completions
+    provider: openai
+    model: gpt-4o
+    plugins:
+      - rate-limit
+
+  - path: /v1/messages
+    provider: anthropic
+    model: claude-sonnet-4-20250514
+    plugins:
+      - rate-limit
+```
+
+Create a `Dockerfile` that copies your config into the image:
+
+```dockerfile title="Dockerfile"
+FROM ghcr.io/ferro-labs/ai-gateway:latest
+COPY config.yaml /etc/ferro/config.yaml
+```
+
+Now update `fly.toml` to build from the Dockerfile instead of pulling the image directly:
+
+```toml title="fly.toml (updated build section)"
+[build]
+  dockerfile = "Dockerfile"
+```
+
+## Step 2: Set secrets
+
+Store your provider API keys as Fly secrets. These are encrypted at rest and injected as environment variables at runtime:
+
+```bash
+fly secrets set \
+  OPENAI_API_KEY=sk-proj-your-openai-key-here \
+  ANTHROPIC_API_KEY=sk-ant-your-anthropic-key-here
+```
+
+:::warning
+Never put API keys in `fly.toml` or your `config.yaml` directly. Always use `fly secrets set` so they remain encrypted and out of version control.
+:::
+
+## Step 3: Attach Fly Postgres (optional)
+
+If you want to enable the request-logger plugin, create and attach a Fly Postgres cluster:
+
+```bash
+fly postgres create --name ferro-gateway-db --region iad --vm-size shared-cpu-1x --volume-size 1
+```
+
+```bash
+fly postgres attach ferro-gateway-db
+```
+
+This sets the `DATABASE_URL` secret automatically. Update your `config.yaml` to use it:
+
+```yaml title="config.yaml (add to plugins section)"
+plugins:
+  - name: request-logger
+    type: postgres-logger
+    connection_string: ${DATABASE_URL}
+    log_request_body: true
+    log_response_body: false
+
+  - name: rate-limit
+    type: rate-limit
+    requests_per_minute: 60
+    burst: 10
+```
+
+Then add `request-logger` to your routes' `plugins` list.
+
+## Step 4: Deploy
+
+```bash
+fly deploy
+```
+
+Fly will build the Docker image, push it to its internal registry, and start the machine. You will see the health check status in the output.
+
+:::tip
+To watch the build and deployment logs in real time:
+
+```bash
+fly logs
+```
+:::
+
+## Step 5: Verify
+
+Check the app status:
+
+```bash
+fly status
+```
+
+You should see one machine running with a passing health check. Now test the endpoint:
+
+```bash
+curl https://ferro-ai-gateway.fly.dev/health
+```
+
+Expected response:
+
+```json
+{"status":"healthy"}
+```
+
+Send a test request:
+
+```bash
+curl https://ferro-ai-gateway.fly.dev/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [{"role": "user", "content": "Hello from Fly.io!"}]
+  }'
+```
+
+## Estimated cost
+
+| Resource          | Spec                | Monthly cost |
+|-------------------|---------------------|--------------|
+| Gateway machine   | shared-cpu-1x, 256MB| ~$3          |
+| Fly Postgres      | shared-cpu-1x, 1GB  | ~$7          |
+| **Total**         |                     | **~$5-10**   |
+
+Costs vary based on usage and region. See [Fly.io pricing](https://fly.io/docs/about/pricing/) for current rates.
+
+## Scaling
+
+To add more machines in additional regions for lower latency:
+
+```bash
+fly scale count 2 --region iad,lhr
+```
+
+To increase memory for heavier workloads:
+
+```bash
+fly scale vm shared-cpu-2x --memory 512
+```
+
+## Related pages
+
+- [Deploy with Docker Compose](/guides/deployment/docker-compose) — Full local stack with Postgres, Redis, and Prometheus.
+- [Deploy to Kubernetes](/guides/kubernetes) — Helm chart and manifests for Kubernetes clusters.
+- [Quickstart](/getting-started/quickstart) — Get running with a single binary in 60 seconds.

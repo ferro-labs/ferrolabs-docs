@@ -1,0 +1,320 @@
+---
+title: "Go Integration"
+description: "Go-native guide for the Ferro Labs AI Gateway — use go-openai client, embed as a library, write custom plugins, extract trace IDs, and benchmark with pprof."
+keywords: [Go AI gateway, Go LLM proxy, go-openai gateway, Go custom plugin AI, Go LLM integration]
+---
+
+# Go Integration
+
+The Ferro Labs AI Gateway is written in Go. This guide covers everything a Go developer needs — from pointing a standard OpenAI client at the gateway, to embedding the engine as a library, writing custom plugins, propagating trace context, and profiling with pprof.
+
+## 1. Using the go-openai Client
+
+The [sashabaranov/go-openai](https://github.com/sashabaranov/go-openai) client works out of the box. Point it at your gateway URL and set your API key.
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	openai "github.com/sashabaranov/go-openai"
+)
+
+func main() {
+	cfg := openai.DefaultConfig("your-ferro-api-key")
+	cfg.BaseURL = "http://localhost:8080/v1" // Ferro Labs AI Gateway
+
+	client := openai.NewClientWithConfig(cfg)
+
+	resp, err := client.CreateChatCompletion(
+		context.Background(),
+		openai.ChatCompletionRequest{
+			Model: openai.GPT4,
+			Messages: []openai.ChatCompletionMessage{
+				{
+					Role:    openai.ChatMessageRoleUser,
+					Content: "Explain the CAP theorem in two sentences.",
+				},
+			},
+		},
+	)
+	if err != nil {
+		log.Fatalf("completion error: %v", err)
+	}
+
+	fmt.Println(resp.Choices[0].Message.Content)
+}
+```
+
+## 2. Embedding Ferro as a Library
+
+You can embed the gateway directly into your Go application instead of running it as a standalone process. This is useful for custom orchestration or testing.
+
+```go
+package main
+
+import (
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
+
+	gateway "github.com/ferro-labs/ai-gateway"
+)
+
+func main() {
+	// Load configuration from a YAML file.
+	cfg, err := gateway.LoadConfig("ferro.yaml")
+	if err != nil {
+		log.Fatalf("failed to load config: %v", err)
+	}
+
+	// Create a new gateway instance.
+	gw, err := gateway.New(cfg)
+	if err != nil {
+		log.Fatalf("failed to create gateway: %v", err)
+	}
+
+	// Start serving in a goroutine.
+	go func() {
+		if err := gw.Serve(":8080"); err != nil {
+			log.Fatalf("gateway exited: %v", err)
+		}
+	}()
+
+	log.Println("AI Gateway listening on :8080")
+
+	// Wait for interrupt signal to gracefully shut down.
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	log.Println("shutting down...")
+	gw.Shutdown()
+}
+```
+
+## 3. Writing a Custom Plugin
+
+Plugins implement the `Plugin` interface. Each plugin can hook into the request lifecycle at two points: before the request is forwarded to the provider and after the response is received.
+
+```go
+package myplugin
+
+import (
+	"context"
+	"log"
+	"time"
+
+	gateway "github.com/ferro-labs/ai-gateway"
+)
+
+// TimingPlugin logs the round-trip duration for every request.
+type TimingPlugin struct{}
+
+// Name returns the plugin identifier used in configuration.
+func (p *TimingPlugin) Name() string {
+	return "timing"
+}
+
+// BeforeRequest is called before the request is forwarded to the provider.
+// Return a non-nil error to abort the request.
+func (p *TimingPlugin) BeforeRequest(ctx context.Context, req *gateway.Request) error {
+	// Store the start time in the request context.
+	req.SetMeta("timing_start", time.Now())
+	log.Printf("[timing] request to model=%s started", req.Model)
+	return nil
+}
+
+// AfterResponse is called after the provider responds.
+func (p *TimingPlugin) AfterResponse(ctx context.Context, req *gateway.Request, resp *gateway.Response) error {
+	start, ok := req.GetMeta("timing_start").(time.Time)
+	if !ok {
+		return nil
+	}
+	elapsed := time.Since(start)
+	log.Printf("[timing] model=%s completed in %s (tokens: %d)",
+		req.Model, elapsed, resp.Usage.TotalTokens)
+	return nil
+}
+```
+
+Register the plugin when creating the gateway:
+
+```go
+gw, err := gateway.New(cfg, gateway.WithPlugins(
+	&myplugin.TimingPlugin{},
+))
+```
+
+## 4. Context Propagation and Trace ID Extraction
+
+The AI Gateway injects a `X-Ferro-Trace-Id` header into every response. Use this to correlate gateway logs with your application traces.
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net/http"
+
+	openai "github.com/sashabaranov/go-openai"
+)
+
+func main() {
+	cfg := openai.DefaultConfig("your-ferro-api-key")
+	cfg.BaseURL = "http://localhost:8080/v1"
+
+	// Use a custom HTTP client to capture response headers.
+	var traceID string
+	cfg.HTTPClient = &http.Client{
+		Transport: &traceTransport{
+			base: http.DefaultTransport,
+			onResponse: func(resp *http.Response) {
+				traceID = resp.Header.Get("X-Ferro-Trace-Id")
+			},
+		},
+	}
+
+	client := openai.NewClientWithConfig(cfg)
+
+	resp, err := client.CreateChatCompletion(
+		context.Background(),
+		openai.ChatCompletionRequest{
+			Model: openai.GPT4,
+			Messages: []openai.ChatCompletionMessage{
+				{Role: openai.ChatMessageRoleUser, Content: "Hello"},
+			},
+		},
+	)
+	if err != nil {
+		log.Fatalf("completion error: %v", err)
+	}
+
+	fmt.Printf("Response: %s\n", resp.Choices[0].Message.Content)
+	fmt.Printf("Trace ID: %s\n", traceID)
+}
+
+// traceTransport wraps an http.RoundTripper to expose response headers.
+type traceTransport struct {
+	base       http.RoundTripper
+	onResponse func(*http.Response)
+}
+
+func (t *traceTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil {
+		return resp, err
+	}
+	if t.onResponse != nil {
+		t.onResponse(resp)
+	}
+	return resp, nil
+}
+```
+
+## 5. Benchmarking with pprof
+
+Enable the `pprof` endpoint to profile the gateway under load.
+
+### Enable the pprof endpoint
+
+Add the following to your `ferro.yaml`:
+
+```yaml
+debug:
+  pprof: true
+  pprof_addr: "localhost:6060"
+```
+
+Or enable it programmatically when embedding:
+
+```go
+import "net/http"
+import _ "net/http/pprof"
+
+go func() {
+	log.Println("pprof listening on :6060")
+	log.Println(http.ListenAndServe("localhost:6060", nil))
+}()
+```
+
+### Run a load test and capture a profile
+
+Use `hey` (or any HTTP load testing tool) alongside `go tool pprof`:
+
+```bash
+# Generate load — 1000 requests, 50 concurrent
+hey -n 1000 -c 50 \
+  -H "Authorization: Bearer your-ferro-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-4","messages":[{"role":"user","content":"ping"}]}' \
+  http://localhost:8080/v1/chat/completions
+
+# Capture a 30-second CPU profile
+go tool pprof http://localhost:6060/debug/pprof/profile?seconds=30
+
+# Capture a heap snapshot
+go tool pprof http://localhost:6060/debug/pprof/heap
+```
+
+### Analyze the profile
+
+Inside the `pprof` interactive shell:
+
+```
+(pprof) top 20
+(pprof) web          # opens a call-graph SVG in your browser
+(pprof) list HandleRequest   # source-level annotation
+```
+
+### Write a Go benchmark test
+
+```go
+package gateway_test
+
+import (
+	"context"
+	"testing"
+
+	openai "github.com/sashabaranov/go-openai"
+)
+
+func BenchmarkChatCompletion(b *testing.B) {
+	cfg := openai.DefaultConfig("your-ferro-api-key")
+	cfg.BaseURL = "http://localhost:8080/v1"
+	client := openai.NewClientWithConfig(cfg)
+
+	req := openai.ChatCompletionRequest{
+		Model: openai.GPT4,
+		Messages: []openai.ChatCompletionMessage{
+			{Role: openai.ChatMessageRoleUser, Content: "ping"},
+		},
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := client.CreateChatCompletion(context.Background(), req)
+		if err != nil {
+			b.Fatalf("request failed: %v", err)
+		}
+	}
+}
+```
+
+Run with:
+
+```bash
+go test -bench=BenchmarkChatCompletion -benchtime=30s -count=3 ./...
+```
+
+## Related Pages
+
+- [Benchmarks](/benchmarks)
+- [Quickstart](/getting-started/quickstart)
+- [Configuration](/getting-started/configuration)

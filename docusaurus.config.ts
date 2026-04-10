@@ -129,6 +129,11 @@ const config: Config = {
           label: 'Docs',
         },
         {
+          to: '/integrations/overview',
+          label: 'Integrations',
+          position: 'left',
+        },
+        {
           to: '/enterprise',
           label: 'Enterprise',
           position: 'left',

@@ -1,0 +1,245 @@
+---
+title: Kubernetes deployment
+description: Deploy the Ferro Labs AI Gateway to Kubernetes — Deployment, Service, ConfigMap, Secret, HPA, and readiness/liveness probe manifests with a production-ready values example.
+keywords: [Kubernetes AI gateway, deploy LLM gateway Kubernetes, Kubernetes LLM proxy, AI gateway K8s, Helm values AI gateway]
+---
+
+The gateway ships as a single stateless binary with no required external dependencies. This makes it straightforward to deploy on Kubernetes.
+
+## Minimal manifests
+
+The four objects below constitute a production-ready baseline. Copy them to your cluster and update the values marked with `# ←`.
+
+### Secret
+
+Store provider credentials in a Kubernetes Secret so they are never embedded in your ConfigMap or image:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ferrogw-secrets
+  namespace: default
+type: Opaque
+stringData:
+  OPENAI_API_KEY: "sk-..."        # ← your key
+  ANTHROPIC_API_KEY: "sk-ant-..." # ← your key
+  ADMIN_API_KEY: "admin-..."      # ← random secret for /admin endpoints
+```
+
+### ConfigMap
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ferrogw-config
+  namespace: default
+data:
+  config.yaml: |
+    server:
+      port: 8080
+      admin_api_key: "${ADMIN_API_KEY}"
+
+    providers:
+      - key: openai
+        provider: openai
+        api_key: "${OPENAI_API_KEY}"
+
+      - key: anthropic
+        provider: anthropic
+        api_key: "${ANTHROPIC_API_KEY}"
+
+    strategy:
+      mode: fallback
+
+    targets:
+      - virtual_key: openai
+        retry:
+          attempts: 3
+          retry_on_status: [429, 502, 503, 504]
+      - virtual_key: anthropic
+
+    plugins:
+      - name: rate-limit
+        type: ratelimit
+        stage: before_request
+        enabled: true
+        config:
+          requests_per_second: 100
+          burst: 200
+```
+
+### Deployment
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ferrogw
+  namespace: default
+  labels:
+    app: ferrogw
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ferrogw
+  template:
+    metadata:
+      labels:
+        app: ferrogw
+    spec:
+      containers:
+        - name: ferrogw
+          image: ghcr.io/ferro-labs/ai-gateway:v1.0.0-rc.1  # ← pin to a release tag
+          ports:
+            - containerPort: 8080
+          args:
+            - "-config=/etc/ferrogw/config.yaml"
+          envFrom:
+            - secretRef:
+                name: ferrogw-secrets
+          volumeMounts:
+            - name: config
+              mountPath: /etc/ferrogw
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+      volumes:
+        - name: config
+          configMap:
+            name: ferrogw-config
+```
+
+### Service
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: ferrogw
+  namespace: default
+spec:
+  selector:
+    app: ferrogw
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
+```
+
+## Horizontal Pod Autoscaler
+
+Scale from 2 to 20 replicas based on CPU utilisation:
+
+```yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ferrogw-hpa
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ferrogw
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+```
+
+## Ingress with TLS
+
+If you use cert-manager, add the following Ingress to terminate TLS at the cluster edge:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ferrogw-ingress
+  namespace: default
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod  # ← your issuer name
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - gateway.example.com  # ← your domain
+      secretName: ferrogw-tls
+  rules:
+    - host: gateway.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ferrogw
+                port:
+                  number: 80
+```
+
+## PodDisruptionBudget
+
+Prevent all pods from being evicted at once during cluster maintenance:
+
+```yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ferrogw-pdb
+  namespace: default
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ferrogw
+```
+
+## Applying the manifests
+
+```bash
+kubectl apply -f secret.yaml
+kubectl apply -f configmap.yaml
+kubectl apply -f deployment.yaml
+kubectl apply -f service.yaml
+kubectl apply -f hpa.yaml          # optional
+kubectl apply -f ingress.yaml      # optional
+kubectl apply -f pdb.yaml          # optional
+
+# Verify pods are ready
+kubectl rollout status deployment/ferrogw
+
+# Quick smoke test
+kubectl port-forward svc/ferrogw 8080:80 &
+curl http://localhost:8080/health
+```
+
+## Helm chart
+
+A maintained Helm chart is planned in the `ferro-labs/helm-charts` repository. Watch the [ROADMAP](https://github.com/ferro-labs/ai-gateway/blob/main/ROADMAP.md) for its release.

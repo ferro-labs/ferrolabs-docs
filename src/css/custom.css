@@ -151,204 +151,52 @@
   letter-spacing: -0.015em;
 }
 
-.menu__list > .menu__list-item > .menu__list-item-collapsible > .menu__link {
-  font-size: 0.95rem;
-  font-weight: 650;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
+/* ── Sidebar section dividers (Langfuse-style) ─────────────────── */
+.sidebar-divider {
+  font-size: 0.73rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #000000;
+  padding: 0.65rem 0.75rem 0.25rem;
+  margin-top: 0.75rem;
+  user-select: none;
+  pointer-events: none;
 }
 
-/*
- * Sidebar category icons
- *
- * Default: no icon (content: none hides pseudo-element).
- * Each nth-child rule opts in by setting content: '' + the icon URL.
- *
- * Top-level layout:
- * 1: intro (doc) → house          6: API Reference (link) → code   11: enterprise (doc) → building
- * 2: Getting Started → rocket     7: SDKs → cube                   12: changelog (doc) → clock-rotate-left
- * 3: Guides → book                8: Operations → server
- * 4: Performance → bolt           9: Security → shield
- * 5: Ferro Labs Managed → cloud   10: Support → circle-question
- */
-
-.menu__list > .menu__list-item > .menu__list-item-collapsible > .menu__link::before {
-  content: none;                /* hidden by default — no black squares */
+/* Remove top margin on the very first divider */
+.menu__list > .menu__list-item:nth-child(2) .sidebar-divider {
+  margin-top: 0.35rem;
 }
 
-/* Shared icon style for all items that opt in */
-.menu__list > .menu__list-item > .menu__list-item-collapsible > .menu__link[class]::before {
-  display: inline-block;
-  width: 0.9rem;
-  height: 0.9rem;
-  flex: 0 0 0.9rem;
-  background-color: currentColor;
-  opacity: 0.8;
-  -webkit-mask-image: var(--sidebar-icon-url);
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-position: center;
-  -webkit-mask-size: contain;
-  mask-image: var(--sidebar-icon-url);
-  mask-repeat: no-repeat;
-  mask-position: center;
-  mask-size: contain;
+[data-theme='dark'] .sidebar-divider {
+  color: #ffffff;
 }
 
-/* ── Top-level icons ───────────────────────────────────────────── */
-
-/* 2: Getting Started → rocket */
-.theme-doc-sidebar-menu > .menu__list > .menu__list-item:nth-child(2) > .menu__list-item-collapsible > .menu__link::before {
-  content: '';
-  --sidebar-icon-url: url('https://d3gk2c5xim1je2.cloudfront.net/v7.1.0/regular/rocket.svg');
+/* ── Chevron on sidebar items that have sub-pages ──────────────── */
+.menu__link--sublist-caret::after {
+  content: '›' !important;
+  display: inline-block !important;
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin-left: auto;
+  opacity: 0.45;
+  transition: transform 0.15s ease;
+  background: none !important;
+  width: auto !important;
+  height: auto !important;
+  min-width: 0 !important;
+  transform: none;
 }
 
-/* 3: Guides → book */
-.theme-doc-sidebar-menu > .menu__list > .menu__list-item:nth-child(3) > .menu__list-item-collapsible > .menu__link::before {
-  content: '';
-  --sidebar-icon-url: url('https://d3gk2c5xim1je2.cloudfront.net/v7.1.0/regular/book.svg');
+.menu__list-item--collapsed .menu__link--sublist-caret::after {
+  transform: none;
+  opacity: 0.4;
 }
 
-/* 4: Performance → bolt */
-.theme-doc-sidebar-menu > .menu__list > .menu__list-item:nth-child(4) > .menu__list-item-collapsible > .menu__link::before {
-  content: '';
-  --sidebar-icon-url: url('https://d3gk2c5xim1je2.cloudfront.net/v7.1.0/regular/bolt.svg');
-}
-
-/* 5: Ferro Labs Managed → cloud */
-.theme-doc-sidebar-menu > .menu__list > .menu__list-item:nth-child(5) > .menu__list-item-collapsible > .menu__link::before {
-  content: '';
-  --sidebar-icon-url: url('https://d3gk2c5xim1je2.cloudfront.net/v7.1.0/regular/cloud.svg');
-}
-
-/* 7: SDKs → cube */
-.theme-doc-sidebar-menu > .menu__list > .menu__list-item:nth-child(7) > .menu__list-item-collapsible > .menu__link::before {
-  content: '';
-  --sidebar-icon-url: url('https://d3gk2c5xim1je2.cloudfront.net/v7.1.0/regular/cube.svg');
-}
-
-/* 8: Operations → server */
-.theme-doc-sidebar-menu > .menu__list > .menu__list-item:nth-child(8) > .menu__list-item-collapsible > .menu__link::before {
-  content: '';
-  --sidebar-icon-url: url('https://d3gk2c5xim1je2.cloudfront.net/v7.1.0/regular/server.svg');
-}
-
-/* 9: Security → shield */
-.theme-doc-sidebar-menu > .menu__list > .menu__list-item:nth-child(9) > .menu__list-item-collapsible > .menu__link::before {
-  content: '';
-  --sidebar-icon-url: url('https://d3gk2c5xim1je2.cloudfront.net/v7.1.0/regular/shield.svg');
-}
-
-/* 10: Support → circle-question */
-.theme-doc-sidebar-menu > .menu__list > .menu__list-item:nth-child(10) > .menu__list-item-collapsible > .menu__link::before {
-  content: '';
-  --sidebar-icon-url: url('https://d3gk2c5xim1je2.cloudfront.net/v7.1.0/regular/circle-question.svg');
-}
-
-/* ── Top-level standalone doc / link icons ────────────────────── */
-
-/* Shared style for standalone items (docs + links without collapsible wrappers) */
-.theme-doc-sidebar-menu > .menu__list > .menu__list-item > a.menu__link {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  font-size: 0.95rem;
-  font-weight: 650;
-}
-
-.theme-doc-sidebar-menu > .menu__list > .menu__list-item > a.menu__link::before {
-  content: none;
-}
-
-.theme-doc-sidebar-menu > .menu__list > .menu__list-item > a.menu__link[class]::before {
-  display: inline-block;
-  width: 0.9rem;
-  height: 0.9rem;
-  flex: 0 0 0.9rem;
-  background-color: currentColor;
-  opacity: 0.8;
-  -webkit-mask-image: var(--sidebar-icon-url);
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-position: center;
-  -webkit-mask-size: contain;
-  mask-image: var(--sidebar-icon-url);
-  mask-repeat: no-repeat;
-  mask-position: center;
-  mask-size: contain;
-}
-
-/* 1: intro → house */
-.theme-doc-sidebar-menu > .menu__list > .menu__list-item:nth-child(1) > a.menu__link::before {
-  content: '';
-  --sidebar-icon-url: url('https://d3gk2c5xim1je2.cloudfront.net/v7.1.0/regular/house.svg');
-}
-
-/* 6: API Reference → code */
-.theme-doc-sidebar-menu > .menu__list > .menu__list-item:nth-child(6) > a.menu__link::before {
-  content: '';
-  --sidebar-icon-url: url('https://d3gk2c5xim1je2.cloudfront.net/v7.1.0/regular/code.svg');
-}
-
-/* 11: Enterprise → building */
-.theme-doc-sidebar-menu > .menu__list > .menu__list-item:nth-child(11) > a.menu__link::before {
-  content: '';
-  --sidebar-icon-url: url('https://d3gk2c5xim1je2.cloudfront.net/v7.1.0/regular/building.svg');
-}
-
-/* 12: Changelog → clock-rotate-left */
-.theme-doc-sidebar-menu > .menu__list > .menu__list-item:nth-child(12) > a.menu__link::before {
-  content: '';
-  --sidebar-icon-url: url('https://d3gk2c5xim1je2.cloudfront.net/v7.1.0/regular/clock-rotate-left.svg');
-}
-
-/* ── Guides subcategory icons (nested inside top-level item 3) ── */
-
-/* Providers → globe */
-.theme-doc-sidebar-menu > .menu__list > .menu__list-item:nth-child(3) .menu__list > .menu__list-item:nth-child(1) > .menu__list-item-collapsible > .menu__link::before {
-  content: '';
-  --sidebar-icon-url: url('https://d3gk2c5xim1je2.cloudfront.net/v7.1.0/regular/globe.svg');
-}
-
-/* Routing → route */
-.theme-doc-sidebar-menu > .menu__list > .menu__list-item:nth-child(3) .menu__list > .menu__list-item:nth-child(2) > .menu__list-item-collapsible > .menu__link::before {
-  content: '';
-  --sidebar-icon-url: url('https://d3gk2c5xim1je2.cloudfront.net/v7.1.0/regular/route.svg');
-}
-
-/* Features → puzzle-piece */
-.theme-doc-sidebar-menu > .menu__list > .menu__list-item:nth-child(3) .menu__list > .menu__list-item:nth-child(3) > .menu__list-item-collapsible > .menu__link::before {
-  content: '';
-  --sidebar-icon-url: url('https://d3gk2c5xim1je2.cloudfront.net/v7.1.0/regular/puzzle-piece.svg');
-}
-
-/* Auth & Access → key */
-.theme-doc-sidebar-menu > .menu__list > .menu__list-item:nth-child(3) .menu__list > .menu__list-item:nth-child(4) > .menu__list-item-collapsible > .menu__link::before {
-  content: '';
-  --sidebar-icon-url: url('https://d3gk2c5xim1je2.cloudfront.net/v7.1.0/regular/key.svg');
-}
-
-/* Observability → chart-line */
-.theme-doc-sidebar-menu > .menu__list > .menu__list-item:nth-child(3) .menu__list > .menu__list-item:nth-child(5) > .menu__list-item-collapsible > .menu__link::before {
-  content: '';
-  --sidebar-icon-url: url('https://d3gk2c5xim1je2.cloudfront.net/v7.1.0/regular/chart-line.svg');
-}
-
-/* Migration → right-left */
-.theme-doc-sidebar-menu > .menu__list > .menu__list-item:nth-child(3) .menu__list > .menu__list-item:nth-child(6) > .menu__list-item-collapsible > .menu__link::before {
-  content: '';
-  --sidebar-icon-url: url('https://d3gk2c5xim1je2.cloudfront.net/v7.1.0/regular/right-left.svg');
-}
-
-/* Deployment → box-open */
-.theme-doc-sidebar-menu > .menu__list > .menu__list-item:nth-child(3) .menu__list > .menu__list-item:nth-child(7) > .menu__list-item-collapsible > .menu__link::before {
-  content: '';
-  --sidebar-icon-url: url('https://d3gk2c5xim1je2.cloudfront.net/v7.1.0/regular/box-open.svg');
-}
-
-/* Compare → scale-balanced */
-.theme-doc-sidebar-menu > .menu__list > .menu__list-item:nth-child(3) .menu__list > .menu__list-item:nth-child(8) > .menu__list-item-collapsible > .menu__link::before {
-  content: '';
-  --sidebar-icon-url: url('https://d3gk2c5xim1je2.cloudfront.net/v7.1.0/regular/scale-balanced.svg');
+.menu__link--sublist-caret[aria-expanded='true']::after {
+  transform: rotate(90deg);
+  opacity: 0.65;
 }
 
 @media (min-width: 997px) {
@@ -413,8 +261,8 @@
   color: var(--ifm-color-primary);
 }
 
-.menu__caret,
-.menu__link--sublist-caret::after {
+/* Hide the default Docusaurus triangle caret — replaced by custom chevron */
+.menu__caret {
   display: none;
 }
 

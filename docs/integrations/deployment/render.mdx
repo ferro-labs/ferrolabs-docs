@@ -1,0 +1,131 @@
+---
+title: "Deploy to Render"
+description: "One-click Render deployment for the Ferro Labs AI Gateway with managed PostgreSQL. Production-ready in minutes with auto-configured storage."
+keywords: [Render AI gateway, deploy LLM proxy Render, one-click AI gateway Render, Render PostgreSQL AI gateway, self-hosted LLM proxy]
+---
+
+# Deploy to Render
+
+Render provides a fully managed platform with auto-TLS, private networking, and managed PostgreSQL. The Ferro Labs AI Gateway ships with a `render.yaml` Blueprint that provisions everything in one click.
+
+## One-click deploy
+
+<a href="https://render.com/deploy?repo=https://github.com/ferro-labs/ai-gateway" target="_blank" rel="noopener noreferrer">
+  <img src="https://render.com/images/deploy-to-render-button.svg" alt="Deploy to Render" />
+</a>
+
+The Blueprint provisions:
+- **Web service** — Docker-based gateway with health checks
+- **PostgreSQL database** — Managed Postgres for API key storage, config history, and request logging
+- **Auto-wired DSNs** — All three store backends (API keys, config, request logs) connect to the database automatically
+- **Generated MASTER_KEY** — A secure master key is generated during setup
+
+You will be prompted for your `OPENAI_API_KEY` (and any other provider keys you need).
+
+## What the Blueprint configures
+
+The `render.yaml` in the gateway repository sets up:
+
+| Resource | Type | Details |
+|----------|------|---------|
+| ferrogw | Web Service (Docker) | Exposes port 8080, health check at /health |
+| ferrogw-db | PostgreSQL | Managed database for all persistence |
+
+Environment variables are auto-wired:
+
+| Variable | Source | Purpose |
+|----------|--------|---------|
+| MASTER_KEY | Auto-generated | Admin authentication |
+| OPENAI_API_KEY | User-provided | OpenAI provider key |
+| API_KEY_STORE_BACKEND | `postgres` | API key storage backend |
+| API_KEY_STORE_DSN | Database internal URL | Connection string |
+| CONFIG_STORE_BACKEND | `postgres` | Config storage backend |
+| CONFIG_STORE_DSN | Database internal URL | Connection string |
+| REQUEST_LOG_STORE_BACKEND | `postgres` | Request log storage backend |
+| REQUEST_LOG_STORE_DSN | Database internal URL | Connection string |
+
+## Manual setup
+
+If you prefer to configure Render manually instead of using the Blueprint:
+
+### Step 1: Create a PostgreSQL database
+
+In the Render dashboard, create a new **PostgreSQL** database. Note the **Internal Connection String** — you will need it for the environment variables.
+
+### Step 2: Create a web service
+
+1. Click **New** → **Web Service**
+2. Connect your GitHub repository or use the public image: `ghcr.io/ferro-labs/ai-gateway:latest`
+3. Set the environment to **Docker**
+4. Configure environment variables:
+
+```bash
+MASTER_KEY=fgw_your-master-key
+OPENAI_API_KEY=sk-your-key
+PORT=8080
+
+# Storage backends — all point to the Postgres database
+API_KEY_STORE_BACKEND=postgres
+API_KEY_STORE_DSN=postgresql://user:pass@host:5432/dbname
+CONFIG_STORE_BACKEND=postgres
+CONFIG_STORE_DSN=postgresql://user:pass@host:5432/dbname
+REQUEST_LOG_STORE_BACKEND=postgres
+REQUEST_LOG_STORE_DSN=postgresql://user:pass@host:5432/dbname
+```
+
+:::warning
+Never hardcode API keys in source files. Always use Render's environment variable management, which encrypts values at rest.
+:::
+
+### Step 3: Configure health check
+
+Set the health check path to `/health` so Render can monitor the service and restart it if it becomes unhealthy.
+
+### Step 4: Deploy
+
+Click **Create Web Service**. Render builds the Docker image and starts the gateway. You will see the service URL in the dashboard once the deploy completes.
+
+## Adding more providers
+
+Add provider API keys as environment variables in the Render dashboard:
+
+```
+ANTHROPIC_API_KEY=sk-ant-...
+GEMINI_API_KEY=...
+MISTRAL_API_KEY=...
+```
+
+No code changes or redeployment needed — the gateway picks up new keys on restart. Use the **Manual Deploy** button or update an environment variable to trigger a fresh deploy.
+
+## Verify the deployment
+
+```bash
+# Health check
+curl https://your-service.onrender.com/health
+
+# Test request
+curl https://your-service.onrender.com/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $MASTER_KEY" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [{"role": "user", "content": "Hello from Render!"}]
+  }'
+```
+
+## Cost considerations
+
+| Resource | Render Plan | Approximate Cost |
+|----------|-------------|-----------------|
+| Web service | Starter | $7/month |
+| PostgreSQL | Starter | $7/month |
+| **Total** | | **~$14/month** |
+
+Render's free tier is available for testing but has limitations (spins down after inactivity, limited compute). For production workloads, use the Starter plan or above.
+
+## Related pages
+
+- [Deploy to Railway](/integrations/deployment/railway) — Alternative one-click cloud deployment
+- [Docker Compose](/integrations/deployment/docker-compose) — Self-hosted deployment with PostgreSQL
+- [Kubernetes](/integrations/deployment/kubernetes) — Helm chart for production clusters
+- [Server settings](/operations/server-settings) — All environment variables reference

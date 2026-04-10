@@ -1,0 +1,75 @@
+---
+title: Integrations
+description: "Connect the Ferro Labs AI Gateway to your stack — native Python SDK, framework adapters, one-click cloud deploys, and 29 AI provider integrations."
+keywords: [AI gateway integrations, Python SDK, LLM proxy deployment, LangChain AI gateway, LlamaIndex gateway, Railway deploy, Render deploy, Docker AI gateway]
+---
+
+# Integrations
+
+The Ferro Labs AI Gateway fits into your existing toolchain. Use a native SDK for typed access, point any OpenAI-compatible client at the gateway with a single base-URL change, deploy to your favorite cloud platform, or connect any of 29 supported AI providers.
+
+## SDKs
+
+### Python SDK (`ferrolabsai`)
+
+The official Python SDK provides typed clients, streaming helpers, async support, and full admin API access.
+
+- [Quickstart](/integrations/sdk/python/quickstart) — Install and send your first request
+- [API Reference](/integrations/sdk/python/reference) — Complete method and type reference
+- [Async Usage](/integrations/sdk/python/async) — `AsyncFerroClient` and async streaming
+- [Error Handling](/integrations/sdk/python/error-handling) — Exception hierarchy and retry behavior
+
+```bash
+pip install ferrolabsai
+```
+
+### Go SDK
+
+The community Go SDK offers idiomatic bindings for chat completions, embeddings, and gateway administration.
+
+- [Go SDK guide](/integrations/sdk/go)
+
+### OpenAI-Compatible SDKs
+
+Any OpenAI-compatible SDK works with zero code changes — just set the base URL to your gateway endpoint.
+
+- [OpenAI-compatible guide](/integrations/sdk/openai-compatible)
+
+Covers: TypeScript/JavaScript, Python (`openai`), Go, curl, LangChain, and LlamaIndex.
+
+:::tip
+If your framework already uses the OpenAI SDK, switching to Ferro Labs is a one-line config change.
+:::
+
+## Frameworks
+
+All major AI frameworks work through the gateway via the OpenAI-compatible API. See the [OpenAI-compatible SDKs guide](/integrations/sdk/openai-compatible) for ready-to-use code snippets.
+
+| Framework | Status | Integration |
+|-----------|--------|-------------|
+| LangChain | Supported | Set `openai_api_base` to your gateway URL |
+| LlamaIndex | Supported | Set `api_base` to your gateway URL |
+| Vercel AI SDK | Supported | Set `baseURL` to your gateway URL |
+
+:::info
+Framework-specific guides with end-to-end examples are coming soon. In the meantime, the [OpenAI-compatible guide](/integrations/sdk/openai-compatible) covers LangChain, LlamaIndex, and standard SDK usage.
+:::
+
+## Deployment
+
+One-click deploys and production-ready configurations for every major platform:
+
+| Platform | Type | Guide |
+|----------|------|-------|
+| Railway | One-click (SQLite or PostgreSQL) | [Deploy to Railway](/integrations/deployment/railway) |
+| Render | One-click (PostgreSQL) | [Deploy to Render](/integrations/deployment/render) |
+| Docker Compose | Self-hosted | [Docker Compose guide](/integrations/deployment/docker-compose) |
+| Kubernetes | Helm chart | [Kubernetes guide](/integrations/deployment/kubernetes) |
+| Fly.io | Cloud | [Deploy to Fly.io](/integrations/deployment/fly-io) |
+
+## Providers
+
+The gateway supports **29 AI providers** out of the box, including OpenAI, Anthropic, Google, Mistral, Cohere, and more. No vendor lock-in — switch between providers by changing a single route configuration.
+
+- [Providers overview](/guides/providers) — Full list of supported providers
+- [Provider configuration](/guides/providers-config) — Environment variables and setup

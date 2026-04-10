@@ -1,0 +1,286 @@
+---
+title: Deploy with Docker Compose
+description: "Production-ready Docker Compose deployment for Ferro Labs AI Gateway with PostgreSQL logging, Redis caching, and Prometheus monitoring."
+keywords:
+  - Docker Compose AI gateway
+  - self-hosted LLM proxy Docker
+  - AI gateway deployment
+  - Docker LLM gateway
+---
+
+# Deploy with Docker Compose
+
+Running an AI gateway alongside its logging database, cache layer, and monitoring stack as separate services is tedious and error-prone. Docker Compose lets you define the entire stack in a single file, wire everything together, and bring it up with one command.
+
+This guide gives you a production-ready Compose file with the **Ferro Labs AI Gateway**, **PostgreSQL** (request logging), **Redis** (response caching), and **Prometheus** (metrics scraping).
+
+## Prerequisites
+
+- Docker Engine 20.10+ and Docker Compose v2
+- API keys for at least one upstream provider (OpenAI, Anthropic, etc.)
+
+## Project structure
+
+```
+ferro-gateway/
+├── docker-compose.yml
+├── config.yaml
+└── prometheus.yml
+```
+
+## Gateway configuration
+
+Create `config.yaml` with your provider routes, the PostgreSQL request-logger plugin, and a rate-limit plugin:
+
+```yaml title="config.yaml"
+listeners:
+  - address: 0.0.0.0
+    port: 8080
+
+providers:
+  - name: openai
+    type: openai
+    api_key: ${OPENAI_API_KEY}
+    models:
+      - gpt-4o
+      - gpt-4o-mini
+
+  - name: anthropic
+    type: anthropic
+    api_key: ${ANTHROPIC_API_KEY}
+    models:
+      - claude-sonnet-4-20250514
+      - claude-haiku-4-20250414
+
+plugins:
+  - name: request-logger
+    type: postgres-logger
+    connection_string: postgres://ferro:ferro_secret@postgres:5432/ferro_logs?sslmode=disable
+    log_request_body: true
+    log_response_body: false
+
+  - name: rate-limit
+    type: rate-limit
+    requests_per_minute: 120
+    burst: 20
+
+  - name: cache
+    type: redis-cache
+    redis_url: redis://redis:6379/0
+    ttl_seconds: 3600
+
+routes:
+  - path: /v1/chat/completions
+    provider: openai
+    model: gpt-4o
+    plugins:
+      - request-logger
+      - rate-limit
+      - cache
+
+  - path: /v1/messages
+    provider: anthropic
+    model: claude-sonnet-4-20250514
+    plugins:
+      - request-logger
+      - rate-limit
+```
+
+## Docker Compose file
+
+```yaml title="docker-compose.yml"
+version: "3.9"
+
+services:
+  gateway:
+    image: ghcr.io/ferro-labs/ai-gateway:latest
+    container_name: ferro-gateway
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CONFIG_PATH=/etc/ferro/config.yaml
+    volumes:
+      - ./config.yaml:/etc/ferro/config.yaml:ro
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: ferro-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=ferro
+      - POSTGRES_PASSWORD=ferro_secret
+      - POSTGRES_DB=ferro_logs
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ferro -d ferro_logs"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: ferro-redis
+    restart: unless-stopped
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: ferro-prometheus
+    restart: unless-stopped
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      gateway:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+  prometheus_data:
+```
+
+## Volume mounts
+
+| Service    | Mount                            | Purpose                                    |
+|------------|----------------------------------|--------------------------------------------|
+| gateway    | `./config.yaml` (read-only)      | Gateway route and plugin configuration     |
+| postgres   | `postgres_data` named volume     | Persist request logs across restarts       |
+| redis      | `redis_data` named volume        | Persist cached responses across restarts   |
+| prometheus | `./prometheus.yml` (read-only)   | Prometheus scrape configuration            |
+| prometheus | `prometheus_data` named volume   | Persist metrics data across restarts       |
+
+## Environment variables
+
+Create a `.env` file in the same directory as `docker-compose.yml`:
+
+```bash title=".env"
+OPENAI_API_KEY=sk-proj-your-openai-key-here
+ANTHROPIC_API_KEY=sk-ant-your-anthropic-key-here
+```
+
+Docker Compose automatically reads `.env` and injects the values into the `${...}` placeholders in the Compose file.
+
+:::warning
+Never commit `.env` to version control. Add it to your `.gitignore`:
+
+```bash
+echo ".env" >> .gitignore
+```
+:::
+
+## Prometheus scrape configuration
+
+Create `prometheus.yml` to scrape the gateway's `/metrics` endpoint:
+
+```yaml title="prometheus.yml"
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "ferro-gateway"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["gateway:8080"]
+        labels:
+          environment: "production"
+          service: "ai-gateway"
+```
+
+## Health check configuration
+
+The gateway exposes a `/health` endpoint that returns `200 OK` when the service is ready. The Compose file configures Docker to:
+
+1. **Probe** the endpoint every 10 seconds with a 5-second timeout.
+2. **Retry** up to 3 times before marking the container unhealthy.
+3. **Wait** 5 seconds after container start before the first probe (`start_period`).
+
+Dependent services (Prometheus) only start after the gateway is healthy.
+
+## Test it
+
+Bring up the entire stack and verify:
+
+```bash
+docker compose up -d
+```
+
+Wait a few seconds for the health checks, then:
+
+```bash
+curl http://localhost:8080/health
+```
+
+You should see:
+
+```json
+{"status":"healthy"}
+```
+
+Send a test request through the gateway:
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [{"role": "user", "content": "Hello from Docker Compose!"}]
+  }'
+```
+
+Check Prometheus targets at [http://localhost:9090/targets](http://localhost:9090/targets) to confirm the gateway is being scraped.
+
+:::tip
+To view logs across all services in real time:
+
+```bash
+docker compose logs -f
+```
+
+To tear down the stack while preserving volumes:
+
+```bash
+docker compose down
+```
+
+To tear down and delete all data:
+
+```bash
+docker compose down -v
+```
+:::
+
+## Related pages
+
+- [Quickstart](/getting-started/quickstart) — Get running with a single binary in 60 seconds.
+- [Deploy to Kubernetes](/guides/kubernetes) — Helm chart and manifests for Kubernetes.
+- [Observability](/guides/observability) — Dashboards, alerting, and tracing configuration.

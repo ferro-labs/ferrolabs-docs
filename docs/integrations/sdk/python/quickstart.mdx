@@ -1,0 +1,142 @@
+---
+title: "Python SDK Quickstart"
+description: "Install the ferrolabsai Python SDK and send your first AI request through the Ferro Labs AI Gateway in under 2 minutes."
+keywords: [ferrolabsai, Python SDK, AI gateway Python, pip install ferrolabsai, Python LLM client, OpenAI compatible Python]
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# Python SDK Quickstart
+
+## Installation
+
+```bash
+pip install ferrolabsai
+```
+
+## Authentication
+
+The client reads credentials from environment variables or constructor arguments:
+
+```bash
+export FERRO_API_KEY=sk-ferro-...
+export FERRO_BASE_URL=http://localhost:8080   # default
+```
+
+Or pass them directly:
+
+```python
+from ferrolabsai import FerroClient
+
+client = FerroClient(
+    api_key="sk-ferro-...",
+    base_url="http://localhost:8080",
+)
+```
+
+:::tip
+The client also checks `OPENAI_API_KEY` as a fallback, so existing OpenAI key setups work out of the box.
+:::
+
+## First request
+
+```python
+from ferrolabsai import FerroClient
+
+client = FerroClient()
+
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Hello from Ferro Labs!"}],
+)
+
+print(response.content)  # shortcut to choices[0].message.content
+print(f"Provider: {response.provider}")
+print(f"Cost: ${response.usage.cost_usd:.6f}")
+print(f"Trace ID: {response.trace_id}")
+```
+
+The response includes Ferro-specific fields — `provider`, `trace_id`, `latency_ms`, and `usage.cost_usd` — alongside the standard OpenAI response shape.
+
+## Streaming
+
+```python
+stream = client.chat.completions.create(
+    model="claude-3-5-sonnet-20241022",
+    messages=[{"role": "user", "content": "Write a haiku about AI gateways"}],
+    stream=True,
+)
+
+for chunk in stream:
+    print(chunk.choices[0].delta.content or "", end="", flush=True)
+```
+
+## Embeddings
+
+```python
+response = client.embeddings.create(
+    model="text-embedding-3-small",
+    input=["Ferro routes LLM requests", "across 29 providers"],
+)
+
+for item in response.data:
+    print(f"Dimension: {len(item.embedding)}")
+```
+
+## Image generation
+
+```python
+response = client.images.generate(
+    model="dall-e-3",
+    prompt="A futuristic AI gateway routing requests across the cosmos",
+    size="1024x1024",
+)
+
+print(response.data[0].url)
+```
+
+## Model discovery
+
+```python
+# List all models from a specific provider
+models = client.models.list(provider="anthropic")
+for m in models:
+    print(f"{m.id} — {m.context_window:,} tokens")
+
+# Search the catalog
+results = client.models.search("embedding")
+```
+
+## Ferro-specific features
+
+The SDK supports gateway-specific parameters that the generic OpenAI SDK cannot access:
+
+```python
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Summarize this document"}],
+    template_id="summarizer-v2",           # server-side prompt template
+    template_variables={"tone": "formal"}, # template variables
+    route_tag="premium",                   # override routing strategy
+)
+```
+
+## Context manager
+
+```python
+with FerroClient() as client:
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hello"}],
+    )
+    print(response.content)
+# httpx client is closed automatically
+```
+
+## Next steps
+
+- [API Reference](/integrations/sdk/python/reference) — Full method signatures and response types
+- [Async Usage](/integrations/sdk/python/async) — AsyncFerroClient for async/await workflows
+- [Error Handling](/integrations/sdk/python/error-handling) — Exception hierarchy and retry behavior
+- [Configuration](/getting-started/configuration) — Gateway-side routing and plugin setup
