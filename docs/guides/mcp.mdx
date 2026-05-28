@@ -6,6 +6,17 @@ keywords: [Model Context Protocol, MCP gateway, MCP tool calling, agentic AI gat
 
 Model Context Protocol (MCP) integration was added in **v0.8.0**. When configured, the gateway connects to your MCP tool servers, injects available tools into chat completion requests, and runs the full agentic loop — so clients can receive a final text answer without implementing tool-calling logic themselves.
 
+:::info Beta — limited observability
+
+MCP support is **Beta**. The end-to-end agentic loop (configuration, streaming, tool execution) is stable and ready to use. **Observability is partial** for this release:
+
+- Each parent observation captures aggregate metrics for the tool calls it triggered — `tool_call_count` and `tool_names` are stored on the trace row and surfaced in the dashboard.
+- Individual tool calls **do not yet appear as child spans** in the trace waterfall. They are tracked via Go's `runtime/trace` and Prometheus metrics, not OpenTelemetry.
+
+Full OpenTelemetry child-span support for per-tool-call timing, status, and arguments is planned for a future release. Until then, treat per-call drill-down as best-effort via Prometheus dashboards.
+
+:::
+
 ## How it works
 
 ```mermaid
