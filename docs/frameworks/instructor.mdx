@@ -1,0 +1,57 @@
+---
+title: Instructor
+description: Use Instructor for typed Pydantic outputs with Ferro Labs AI Gateway — patch any OpenAI client pointed at the gateway and get validated structured responses across 30+ providers.
+keywords: [Instructor gateway, Instructor proxy, Instructor multi-provider, Pydantic structured output, LLM JSON schema gateway]
+sidebar_position: 14
+---
+
+# Instructor
+
+[Instructor](https://python.useinstructor.com) patches an existing OpenAI client to return validated Pydantic models. Because Ferro Labs AI Gateway is an OpenAI-compatible endpoint, Instructor works against it unchanged.
+
+## Install
+
+```bash
+pip install instructor openai
+```
+
+## Configure
+
+```python
+import os
+import instructor
+from openai import OpenAI
+from pydantic import BaseModel
+
+client = instructor.from_openai(OpenAI(
+    base_url=os.environ["FERRO_BASE_URL"] + "/v1",
+    api_key=os.environ["FERRO_API_KEY"],
+))
+
+class User(BaseModel):
+    name: str
+    age: int
+
+user = client.chat.completions.create(
+    model="claude-3-5-sonnet-20241022",     # routed to Anthropic by Ferro
+    response_model=User,
+    messages=[{"role": "user", "content": "Extract: Alice is 30 years old."}],
+)
+print(user)  # User(name='Alice', age=30)
+```
+
+The retry / validation loop happens client-side in Instructor; the gateway sees standard chat-completion requests.
+
+## Verify
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $FERRO_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}'
+```
+
+## See also
+
+- [Pydantic AI](/frameworks/pydantic-ai) — alternative typed-output framework
+- [LangChain (Python)](/frameworks/langchain-python) — `with_structured_output` is planned for `langchain-ferrolabsai 0.2.0`

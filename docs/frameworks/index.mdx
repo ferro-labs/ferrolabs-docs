@@ -1,0 +1,51 @@
+---
+title: Frameworks
+description: Use Ferro Labs AI Gateway with the LLM frameworks you already know — LangChain, LangGraph, LangSmith, LlamaIndex, CrewAI, Vercel AI SDK, Mastra, DSPy, and more. Drop-in compatibility, per-provider routing, and one trace_id everywhere.
+keywords: [LangChain AI gateway, LangGraph proxy, LangSmith open-source alternative, LlamaIndex gateway, CrewAI multi-provider, Vercel AI SDK gateway, AI gateway framework integration, LiteLLM alternative]
+sidebar_position: 1
+---
+
+# Framework Integrations
+
+Ferro Labs AI Gateway exposes an OpenAI-compatible HTTP surface, so **any** LLM framework that talks to OpenAI works against Ferro by setting `base_url`. The pages below go further — they show first-party adapters, framework-idiomatic code, and the one piece of glue worth knowing: **`trace_id`**.
+
+## The `trace_id` join key
+
+Every Ferro response (since `ai-gateway v1.1.0`) carries a `trace_id` in the `x-trace-id` HTTP header. First-party adapters surface it on `response_metadata["trace_id"]` (Python) and `response.traceId` (TypeScript). That single ID is the join key between your framework's instrumentation and any observability backend wired into the gateway via a [plugin bridge](/guides/observability) — LangSmith, Langfuse, Phoenix, Datadog, and more.
+
+You write framework code once. Telemetry routing changes by swapping a gateway plugin, not by editing your app.
+
+## Python
+
+| Framework | Status | Page |
+|---|---|---|
+| LangChain (Python) | ✅ `langchain-ferrolabsai 0.1.0` on PyPI | [LangChain Python](/frameworks/langchain-python) |
+| LangGraph | ✅ Works today via `FerroChatModel` | [LangGraph](/frameworks/langgraph) |
+| LangSmith | ✅ Trace correlation today · 🚧 dedicated bridge plugin in v1.2 | [LangSmith](/frameworks/langsmith) |
+| LlamaIndex | 🚧 `llama-index-llms-ferrolabsai 0.0.1` placeholder on PyPI | [LlamaIndex](/frameworks/llamaindex) |
+| CrewAI | 🚧 Drop-in via OpenAI-compatible client | [CrewAI](/frameworks/crewai) |
+| AutoGen | 🚧 Drop-in via OpenAI-compatible client | [AutoGen](/frameworks/autogen) |
+| Haystack | 🚧 Drop-in via OpenAI-compatible client | [Haystack](/frameworks/haystack) |
+| DSPy | 🚧 Drop-in via OpenAI-compatible client | [DSPy](/frameworks/dspy) |
+| Pydantic AI | 🚧 Drop-in via OpenAI-compatible client | [Pydantic AI](/frameworks/pydantic-ai) |
+| Instructor | 🚧 Drop-in via OpenAI-compatible client | [Instructor](/frameworks/instructor) |
+
+## TypeScript / JavaScript
+
+| Framework | Status | Page |
+|---|---|---|
+| Vercel AI SDK | ✅ Drop-in via `@ai-sdk/openai` or `@ferro-labs-ai/sdk` | [Vercel AI SDK](/frameworks/vercel-ai-sdk) |
+| LangChain.js | 🚧 Dedicated sub-export `@ferro-labs-ai/sdk/langchain` planned | [LangChain.js](/frameworks/langchain-js) |
+| Mastra | 🚧 Drop-in via Vercel AI SDK provider | [Mastra](/frameworks/mastra) |
+
+## Runnable examples
+
+Every page links to a Dockerized recipe in the [`ai-gateway-cookbook`](https://github.com/ferro-labs/ai-gateway-cookbook) repo. From a fresh clone:
+
+```bash
+cd python/02-langgraph-multi-provider-agent
+cp .env.example .env       # fill in FERRO_API_KEY
+make run                   # one command, working multi-provider agent
+```
+
+That recipe — planner on GPT-4o, coder on Claude, summarizer on Gemini, all through one gateway URL — is the smallest demo that proves Ferro's value inside a framework you already use.

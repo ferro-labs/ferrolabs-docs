@@ -81,6 +81,41 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
+      label: 'Frameworks',
+      collapsed: false,
+      items: [
+        'frameworks/index',
+        {
+          type: 'category',
+          label: 'Python',
+          collapsed: true,
+          items: [
+            'frameworks/langchain-python',
+            'frameworks/langgraph',
+            'frameworks/langsmith',
+            'frameworks/llamaindex',
+            'frameworks/crewai',
+            'frameworks/autogen',
+            'frameworks/haystack',
+            'frameworks/dspy',
+            'frameworks/pydantic-ai',
+            'frameworks/instructor',
+          ],
+        },
+        {
+          type: 'category',
+          label: 'TypeScript',
+          collapsed: true,
+          items: [
+            'frameworks/vercel-ai-sdk',
+            'frameworks/langchain-js',
+            'frameworks/mastra',
+          ],
+        },
+      ],
+    },
+    {
+      type: 'category',
       label: 'Operations',
       collapsed: false,
       items: [

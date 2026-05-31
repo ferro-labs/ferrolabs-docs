@@ -1,0 +1,55 @@
+---
+title: AutoGen
+description: Use Microsoft AutoGen with Ferro Labs AI Gateway by pointing its OpenAI client at the gateway — multi-agent conversations across 30+ providers from one endpoint.
+keywords: [AutoGen gateway, AutoGen multi-LLM, AutoGen Anthropic, Microsoft AutoGen proxy, multi-agent LLM router]
+sidebar_position: 9
+---
+
+# AutoGen
+
+[Microsoft AutoGen](https://github.com/microsoft/autogen) configures LLM access through `llm_config` dicts that accept any OpenAI-compatible endpoint. Ferro Labs AI Gateway is a drop-in.
+
+## Install
+
+```bash
+pip install pyautogen
+```
+
+## Configure
+
+```python
+import os
+from autogen import ConversableAgent
+
+config_list = [
+    {
+        "model": "claude-3-5-sonnet-20241022",      # routed to Anthropic by Ferro
+        "api_key": os.environ["FERRO_API_KEY"],
+        "base_url": os.environ["FERRO_BASE_URL"] + "/v1",
+    }
+]
+
+agent = ConversableAgent(
+    name="assistant",
+    llm_config={"config_list": config_list},
+)
+
+reply = agent.generate_reply(messages=[{"role": "user", "content": "Hello from AutoGen"}])
+print(reply)
+```
+
+To give different agents different providers, build per-agent `config_list`s with different `model` values.
+
+## Verify
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $FERRO_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}'
+```
+
+## See also
+
+- [CrewAI](/frameworks/crewai) — alternative multi-agent framework
+- [LangGraph](/frameworks/langgraph) — explicit graph-based agents

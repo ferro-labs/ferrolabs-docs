@@ -1,0 +1,59 @@
+---
+title: LangChain.js
+description: Use Ferro Labs AI Gateway from LangChain.js via the ChatOpenAI client today; a dedicated @ferro-labs-ai/sdk/langchain sub-export is planned.
+keywords: [LangChain JS gateway, LangChain.js proxy, LangChain.js multi-provider, LangChain TypeScript gateway, LangGraph JS]
+sidebar_position: 7
+---
+
+# LangChain.js
+
+LangChain.js `ChatOpenAI` works against Ferro Labs AI Gateway as a drop-in by setting `configuration.baseURL`. A first-party `@ferro-labs-ai/sdk/langchain` sub-export is planned.
+
+## Drop-in (today)
+
+```bash
+pnpm add @langchain/openai @langchain/core
+```
+
+```typescript
+import { ChatOpenAI } from "@langchain/openai";
+import { HumanMessage } from "@langchain/core/messages";
+
+const chat = new ChatOpenAI({
+  model: "claude-3-5-sonnet-20241022",      // routed to Anthropic by Ferro
+  apiKey: process.env.FERRO_API_KEY,
+  configuration: { baseURL: process.env.FERRO_BASE_URL + "/v1" },
+});
+
+const response = await chat.invoke([new HumanMessage("Hello from LangChain.js")]);
+console.log(response.content);
+```
+
+## Read the `trace_id`
+
+The `x-trace-id` response header is the canonical Ferro trace ID. LangChain.js exposes raw response metadata via the `additional_kwargs` and `response_metadata` fields, but the cleanest path today is to read it directly from your fetch wrapper or via [`@ferro-labs-ai/sdk`](/sdks/overview) for typed access.
+
+## Verify
+
+```bash
+curl -i http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $FERRO_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}' \
+  | grep -i '^x-trace-id'
+```
+
+## First-party adapter (planned)
+
+`@ferro-labs-ai/sdk/langchain` will ship a `FerroChatModel` mirroring the Python adapter — typed Ferro extras (`routeTag`, `templateId`, `templateVariables`), `traceId` on `response_metadata`, native LangGraph.js compatibility. The npm scope `@ferro-labs-ai` is already reserved.
+
+Track progress: [OSS Ecosystem Roadmap §A.3 Phase C.1](https://github.com/ferro-labs/ai-gateway-workspace/blob/main/docs/OSS-ECOSYSTEM-ROADMAP.md).
+
+## Runnable example
+
+`ai-gateway-cookbook/typescript/02-langchainjs-streaming-agent` is planned alongside the sub-export release.
+
+## See also
+
+- [Vercel AI SDK](/frameworks/vercel-ai-sdk) — most TS apps use this surface today
+- [LangChain (Python)](/frameworks/langchain-python) — the reference adapter

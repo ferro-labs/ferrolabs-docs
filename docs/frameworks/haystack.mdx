@@ -1,0 +1,64 @@
+---
+title: Haystack
+description: Use deepset Haystack with Ferro Labs AI Gateway via its OpenAIChatGenerator — production RAG pipelines across 30+ providers from one endpoint.
+keywords: [Haystack AI gateway, Haystack proxy, Haystack multi-provider, deepset Haystack RAG, Haystack Anthropic]
+sidebar_position: 10
+---
+
+# Haystack
+
+[deepset Haystack](https://haystack.deepset.ai) `OpenAIChatGenerator` and `OpenAITextEmbedder` accept any OpenAI-compatible base URL. Ferro Labs AI Gateway is a drop-in.
+
+## Install
+
+```bash
+pip install haystack-ai
+```
+
+## Configure
+
+```python
+import os
+from haystack.components.generators.chat import OpenAIChatGenerator
+from haystack.dataclasses import ChatMessage
+from haystack.utils import Secret
+
+generator = OpenAIChatGenerator(
+    model="claude-3-5-sonnet-20241022",       # routed to Anthropic by Ferro
+    api_key=Secret.from_env_var("FERRO_API_KEY"),
+    api_base_url=os.environ["FERRO_BASE_URL"] + "/v1",
+)
+
+result = generator.run(messages=[ChatMessage.from_user("Hello from Haystack")])
+print(result["replies"][0].content)
+```
+
+For embeddings:
+
+```python
+from haystack.components.embedders import OpenAITextEmbedder
+
+embedder = OpenAITextEmbedder(
+    model="text-embedding-3-small",
+    api_key=Secret.from_env_var("FERRO_API_KEY"),
+    api_base_url=os.environ["FERRO_BASE_URL"] + "/v1",
+)
+```
+
+## Verify
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $FERRO_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}'
+```
+
+## Status
+
+A first-party `haystack-ferrolabsai` adapter is on the roadmap follow-up list — drop-in covers most use cases today.
+
+## See also
+
+- [LlamaIndex](/frameworks/llamaindex) — alternative RAG framework
+- [LangChain (Python)](/frameworks/langchain-python)

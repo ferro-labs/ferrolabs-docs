@@ -1,0 +1,134 @@
+---
+title: LangChain (Python)
+description: Use Ferro Labs AI Gateway from LangChain Python with the first-party langchain-ferrolabsai adapter — chat, embeddings, tool calling, and LangGraph all routed across 30+ providers through one endpoint.
+keywords: [LangChain AI gateway, LangChain proxy, LangChain multi-provider, langchain-ferrolabsai, LangChain Anthropic, LangChain Gemini, FerroChatModel, LangChain LLM router]
+sidebar_position: 2
+---
+
+# LangChain (Python)
+
+The [`langchain-ferrolabsai`](https://pypi.org/project/langchain-ferrolabsai/) package is the first-party LangChain Python integration for Ferro Labs AI Gateway. It ships three classes — `FerroChatModel`, `FerroEmbeddings`, `FerroLLM` — that talk to any of the gateway's 30+ providers by model name, with every response surfacing the Ferro `trace_id`, `provider`, `cost_usd`, and `latency_ms` on `response_metadata`.
+
+## Install
+
+```bash
+pip install langchain-ferrolabsai
+```
+
+This pulls in `ferrolabsai>=0.1.0` and `langchain-core>=0.3.0` transitively.
+
+## Chat
+
+```python
+from langchain_ferrolabsai import FerroChatModel
+from langchain_core.messages import HumanMessage
+
+chat = FerroChatModel(
+    model="gpt-4o",
+    base_url="http://localhost:8080",   # any Ferro gateway endpoint
+    api_key="sk-ferro-...",
+)
+
+response = chat.invoke([HumanMessage(content="Hello, world")])
+print(response.content)
+print(response.response_metadata["provider"])     # which provider handled it
+print(response.response_metadata["cost_usd"])     # cost of this request
+print(response.response_metadata["trace_id"])     # x-trace-id header value
+```
+
+Swap providers without changing the class — the gateway auto-routes by model name:
+
+```python
+claude = FerroChatModel(model="claude-3-5-sonnet-20241022", base_url="...", api_key="...")
+gemini = FerroChatModel(model="gemini-1.5-flash",            base_url="...", api_key="...")
+```
+
+## Streaming
+
+```python
+for chunk in chat.stream([HumanMessage(content="Tell me a story")]):
+    print(chunk.content, end="", flush=True)
+```
+
+## Tool calling
+
+`bind_tools()` accepts LangChain tools, Pydantic models, raw OpenAI schemas, or `@tool`-decorated functions:
+
+```python
+from langchain_core.tools import tool
+
+@tool
+def add(a: int, b: int) -> int:
+    """Add two integers."""
+    return a + b
+
+agent_chat = chat.bind_tools([add])
+result = agent_chat.invoke([HumanMessage(content="what is 4 + 7?")])
+print(result.tool_calls)
+# [{'id': 'call_1', 'name': 'add', 'args': {'a': 4, 'b': 7}, 'type': 'tool_call'}]
+```
+
+## Embeddings
+
+```python
+from langchain_ferrolabsai import FerroEmbeddings
+
+embed = FerroEmbeddings(model="text-embedding-3-small", base_url="...", api_key="...")
+vectors = embed.embed_documents(["hello", "world"])
+query_vec = embed.embed_query("hello")
+```
+
+Swap embedding providers the same way you swap chat models — `model="voyage-3"`, `model="cohere.embed-english-v3"`, `model="text-embedding-3-large"` all just work.
+
+## Legacy `LLM` interface
+
+For chains still built on the old completion-style `LLM`:
+
+```python
+from langchain_ferrolabsai import FerroLLM
+
+llm = FerroLLM(model="gpt-4o", base_url="...", api_key="...")
+print(llm.invoke("Write a haiku about gateways"))
+```
+
+## Why use this instead of `ChatOpenAI(base_url=...)`?
+
+`ChatOpenAI` pointed at a Ferro gateway works as a drop-in for chat. `langchain-ferrolabsai` adds:
+
+- **First-class metadata.** `provider`, `cost_usd`, `latency_ms`, `trace_id`, `cache_hit` arrive on every `response_metadata` — no header parsing required.
+- **Ferro extras as fields.** `route_tag`, `template_id`, `template_variables`, and `user` are typed constructor arguments, not magic strings.
+- **One join key.** The `trace_id` is the link to whichever observability backend you bridge the gateway to — LangSmith, Langfuse, Phoenix, Datadog. See [LangSmith](/frameworks/langsmith) for the full story.
+
+## Verify the gateway is reachable
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer sk-ferro-..." \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}' | jq '.choices[0].message.content'
+```
+
+## Runnable example
+
+[`ai-gateway-cookbook/python/02-langgraph-multi-provider-agent`](https://github.com/ferro-labs/ai-gateway-cookbook/tree/main/python/02-langgraph-multi-provider-agent) — a LangGraph agent that routes its planner / coder / summarizer nodes to three different best-in-class providers (GPT-4o, Claude 3.5 Sonnet, Gemini 1.5 Flash) through one gateway, with `trace_id` printed at each step.
+
+```bash
+git clone https://github.com/ferro-labs/ai-gateway-cookbook
+cd ai-gateway-cookbook/python/02-langgraph-multi-provider-agent
+cp .env.example .env
+make run
+```
+
+## What's next
+
+- **Async surfaces** (`_agenerate`, `_astream`, `aembed_documents`) — planned for `langchain-ferrolabsai 0.2.0`.
+- **`with_structured_output()`** — planned for `0.2.0`.
+- **Streaming tool-call reassembly** — planned for `0.2.0`.
+
+Track progress in the [CHANGELOG](https://github.com/ferro-labs/ferrolabs-python-sdk/blob/main/integrations/langchain-ferrolabsai/CHANGELOG.md).
+
+## See also
+
+- [LangGraph](/frameworks/langgraph) — agentic state machines that span multiple providers
+- [LangSmith](/frameworks/langsmith) — turn the Ferro `trace_id` into LangSmith runs
+- [Python SDK quickstart](/sdks/overview) — the underlying `ferrolabsai` client

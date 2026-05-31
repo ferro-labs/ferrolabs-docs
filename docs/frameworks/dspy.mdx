@@ -1,0 +1,60 @@
+---
+title: DSPy
+description: Use Stanford DSPy with Ferro Labs AI Gateway by configuring its LM client against the gateway — run optimizers and compile programs against any of 30+ providers.
+keywords: [DSPy gateway, DSPy proxy, DSPy multi-provider, DSPy optimizer, Stanford DSPy AI gateway]
+sidebar_position: 11
+---
+
+# DSPy
+
+[Stanford DSPy](https://github.com/stanfordnlp/dspy) configures language models via `dspy.LM`, which accepts any OpenAI-compatible endpoint. Point it at Ferro Labs AI Gateway to run optimizers against multiple providers from a single program.
+
+## Install
+
+```bash
+pip install dspy-ai
+```
+
+## Configure
+
+```python
+import os
+import dspy
+
+lm = dspy.LM(
+    model="openai/claude-3-5-sonnet-20241022",        # litellm-style; routed by Ferro
+    api_base=os.environ["FERRO_BASE_URL"] + "/v1",
+    api_key=os.environ["FERRO_API_KEY"],
+)
+dspy.settings.configure(lm=lm)
+
+class QA(dspy.Signature):
+    """Answer the question."""
+    question: str = dspy.InputField()
+    answer: str = dspy.OutputField()
+
+predict = dspy.Predict(QA)
+print(predict(question="What is a gateway?").answer)
+```
+
+## Optimizers across providers
+
+The interesting story for DSPy + Ferro: compile a program against one provider, then re-compile against another by changing only the model name. Pair with the gateway's [budget plugin](/guides/plugins) to cap optimizer cost while exploring.
+
+## Verify
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $FERRO_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}'
+```
+
+## Runnable example
+
+`ai-gateway-cookbook/python/07-dspy-optimizer-with-ferro` is planned.
+
+## See also
+
+- [LangChain (Python)](/frameworks/langchain-python)
+- [Use cases](/guides/routing-policies) — multi-provider patterns

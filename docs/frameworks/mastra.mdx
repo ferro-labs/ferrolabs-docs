@@ -1,0 +1,57 @@
+---
+title: Mastra
+description: Use Mastra workflows and agents with Ferro Labs AI Gateway through the Vercel AI SDK's OpenAI provider — multi-provider TypeScript agents from one endpoint.
+keywords: [Mastra AI gateway, Mastra proxy, Mastra multi-provider, Mastra workflow, TypeScript agent framework]
+sidebar_position: 13
+---
+
+# Mastra
+
+[Mastra](https://mastra.ai) is a TypeScript agent and workflow framework built on top of the Vercel AI SDK. Because Mastra inherits the AI SDK's `LanguageModel` abstraction, the same drop-in pattern from the [Vercel AI SDK page](/frameworks/vercel-ai-sdk) applies — point `@ai-sdk/openai` at your Ferro gateway and Mastra picks it up automatically.
+
+## Install
+
+```bash
+pnpm add @mastra/core @ai-sdk/openai
+```
+
+## Configure
+
+```typescript
+import { createOpenAI } from "@ai-sdk/openai";
+import { Agent } from "@mastra/core";
+
+const ferro = createOpenAI({
+  baseURL: process.env.FERRO_BASE_URL,
+  apiKey: process.env.FERRO_API_KEY,
+});
+
+const writer = new Agent({
+  name: "writer",
+  instructions: "You write concise blog post drafts.",
+  model: ferro("claude-3-5-sonnet-20241022"),     // → Anthropic via Ferro
+});
+
+const result = await writer.generate("Draft an intro about AI gateways.");
+console.log(result.text);
+```
+
+For multi-provider workflows, build one `createOpenAI` instance and select different models per agent / step.
+
+## Verify
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $FERRO_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}'
+```
+
+## Runnable example
+
+`ai-gateway-cookbook/typescript/03-mastra-workflow` is planned.
+
+## See also
+
+- [Vercel AI SDK](/frameworks/vercel-ai-sdk) — the underlying provider surface
+- [LangGraph](/frameworks/langgraph) — Python equivalent for multi-provider agents

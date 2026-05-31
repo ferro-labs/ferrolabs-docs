@@ -1,0 +1,61 @@
+---
+title: CrewAI
+description: Use Ferro Labs AI Gateway with CrewAI to give each agent in your crew a different best-in-class LLM provider — all through one OpenAI-compatible endpoint.
+keywords: [CrewAI gateway, CrewAI multi-LLM, CrewAI Anthropic, CrewAI Gemini, multi-agent LLM router, agent provider routing]
+sidebar_position: 8
+---
+
+# CrewAI
+
+CrewAI uses LiteLLM under the hood to talk to LLMs, which means it accepts any OpenAI-compatible endpoint. Point it at Ferro Labs AI Gateway and each agent in your crew can target a different optimal provider — researcher on GPT-4o, writer on Claude, fact-checker on Gemini — without touching auth code or installing per-provider SDKs.
+
+## Install
+
+```bash
+pip install crewai
+```
+
+## Per-agent provider routing
+
+```python
+import os
+from crewai import Agent, Crew, Task, LLM
+
+# One Ferro endpoint, three model selections.
+ferro = lambda model: LLM(
+    model=f"openai/{model}",                        # litellm "openai/<model>" routes to api_base
+    base_url=os.environ["FERRO_BASE_URL"] + "/v1",
+    api_key=os.environ["FERRO_API_KEY"],
+)
+
+researcher = Agent(role="Researcher", goal="Find sources", backstory="...", llm=ferro("gpt-4o"))
+writer     = Agent(role="Writer",     goal="Draft post",  backstory="...", llm=ferro("claude-3-5-sonnet-20241022"))
+checker    = Agent(role="Checker",    goal="Verify facts",backstory="...", llm=ferro("gemini-1.5-flash"))
+
+crew = Crew(agents=[researcher, writer, checker], tasks=[...])
+crew.kickoff()
+```
+
+The `openai/<model>` prefix tells LiteLLM (CrewAI's LLM layer) to use the OpenAI-compatible path, which Ferro implements. The actual provider is decided by the gateway based on the model name.
+
+## Verify
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $FERRO_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"claude-3-5-sonnet-20241022","messages":[{"role":"user","content":"hi"}]}'
+```
+
+## Status
+
+A first-party `crewai-ferrolabsai` adapter is on the roadmap follow-up list — drop-in compatibility covers most use cases today.
+
+## Runnable example
+
+`ai-gateway-cookbook/python/06-crewai-team-multi-llm` is planned.
+
+## See also
+
+- [LangChain (Python)](/frameworks/langchain-python)
+- [LangGraph](/frameworks/langgraph) — alternative multi-provider agent pattern

@@ -1,0 +1,148 @@
+---
+title: Vercel AI SDK
+description: Use Ferro Labs AI Gateway with the Vercel AI SDK as a drop-in via the OpenAI provider — route streamText, generateText, generateObject, and tool calls across 30+ providers from one URL.
+keywords: [Vercel AI SDK gateway, Vercel AI SDK proxy, Vercel AI SDK multi-provider, AI SDK Anthropic, AI SDK Gemini, Next.js AI gateway, AI gateway streaming, OpenRouter alternative]
+sidebar_position: 5
+---
+
+# Vercel AI SDK
+
+The [Vercel AI SDK](https://sdk.vercel.ai) already speaks OpenAI. Point its OpenAI provider at a Ferro Labs AI Gateway endpoint and every `streamText`, `generateText`, `generateObject`, and tool-call goes through Ferro — with automatic provider routing, fallback, cost tracking, and the `x-trace-id` header surfacing on every response.
+
+No extra adapter required for chat. The `@ferro-labs-ai/sdk` package below adds Ferro-specific niceties on top.
+
+## Drop-in (recommended start)
+
+```bash
+pnpm add ai @ai-sdk/openai
+```
+
+```typescript
+import { openai, createOpenAI } from "@ai-sdk/openai";
+import { streamText } from "ai";
+
+// Point the AI SDK's OpenAI provider at your Ferro gateway.
+const ferro = createOpenAI({
+  baseURL: process.env.FERRO_BASE_URL,    // e.g. "http://localhost:8080/v1"
+  apiKey: process.env.FERRO_API_KEY,
+});
+
+const result = await streamText({
+  model: ferro("gpt-4o"),
+  prompt: "Tell me a story about a gateway.",
+});
+
+for await (const delta of result.textStream) {
+  process.stdout.write(delta);
+}
+```
+
+Swap providers by changing the model string — the gateway routes by name:
+
+```typescript
+const result = await streamText({
+  model: ferro("claude-3-5-sonnet-20241022"),   // → Anthropic
+  prompt: "Same code, different provider.",
+});
+```
+
+## Read the `trace_id` from response headers
+
+The gateway emits the `x-trace-id` HTTP header on every response (frozen contract since `ai-gateway v1.1.0`). The AI SDK exposes raw provider responses via `result.providerMetadata` and the underlying fetch response:
+
+```typescript
+const result = await generateText({
+  model: ferro("gpt-4o"),
+  prompt: "hi",
+});
+
+const traceId = result.response?.headers?.["x-trace-id"];
+console.log({ traceId, providerMetadata: result.providerMetadata });
+```
+
+That `traceId` is the join key for any [observability bridge plugin](/frameworks/langsmith) wired into the gateway — Langfuse, Phoenix, LangSmith, Datadog. Your Next.js app stays portable.
+
+## Use `@ferro-labs-ai/sdk` for typed Ferro extras
+
+The drop-in works for chat. For admin APIs, model catalog, image generation, and typed responses with `trace_id`, `provider`, `cost_usd`, `latency_ms` already broken out, install the official SDK:
+
+```bash
+pnpm add @ferro-labs-ai/sdk
+```
+
+```typescript
+import { FerroClient } from "@ferro-labs-ai/sdk";
+
+const client = new FerroClient({
+  baseUrl: process.env.FERRO_BASE_URL,
+  apiKey: process.env.FERRO_API_KEY,
+});
+
+const response = await client.chat.completions.create({
+  model: "claude-3-5-sonnet-20241022",
+  messages: [{ role: "user", content: "hi" }],
+});
+
+console.log(response.choices[0].message.content);
+console.log(response.traceId);     // x-trace-id
+console.log(response.provider);    // "anthropic"
+console.log(response.costUsd);     // computed cost
+```
+
+Mix and match: use the AI SDK for streaming UI flows, `@ferro-labs-ai/sdk` for admin and analytics.
+
+## Next.js Edge route example
+
+```typescript
+// app/api/chat/route.ts
+import { createOpenAI } from "@ai-sdk/openai";
+import { streamText } from "ai";
+
+export const runtime = "edge";
+
+const ferro = createOpenAI({
+  baseURL: process.env.FERRO_BASE_URL!,
+  apiKey: process.env.FERRO_API_KEY!,
+});
+
+export async function POST(req: Request) {
+  const { messages, model = "gpt-4o-mini" } = await req.json();
+  const result = streamText({ model: ferro(model), messages });
+  return result.toDataStreamResponse({
+    headers: { "x-ferro-trace-id": result.response?.headers?.["x-trace-id"] ?? "" },
+  });
+}
+```
+
+Forward the trace ID to the browser via a response header so client-side observability can correlate UI events with gateway-side traces.
+
+## Verify
+
+```bash
+curl -i http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $FERRO_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}],"stream":true}'
+```
+
+Look for `x-trace-id` in the response headers and SSE chunks in the body.
+
+## Status
+
+| Capability | Status |
+|---|---|
+| Chat / streaming via `@ai-sdk/openai` + `baseURL` | ✅ Live |
+| Typed Ferro extras via `@ferro-labs-ai/sdk` | ✅ Live (`@ferro-labs-ai/sdk 0.1.0`) |
+| `@ai-sdk/ferro-labs` first-party provider | 🚧 Planned — under evaluation |
+| Cookbook recipe `typescript/01-vercel-ai-sdk-fallback` | 🚧 Planned |
+
+## Runnable example
+
+`ai-gateway-cookbook/typescript/01-vercel-ai-sdk-fallback` is planned — until it lands, the [Vercel AI SDK docs on custom providers](https://sdk.vercel.ai/providers/openai-compatible-providers) plus the snippets above cover the full path.
+
+## See also
+
+- [TypeScript SDK quickstart](/sdks/overview) — the underlying `@ferro-labs-ai/sdk` client
+- [Mastra](/frameworks/mastra) — multi-provider workflows built on the AI SDK
+- [LangChain.js](/frameworks/langchain-js) — for LangChain.js / LangGraph.js workloads
+- [Routing policies](/guides/routing-policies) — what the gateway does behind the URL

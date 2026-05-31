@@ -1,0 +1,53 @@
+---
+title: Pydantic AI
+description: Use Pydantic AI with Ferro Labs AI Gateway via its OpenAIModel — typed, schema-driven agents across 30+ providers from one endpoint.
+keywords: [Pydantic AI gateway, Pydantic AI proxy, Pydantic AI multi-provider, typed LLM agent, Pydantic AI Anthropic]
+sidebar_position: 12
+---
+
+# Pydantic AI
+
+[Pydantic AI](https://ai.pydantic.dev) is a typed agent framework from the Pydantic team. Its `OpenAIModel` accepts a custom `base_url`, so Ferro Labs AI Gateway works as a drop-in.
+
+## Install
+
+```bash
+pip install pydantic-ai
+```
+
+## Configure
+
+```python
+import os
+from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.providers.openai import OpenAIProvider
+
+model = OpenAIModel(
+    "claude-3-5-sonnet-20241022",        # routed to Anthropic by Ferro
+    provider=OpenAIProvider(
+        base_url=os.environ["FERRO_BASE_URL"] + "/v1",
+        api_key=os.environ["FERRO_API_KEY"],
+    ),
+)
+
+agent = Agent(model=model, system_prompt="You are concise.")
+result = agent.run_sync("Hello from Pydantic AI")
+print(result.output)
+```
+
+Typed structured output works the same way — set `output_type` on the `Agent` and Pydantic AI handles the JSON schema round-trip via Ferro.
+
+## Verify
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $FERRO_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}'
+```
+
+## See also
+
+- [Instructor](/frameworks/instructor) — alternative typed-output approach
+- [LangChain (Python)](/frameworks/langchain-python)
