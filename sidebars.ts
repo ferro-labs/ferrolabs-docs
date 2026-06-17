@@ -106,7 +106,6 @@ const sidebars: SidebarsConfig = {
     divider(ICONS.shield, 'Auth & Security'),
     'guides/auth',
     'guides/admin-auth',
-    'guides/workspace-sign-in-domains',
     'security/data-handling',
 
     divider(ICONS.chart, 'Observability'),
