@@ -1,0 +1,115 @@
+---
+title: Streaming (SSE) contract
+description: How the Ferro Labs AI Gateway streams chat completions over Server-Sent Events — stream mode, the [DONE] terminator, mid-stream error framing, and idle timeouts.
+keywords: [AI gateway streaming, server-sent events, SSE stream, stream_error event, stream_timeout, OpenAI compatible streaming]
+---
+
+The gateway streams chat completions using [Server-Sent Events (SSE)](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events). The wire format is OpenAI-compatible: each event is a `data:` line carrying one JSON chunk, and a normal stream ends with a literal `data: [DONE]` sentinel.
+
+## Enabling streaming
+
+Set `stream: true` in the body of a `POST /v1/chat/completions` request. The gateway responds with:
+
+- `Content-Type: text/event-stream`
+- `Cache-Control: no-cache`
+- `Connection: keep-alive`
+
+Each chunk is emitted as a line of the form `data: <json>` followed by a blank line. Use a client that does not buffer the response (for `curl`, pass `-N`).
+
+```bash
+curl -N https://gateway.example.com/v1/chat/completions \
+  -H "Authorization: Bearer $FERRO_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o-mini",
+    "stream": true,
+    "messages": [
+      { "role": "user", "content": "Write a haiku about iron." }
+    ]
+  }'
+```
+
+## Normal event stream
+
+Token chunks use the OpenAI `chat.completion.chunk` object shape. The gateway fills in `object` (`chat.completion.chunk`) and `created` if the upstream provider omits them. After the final content chunk, the gateway writes the terminal `data: [DONE]` marker and closes the connection.
+
+```text
+data: {"id":"chatcmpl-abc","object":"chat.completion.chunk","created":1718600000,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-abc","object":"chat.completion.chunk","created":1718600000,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"content":"Cold"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-abc","object":"chat.completion.chunk","created":1718600000,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"content":" iron"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-abc","object":"chat.completion.chunk","created":1718600000,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+```
+
+The blank line after each `data:` event is part of the SSE framing — do not strip it before your parser sees the event boundary.
+
+## Mid-stream errors
+
+If the upstream provider fails *after* the stream has started, the gateway cannot reuse a normal HTTP status code (headers are already sent). Instead it emits a single error event as a `data:` line and then closes the stream. No `[DONE]` sentinel follows an error event.
+
+The error chunk has this exact JSON shape:
+
+```json
+{
+  "error": {
+    "message": "<upstream error text>",
+    "type": "stream_error",
+    "code": "stream_error"
+  }
+}
+```
+
+On the wire:
+
+```text
+data: {"error":{"message":"upstream provider returned 502","type":"stream_error","code":"stream_error"}}
+```
+
+## Idle and write timeouts
+
+The gateway guards a stalled stream with two independent deadlines:
+
+| Guard | Value | Behavior |
+|-------|-------|----------|
+| Idle timeout | 2 minutes | Resets on every chunk. If no new chunk arrives within the window, the gateway emits a `stream_timeout` error event and closes the stream. |
+| Per-write deadline | 15 seconds | Applied to each individual flush to the client. If a single write cannot complete in time, the stream is terminated. |
+
+When the idle timer fires, the gateway emits this exact event before closing:
+
+```json
+{
+  "error": {
+    "message": "stream timed out waiting for next chunk",
+    "type": "timeout_error",
+    "code": "stream_timeout"
+  }
+}
+```
+
+Note that an idle timeout uses `type: "timeout_error"` with `code: "stream_timeout"`, whereas an upstream provider failure uses `type: "stream_error"` with `code: "stream_error"`. Both are delivered as `error` events; neither is followed by `[DONE]`.
+
+## Distinguishing token chunks from error events
+
+Every SSE event is a `data:` line. Clients should classify each event as follows:
+
+1. If the payload is the literal `[DONE]`, the stream completed normally — stop reading.
+2. Otherwise parse the payload as JSON, then:
+   - A **top-level `error` object** means a failure event. Read `error.code` (`stream_error` or `stream_timeout`) and `error.message`, surface it, and stop.
+   - A payload with `object: "chat.completion.chunk"` (and a `choices` array) is a **normal token chunk**. Append `choices[].delta.content`.
+
+The presence of a top-level `error` key is the reliable discriminator: normal chunks never carry one, and error events never carry `choices`.
+
+## MCP-augmented streaming
+
+When [MCP](https://modelcontextprotocol.io) tool servers are configured, a streaming request still accepts `stream: true`, but the gateway runs the full agentic tool-call loop to completion *before* sending anything to the client. Intermediate tool-loop turns are forced to non-streaming so each response can be inspected for `tool_calls`, so those intermediate tokens are never streamed.
+
+The final assistant message is wrapped into a **single SSE chunk** followed by `data: [DONE]`. In other words, with MCP active the client receives one content chunk rather than an incremental token stream. (This is the current Phase 1 behavior; true final-response token streaming is planned.)
+
+## Notes
+
+- The gateway proxies 30 LLM providers behind this single OpenAI-compatible streaming contract, so client code targets one format regardless of the upstream provider.
+- Always send and parse SSE incrementally. Treat the connection close after `[DONE]` (or after an `error` event) as the authoritative end of the stream.

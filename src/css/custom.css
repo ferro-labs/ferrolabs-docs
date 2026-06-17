@@ -420,6 +420,19 @@ body {
 .menu__link[href$='/guides/troubleshooting/']           { --ferro-icon: url('/assets/icons/gear.svg'); }
 .menu__link[href$='/faq/']                              { --ferro-icon: url('/assets/icons/faq.svg'); }
 
+/* Phase 2/3 pages */
+.menu__link[href$='/integrations/sdk/typescript/']      { --ferro-icon: url('/assets/icons/code.svg'); }
+.menu__link[href$='/guides/provider-capabilities/']     { --ferro-icon: url('/assets/icons/layers.svg'); }
+.menu__link[href$='/guides/virtual-keys/']              { --ferro-icon: url('/assets/icons/lock.svg'); }
+.menu__link[href$='/guides/cost-tracking/']             { --ferro-icon: url('/assets/icons/chart.svg'); }
+.menu__link[href$='/operations/cli-reference/']         { --ferro-icon: url('/assets/icons/code.svg'); }
+.menu__link[href$='/guides/migration-openrouter/']      { --ferro-icon: url('/assets/icons/refresh.svg'); }
+.menu__link[href$='/api-reference/overview/']           { --ferro-icon: url('/assets/icons/brackets.svg'); }
+.menu__link[href$='/api-reference/endpoints/']          { --ferro-icon: url('/assets/icons/brackets.svg'); }
+.menu__link[href$='/api-reference/streaming/']          { --ferro-icon: url('/assets/icons/bolt.svg'); }
+.menu__link[href$='/api-reference/admin/']              { --ferro-icon: url('/assets/icons/gear.svg'); }
+.menu__link[href$='/api-reference/errors/']             { --ferro-icon: url('/assets/icons/shield.svg'); }
+
 /* Hide the default Docusaurus triangle caret — replaced by custom chevron */
 .menu__caret {
   display: none;

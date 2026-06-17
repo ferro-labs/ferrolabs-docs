@@ -1,22 +1,49 @@
 ---
 title: Server settings
-description: All runtime environment variables for the Ferro Labs AI Gateway — port, CORS, config path, timeouts, TLS settings, and storage backend configuration.
-keywords: [AI gateway server settings, environment variables LLM proxy, gateway runtime config, gateway port settings, CORS AI gateway, TLS configuration]
+description: Complete runtime environment-variable reference for the Ferro Labs AI Gateway — config path, listen port, the MASTER_KEY credential, rate limiting, model-catalog override, pprof, and the security-sensitive dev toggles.
+keywords: [AI gateway server settings, environment variables LLM proxy, gateway runtime config, gateway port settings, CORS AI gateway, MASTER_KEY, ALLOW_UNAUTHENTICATED_PROXY, FERRO_MODEL_CATALOG_URL]
 ---
+
+The gateway is configured entirely through environment variables (operational settings) and the [config file](/getting-started/configuration) (routing, plugins, tracing). This page is the reference for the environment variables read at startup.
+
+:::warning Security-sensitive settings
+A few variables relax authentication or expose internals and must **never** be enabled in production. They are marked **(security-sensitive)** below: `MASTER_KEY`, `ALLOW_UNAUTHENTICATED_PROXY`, and `ENABLE_PPROF`.
+:::
+
+## Quick reference
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `GATEWAY_CONFIG` | _(none)_ | Path to the JSON or YAML config file (format auto-detected) |
+| `PORT` | `8080` | HTTP listen port |
+| `MASTER_KEY` | _(none)_ | **(security-sensitive)** Single admin + proxy credential; generate with `ferrogw init` |
+| `ALLOW_UNAUTHENTICATED_PROXY` | `false` | **(security-sensitive)** Disables `/v1` auth — local dev only |
+| `ENABLE_PPROF` | `false` | **(security-sensitive)** Exposes `/debug/pprof` profiling endpoints |
+| `RATE_LIMIT_RPS` | _(off)_ | Per-IP requests/second; enables the rate-limit middleware when set |
+| `RATE_LIMIT_BURST` | `0` | Per-IP burst capacity for the rate-limit middleware |
+| `FERRO_MODEL_CATALOG_URL` | GitHub releases | Override the model-catalog source (air-gapped / custom pricing) |
+| `CORS_ORIGINS` | _(none)_ | Comma-separated list of allowed origins |
+| `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
+| `LOG_FORMAT` | `json` | `json` or `text` (human-readable for dev) |
 
 ## Core runtime
 
-- `PORT` - server port (default `8080`)
-- `CORS_ORIGINS` - comma-separated list of allowed origins
-- `GATEWAY_CONFIG` - path to JSON or YAML config file
-- `LOG_LEVEL` - logging level (for example `debug`, `info`, `warn`, `error`)
-- `LOG_FORMAT` - log output format
+- `GATEWAY_CONFIG` - path to the JSON or YAML config file (format auto-detected). When unset the gateway boots from environment-derived defaults (a fallback strategy over every provider whose key is present).
+- `PORT` - HTTP listen port (default `8080`).
+- `CORS_ORIGINS` - comma-separated list of allowed origins.
+- `LOG_LEVEL` - logging level (`debug`, `info`, `warn`, `error`; default `info`).
+- `LOG_FORMAT` - log output format; set `LOG_FORMAT=text` for human-readable development logs.
 
-## Admin bootstrap
+## Credentials and auth
 
-- `ADMIN_BOOTSTRAP_KEY` - first-run admin bearer key
-- `ADMIN_BOOTSTRAP_READ_ONLY_KEY` - first-run read-only bearer key
-- `ADMIN_BOOTSTRAP_ENABLED` - enable or disable bootstrap keys (default enabled)
+- `MASTER_KEY` - **(security-sensitive)** the single bearer credential the gateway accepts for both admin (`/admin/*`) and proxy (`/v1/*`) requests. Generate one with `ferrogw init`. If unset, the gateway starts but logs a warning and admin routes have no valid credential. Treat it like a root password — never commit it, and rotate it if exposed.
+- `ALLOW_UNAUTHENTICATED_PROXY` - **(security-sensitive)** when set to `true`, the `/v1/*` proxy and inference routes skip authentication entirely. This is a **development-only** convenience; the gateway logs a warning at startup when it is set. Never enable it on a network-reachable deployment.
+
+### Admin bootstrap (deprecated)
+
+- `ADMIN_BOOTSTRAP_KEY` - first-run admin bearer key. **Deprecated** — use `MASTER_KEY`.
+- `ADMIN_BOOTSTRAP_READ_ONLY_KEY` - first-run read-only bearer key. **Deprecated** — use `MASTER_KEY`.
+- `ADMIN_BOOTSTRAP_ENABLED` - enable or disable bootstrap keys (default enabled).
 
 Bootstrap keys are only honored while the API key store is empty.
 
@@ -31,5 +58,30 @@ Bootstrap keys are only honored while the API key store is empty.
 
 ## Rate limiting
 
-- `RATE_LIMIT_RPS` - requests per second (enables per-IP limiting)
-- `RATE_LIMIT_BURST` - burst capacity
+- `RATE_LIMIT_RPS` - per-IP requests per second. Setting a positive value enables the per-IP token-bucket rate-limit middleware; leaving it unset (or non-positive) disables it.
+- `RATE_LIMIT_BURST` - per-IP burst capacity (default `0`).
+
+Rejected requests are surfaced on the `gateway_rate_limit_rejections_total` metric — see [Monitoring](/operations/monitoring).
+
+## Model catalog
+
+- `FERRO_MODEL_CATALOG_URL` - override the model-catalog source URL. The catalog supplies pricing, capabilities, and lifecycle metadata used for cost estimation and `/v1/models` enrichment. By default the gateway fetches the catalog from the public GitHub releases of `ferro-labs/model-catalog` (with a 1-second timeout and an embedded backup as fallback), so the gateway **never fails to start** if the source is unreachable. Point this at an internal mirror for **air-gapped** deployments, or at a custom catalog for **enterprise/custom pricing**. Each load attempt is recorded on the `gateway_catalog_loads_total` metric (`source`, `result` labels). Any userinfo and query parameters in the URL are stripped from logs, so tokens embedded in the URL are not leaked.
+
+## Profiling
+
+- `ENABLE_PPROF` - **(security-sensitive)** when set to `1`, `true`, or `yes`, mounts the Go `net/http/pprof` handlers under `/debug/pprof` (heap, goroutine, profile, trace, etc.). These endpoints expose runtime internals and can be abused for denial of service; keep them off in production or restrict them to an internal network.
+
+## Bedrock / AWS credentials
+
+AWS Bedrock is registered automatically when `AWS_REGION` or `AWS_ACCESS_KEY_ID` is present.
+
+- `AWS_REGION` - AWS region for Bedrock.
+- `AWS_ACCESS_KEY_ID` - AWS access key (optional — falls back to the instance role / default credential chain).
+- `AWS_SECRET_ACCESS_KEY` - AWS secret key.
+- `AWS_SESSION_TOKEN` - session token for **temporary credentials** (e.g. STS / assumed-role / SSO sessions). Required alongside the access key and secret when using temporary credentials.
+
+For the full list of provider API-key variables (OpenAI, Anthropic, Gemini, and the rest of the 30 supported providers), see the [Providers guide](/guides/providers).
+
+## Tracing (OTEL_*)
+
+Standard OpenTelemetry environment variables — `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` — configure trace export and **take precedence** over the `observability.tracing` config block. See [Observability](/guides/observability) for details.

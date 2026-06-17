@@ -1,0 +1,215 @@
+---
+title: Migrate from OpenRouter
+description: Step-by-step guide to replace OpenRouter with the Ferro Labs AI Gateway — swap the base URL and key, drop provider/model slugs, and route via config targets.
+keywords: [OpenRouter migration, OpenRouter alternative, OpenRouter vs Ferro Labs AI Gateway, migrate from OpenRouter, self-hosted OpenRouter, LLM router migration]
+---
+
+The Ferro Labs AI Gateway is a self-hosted alternative to OpenRouter. Both expose an OpenAI-compatible Chat Completions endpoint, so migration is primarily a base-URL change and a key swap — your request and response shapes stay the same. The biggest difference is model selection: instead of OpenRouter's `provider/model` slugs, Ferro routes plain model IDs across the `targets` and `strategy` you configure. As of v1.0.0, the gateway is a stable release with semver guarantees — your config format and API surface are locked in.
+
+For a detailed comparison of Ferro Labs vs OpenRouter and other alternatives, see [Why Ferro Labs](/guides/why-ferro).
+
+## What changes
+
+| Concept | OpenRouter | Ferro Labs AI Gateway |
+|---|---|---|
+| Base URL | `https://openrouter.ai/api/v1` | `http://<your-gateway>/v1` |
+| Auth | `Authorization: Bearer sk-or-v1-...` | `Authorization: Bearer` with `MASTER_KEY` or an issued `fgw_` key |
+| Provider credentials | OpenRouter holds them; you pay OpenRouter | Your own keys in the `providers` block of `config.yaml` |
+| Model selection | `provider/model` slug (`openai/gpt-4o`) | Plain model ID (`gpt-4o`) routed via `targets` |
+| Fallbacks | `models: [...]` array / `route: fallback` | `strategy: {mode: fallback}` |
+| Provider routing prefs | `provider` object (order, allow/deny) | `targets` order + `strategy.mode` |
+| Load balancing | OpenRouter chooses a provider for you | `strategy: {mode: loadbalance}` + `weight` |
+| Caching | OpenRouter prompt caching (provider-side) | `response-cache` plugin (exact-match) |
+| Usage / cost tracking | OpenRouter dashboard | `budget` plugin + admin API |
+| Self-hosting | Not available (hosted SaaS) | Self-hosted by default |
+
+## Step 1 — Start the gateway
+
+```bash
+docker run -d -p 8080:8080 \
+  -e OPENAI_API_KEY=sk-your-openai-key \
+  -e ANTHROPIC_API_KEY=sk-ant-your-key \
+  -v $(pwd)/config.yaml:/config.yaml \
+  ghcr.io/ferro-labs/ai-gateway:latest
+```
+
+Unlike OpenRouter, the gateway calls providers with **your** API keys. Supply one env var per provider you want to reach. The gateway routes across 30 providers and 2,500+ models.
+
+## Step 2 — Define your providers and targets
+
+OpenRouter hides provider configuration behind its dashboard. With Ferro, you declare each provider's credentials once and list the targets you want to route across:
+
+```yaml
+providers:
+  - key: openai
+    provider: openai
+    api_key: "${OPENAI_API_KEY}"
+
+  - key: anthropic
+    provider: anthropic
+    api_key: "${ANTHROPIC_API_KEY}"
+
+strategy:
+  mode: fallback
+
+targets:
+  - virtual_key: openai
+    retry:
+      attempts: 3
+      on_status_codes: [429, 502, 503, 504]
+  - virtual_key: anthropic
+```
+
+## Step 3 — Update the base URL and key
+
+The OpenAI SDK appends `/chat/completions` to `base_url`, so point it at the gateway's `/v1` path — the gateway only serves `/v1/*`.
+
+```python
+# Before (OpenRouter)
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-or-v1-your-openrouter-key",
+    base_url="https://openrouter.ai/api/v1",
+)
+
+# After (Ferro Labs AI Gateway)
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="fgw_your-gateway-key",   # MASTER_KEY or an issued fgw_ key
+    base_url="http://localhost:8080/v1",
+)
+```
+
+The Bearer token is now a **gateway** key (your `MASTER_KEY` or an admin-issued `fgw_` key), not an OpenRouter key. See [Authentication](/guides/auth) and [Virtual keys vs API keys](/guides/virtual-keys) for the distinction.
+
+## Step 4 — Drop the `provider/model` slugs
+
+This is the one code change most migrations need. OpenRouter encodes the provider in the model name; Ferro picks the provider from your `targets` and `strategy`, so you pass a plain model ID.
+
+```python
+# Before (OpenRouter) — provider is part of the slug
+response = client.chat.completions.create(
+    model="openai/gpt-4o",
+    messages=[{"role": "user", "content": "Hello from OpenRouter"}],
+)
+
+# After (Ferro) — plain model ID, provider chosen by routing config
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Hello from Ferro AI Gateway"}],
+)
+```
+
+| OpenRouter slug | Ferro model ID |
+|---|---|
+| `openai/gpt-4o` | `gpt-4o` |
+| `openai/gpt-4o-mini` | `gpt-4o-mini` |
+| `anthropic/claude-3.5-sonnet` | `claude-3-5-sonnet-20241022` |
+| `google/gemini-1.5-flash` | `gemini-1.5-flash` |
+
+If you would rather keep short, stable names in your code, define aliases in `config.yaml` so callers never touch real model IDs:
+
+```yaml
+aliases:
+  fast: gpt-4o-mini
+  smart: claude-3-5-sonnet-20241022
+  cheap: gemini-1.5-flash
+```
+
+Now `model: "smart"` resolves to `claude-3-5-sonnet-20241022` before routing.
+
+## Step 5 — Map OpenRouter features
+
+### Fallbacks
+
+OpenRouter's `models` array (try the next model if one fails) maps to the fallback strategy. Targets are tried top to bottom:
+
+```yaml
+# OpenRouter request body:
+#   { "models": ["openai/gpt-4o", "anthropic/claude-3.5-sonnet"],
+#     "route": "fallback" }
+
+# Ferro config.yaml:
+strategy:
+  mode: fallback
+
+targets:
+  - virtual_key: openai
+    retry:
+      attempts: 3
+      on_status_codes: [429, 502, 503, 504]
+  - virtual_key: anthropic
+```
+
+### Provider load balancing
+
+Where OpenRouter automatically distributes traffic across providers, Ferro makes the split explicit with weights:
+
+```yaml
+strategy:
+  mode: loadbalance
+
+targets:
+  - virtual_key: openai
+    weight: 7
+  - virtual_key: anthropic
+    weight: 3
+```
+
+### Routing by model
+
+To send specific models to specific providers (closer to OpenRouter's per-request provider preferences), use conditional routing:
+
+```yaml
+strategy:
+  mode: conditional
+  conditions:
+    - key: model
+      value: gpt-4o
+      target_key: openai
+    - key: model
+      value: claude-3-5-sonnet-20241022
+      target_key: anthropic
+
+targets:
+  - virtual_key: openai
+  - virtual_key: anthropic
+```
+
+### Caching
+
+```yaml
+plugins:
+  - name: response-cache
+    type: transform
+    stage: before_request
+    enabled: true
+    config:
+      max_age: 300      # seconds
+      max_entries: 1000
+```
+
+### Usage and cost limits
+
+OpenRouter's credit-based spend tracking maps to the `budget` plugin for in-memory per-key limits:
+
+```yaml
+plugins:
+  - name: budget
+    type: guardrail
+    stage: before_request
+    enabled: true
+    config:
+      spend_limit_usd: 10.0
+      input_per_m_tokens: 3.0
+      output_per_m_tokens: 15.0
+```
+
+## Feature parity notes
+
+- **OpenRouter is hosted; Ferro is self-hosted.** You bring your own provider keys and run the gateway yourself. See [getting started](/getting-started/quickstart) for Docker and binary options.
+- **`provider/model` slugs are not supported.** Pass plain model IDs and let `targets`/`strategy` choose the provider, or define `aliases`. This is the only required code change for most apps.
+- **Automatic provider selection** in OpenRouter becomes explicit routing in Ferro — `fallback`, `loadbalance`, `conditional`, and more. See [Routing policies](/guides/routing-policies).
+- **OpenRouter dashboard & analytics**: The OSS gateway exposes structured logs via the `request-logger` plugin and a queryable admin API. Hosted dashboards and durable analytics are in [Ferro Labs Managed](https://ferrolabs.ai). See [OSS vs Ferro Labs Managed](/guides/oss-vs-ferrocloud).

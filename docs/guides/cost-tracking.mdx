@@ -1,0 +1,139 @@
+---
+title: Cost Tracking
+description: See and cap LLM spend in the Ferro Labs AI Gateway using model-catalog pricing, the ferro.cost.usd trace attribute, per-key budget counters, and spend limits.
+keywords: [cost tracking, llm spend, model catalog pricing, ferro.cost.usd, budget plugin, spend limit]
+---
+
+Cost tracking in the Ferro Labs AI Gateway has two halves: **seeing** what each
+request costs, and **capping** what a key can spend. Both rely on the same
+ingredient — per-model token prices from the model catalog.
+
+## Where prices come from
+
+Prices live in the **model catalog** (`models/catalog.go`). Each model carries a
+`Pricing` block whose two core fields are token rates in USD **per one million
+tokens**:
+
+- `input_per_m_tokens` — cost per 1M prompt tokens
+- `output_per_m_tokens` — cost per 1M completion tokens
+
+These are pointers: a `nil` rate means the field does not apply to that model's
+mode — it does **not** mean free. Use `0` for genuinely free models.
+
+The catalog loads from a remote release with an embedded fallback:
+
+1. **Remote** — fetched from the latest `model-catalog` GitHub release
+   (`catalog.json`) with a 1-second timeout.
+2. **Embedded fallback** — a bundled `catalog_backup.json` compiled into the
+   binary, used whenever the remote fetch or parse fails. The gateway never
+   fails to start because the catalog is unavailable.
+3. **24h refresh** — a background ticker reloads the catalog every 24 hours; a
+   failed refresh keeps the currently loaded catalog.
+
+Override the source with the `FERRO_MODEL_CATALOG_URL` environment variable —
+useful for air-gapped deployments or enterprise custom pricing:
+
+```bash
+export FERRO_MODEL_CATALOG_URL="https://pricing.internal/catalog.json"
+```
+
+## Seeing spend
+
+### Per-request cost on traces
+
+After the upstream provider responds, the gateway computes the request's cost
+synchronously and stamps it onto the completed-request span and event as the
+`ferro.cost.usd` OpenTelemetry attribute (`AttrFerroCostUSD` in
+`observability/attributes.go`). A breakdown is emitted alongside it:
+
+| Attribute | Meaning |
+|---|---|
+| `ferro.cost.usd` | Total request cost in USD |
+| `ferro.cost.input_usd` | Cost attributed to prompt tokens |
+| `ferro.cost.output_usd` | Cost attributed to completion tokens |
+| `ferro.cost.cache_read_usd` / `ferro.cost.cache_write_usd` | Prompt-cache costs |
+| `ferro.cost.reasoning_usd` | Cost of reasoning tokens |
+| `ferro.cost.model_found` | Whether the model matched a catalog entry |
+
+Export these to any OTLP backend — see [Observability](/guides/observability) —
+to chart spend per model, per route, or per tenant.
+
+### Per-key counters from the budget plugin
+
+When the `budget` plugin is enabled, it accumulates USD spend per API key in an
+in-memory store. Those counters drive enforcement (below) and reflect live spend
+since process start. They are in-memory only and do not survive a restart.
+
+### `GET /admin/keys/usage`
+
+The admin usage endpoint returns per-key activity, sorted and filterable, with a
+rolling summary:
+
+```bash
+curl http://localhost:8080/admin/keys/usage?sort=usage \
+  -H "Authorization: Bearer $MASTER_KEY"
+```
+
+It supports `sort` (`usage` or `last_used`), `active`, `since`, `limit`, and
+`offset`, and returns a `summary` with `total_keys`, `active_keys`,
+`total_usage`, and `returned_keys`. Note that this endpoint reports per-key
+**request counts** and last-used timestamps — for USD spend, read the
+`ferro.cost.usd` traces or the budget plugin counters.
+
+## Capping spend
+
+The `budget` plugin enforces a per-API-key USD ceiling. Register it at both the
+`before_request` stage (to check the limit and reject when exceeded) and the
+`after_request` stage (to record the completed request's cost). Both instances
+share counters through a common `store_id`:
+
+```yaml
+plugins:
+  - name: budget
+    type: guardrail
+    stage: before_request
+    enabled: true
+    config:
+      # Shared store identifier — all instances with the same store_id share counters.
+      store_id: default
+      # Maximum cumulative USD spend allowed per API key. 0 = unlimited.
+      spend_limit_usd: 10.0
+      # Pricing used to calculate cost from token counts in the response.
+      input_per_m_tokens: 3.0     # USD per 1 million prompt tokens
+      output_per_m_tokens: 15.0   # USD per 1 million completion tokens
+      # Maximum number of API keys tracked in memory. Evicts lowest-spend key at cap.
+      max_keys: 10000
+
+  - name: budget
+    type: guardrail
+    stage: after_request
+    enabled: true
+    config:
+      store_id: default
+      spend_limit_usd: 10.0
+      input_per_m_tokens: 3.0
+      output_per_m_tokens: 15.0
+```
+
+When a key's accumulated spend reaches `spend_limit_usd`, the `before_request`
+check rejects the request with HTTP 429. The plugin sets its own
+`input_per_m_tokens` / `output_per_m_tokens` rather than reading the catalog, so
+it stays self-contained; pick rates that match the models you route. If
+`spend_limit_usd` is set but both rates are `0`, the plugin refuses to start —
+cost would always be `0` and the limit would never bite.
+
+:::warning OSS enforcement caveat
+Per-key budget enforcement requires the API key to be present at
+`pctx.Metadata["api_key"]`. In bare OSS that field is **not** populated, so the
+plugin is inert and tracks nothing. It becomes active when a host populates the
+metadata — as in Ferro Labs Managed. For durable, billing-grade enforcement that
+survives restarts, use the managed server-side budget controls.
+:::
+
+## Related
+
+- [Observability](/guides/observability) — exporting `ferro.cost.usd` and other
+  attributes to OTLP backends.
+- [Plugins](/guides/plugins) — plugin stages and the built-in plugin set.
+- [Rate limiting](/guides/rate-limiting) — capping request volume rather than
+  dollar spend.
