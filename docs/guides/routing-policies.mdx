@@ -38,7 +38,8 @@ targets:
   - virtual_key: openai
     retry:
       attempts: 3
-      retry_on_status: [429, 502, 503, 504]
+      on_status_codes: [429, 502, 503]
+      initial_backoff_ms: 100
   - virtual_key: anthropic
     retry:
       attempts: 2
@@ -76,7 +77,7 @@ Weight evaluation adds negligible overhead — a single random number generation
 
 ## Conditional
 
-Evaluates rules in order. The first matching rule determines the target. Use `model` for exact match or `model_prefix` for prefix match.
+Evaluates rules in order. The first matching rule determines the target. Each rule has a `key` (the request field to inspect, e.g. `model`), a `value` (the exact value to match), and a `target_key` (the target to route to).
 
 **Use this when:** different models should route to specific providers — e.g., all GPT models to OpenAI, all Claude models to Anthropic.
 
@@ -90,11 +91,11 @@ strategy:
     - key: model
       value: gpt-4o-mini
       target_key: openai
-    - key: model_prefix
-      value: claude
+    - key: model
+      value: claude-3-5-sonnet-20241022
       target_key: anthropic
-    - key: model_prefix
-      value: gemini
+    - key: model
+      value: gemini-1.5-flash
       target_key: gemini
 
 targets:
@@ -106,7 +107,7 @@ targets:
 If no rule matches, the request falls through to the first target.
 
 :::tip Pro tip
-Conditional routing pairs well with [model aliases](/getting-started/configuration#model-aliases). Alias `smart` → `claude-3-5-sonnet-20241022`, then add a conditional rule for `model_prefix: claude`.
+Conditional routing pairs well with [model aliases](/getting-started/configuration#model-aliases). Alias `smart` → `claude-3-5-sonnet-20241022` (aliases resolve before routing), then add a conditional rule for `key: model, value: claude-3-5-sonnet-20241022`.
 :::
 
 ## Least-latency
@@ -138,6 +139,7 @@ Uses the built-in model catalog (2,500+ entries with pricing data) to estimate t
 ```yaml
 strategy:
   mode: cost-optimized
+  unpriced_strategy: fallback   # fallback (default) | skip | allow
 
 targets:
   - virtual_key: openai
@@ -146,7 +148,7 @@ targets:
   - virtual_key: gemini
 ```
 
-Cost estimation uses the model name in the request and the catalog's `input_cost_per_token` field. The target with the lowest estimated cost for the matched model wins.
+Cost ranking uses input/prompt tokens only, estimated from the request via a ~4 chars/token heuristic, priced against the catalog's `input_per_m_tokens` field (USD per 1M prompt tokens). The target with the lowest estimated cost for the matched model wins. Pricing comes from the [model-catalog](https://github.com/ferro-labs/model-catalog) (a remote release with an embedded fallback, refreshed every 24h, overridable via the `FERRO_MODEL_CATALOG_URL` env var). `unpriced_strategy` controls how targets with no pricing data are handled: `fallback` prefers priced candidates then the first compatible unpriced target, `skip` rejects unpriced candidates, and `allow` treats missing prices as zero cost.
 
 :::tip Pro tip
 Combine cost-optimized with fallback by adding `retry` to each target — if the cheapest provider fails, the gateway retries with the next cheapest.
@@ -194,7 +196,7 @@ Substring matching (`prompt_contains`) is near-zero cost. Regex matching adds ov
 
 ## A/B test
 
-Splits traffic across variants by configured weights. Every routed request is tagged with the `label` field for downstream observability (e.g., in `request-logger` output or analytics pipelines).
+Splits traffic across variants by configured weights. Each variant carries a `label` field, which is currently emitted only to the gateway's DEBUG logs.
 
 **Use this when:** you want to compare quality, latency, or cost between two providers on live traffic without client-side changes.
 
@@ -216,10 +218,10 @@ targets:
 
 Weights are relative — `70` and `30` send 70% of traffic to `openai` and 30% to `anthropic`. If a weight is `0`, the variant is treated as weight `1` (equal distribution with remaining variants). Negative weights are rejected at gateway startup.
 
-The `label` field is emitted in every `gateway.request.completed` event so you can aggregate results per variant.
+The `label` field is currently visible only in the gateway's DEBUG logs — it is not written to events or a queryable log column.
 
 :::tip Pro tip
-Combine A/B test with the `request-logger` plugin persisting to Postgres, then query `SELECT ab_variant, AVG(latency_ms), AVG(total_tokens) FROM requests GROUP BY ab_variant` to compare variants.
+Combine A/B test with the `request-logger` plugin persisting to Postgres to compare aggregate latency and token usage across live traffic. Per-variant attribution currently requires reading the variant `label` from the gateway's DEBUG logs.
 :::
 
 ## Combining strategies with circuit breakers

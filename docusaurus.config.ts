@@ -41,7 +41,7 @@ const structuredData = {
       applicationCategory: 'DeveloperApplication',
       operatingSystem: 'Linux, macOS, Windows, Docker, Kubernetes',
       description:
-        'Open-source, high-performance AI gateway written in Go. Routes LLM requests across 29 providers and 2,500+ models through a single OpenAI-compatible API, with 11 plugins and 8 routing strategies.',
+        'Open-source, high-performance AI gateway written in Go. Routes LLM requests across 30 providers and 2,500+ models through a single OpenAI-compatible API, with 6 built-in plugins and 8 routing strategies.',
       url: SITE_URL,
       offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
       publisher: { '@id': `${SITE_URL}/#organization` },
@@ -58,7 +58,7 @@ const structuredData = {
 
 const config: Config = {
   title: 'Ferro Labs AI Gateway',
-  tagline: 'One gateway for every AI model — 29 providers, 2,500+ models, 11 plugins, 8 routing strategies.',
+  tagline: 'One gateway for every AI model — 30 providers, 2,500+ models, 6 built-in plugins, 8 routing strategies.',
   favicon: 'assets/branding/favicon.ico',
 
   // Future flags, see https://docusaurus.io/docs/api/docusaurus-config#future

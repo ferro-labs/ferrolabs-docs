@@ -1,6 +1,6 @@
 ---
 title: Deploy with Docker Compose
-description: "Production-ready Docker Compose deployment for Ferro Labs AI Gateway with PostgreSQL logging, Redis caching, and Prometheus monitoring."
+description: "Production-ready Docker Compose deployment for Ferro Labs AI Gateway with PostgreSQL request logging, in-memory response caching, and Prometheus monitoring."
 keywords:
   - Docker Compose AI gateway
   - self-hosted LLM proxy Docker
@@ -12,7 +12,7 @@ keywords:
 
 Running an AI gateway alongside its logging database, cache layer, and monitoring stack as separate services is tedious and error-prone. Docker Compose lets you define the entire stack in a single file, wire everything together, and bring it up with one command.
 
-This guide gives you a production-ready Compose file with the **Ferro Labs AI Gateway**, **PostgreSQL** (request logging), **Redis** (response caching), and **Prometheus** (metrics scraping).
+This guide gives you a production-ready Compose file with the **Ferro Labs AI Gateway**, **PostgreSQL** (request logging), and **Prometheus** (metrics scraping). The gateway's built-in `response-cache` plugin is in-memory and runs inside the gateway process — there is no separate cache service to run, and distributed caching is not built in.
 
 ## Prerequisites
 
@@ -30,60 +30,53 @@ ferro-gateway/
 
 ## Gateway configuration
 
-Create `config.yaml` with your provider routes, the PostgreSQL request-logger plugin, and a rate-limit plugin:
+Create `config.yaml` with your routing strategy, targets, and the `request-logger`, `rate-limit`, and `response-cache` plugins. Provider credentials are **not** placed in the config file — they are supplied to the container as environment variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.):
 
 ```yaml title="config.yaml"
-listeners:
-  - address: 0.0.0.0
-    port: 8080
+strategy:
+  mode: fallback
 
-providers:
-  - name: openai
-    type: openai
-    api_key: ${OPENAI_API_KEY}
-    models:
-      - gpt-4o
-      - gpt-4o-mini
+targets:
+  - virtual_key: openai
+    retry:
+      attempts: 3
+      on_status_codes: [429, 502, 503]
+  - virtual_key: anthropic
 
-  - name: anthropic
-    type: anthropic
-    api_key: ${ANTHROPIC_API_KEY}
-    models:
-      - claude-sonnet-4-20250514
-      - claude-haiku-4-20250414
+# Map friendly names to actual model IDs.
+aliases:
+  fast: gpt-4o-mini
+  smart: claude-sonnet-4-20250514
 
 plugins:
   - name: request-logger
-    type: postgres-logger
-    connection_string: postgres://ferro:ferro_secret@postgres:5432/ferro_logs?sslmode=disable
-    log_request_body: true
-    log_response_body: false
+    type: logging
+    stage: before_request
+    enabled: true
+    config:
+      level: info
+      # Persist request metadata to Postgres (the request-logger logs
+      # metadata only — never prompt or response bodies).
+      persist: true
+      backend: postgres
+      dsn: postgres://ferro:ferro_secret@postgres:5432/ferro_logs?sslmode=disable
 
   - name: rate-limit
-    type: rate-limit
-    requests_per_minute: 120
-    burst: 20
+    type: guardrail
+    stage: before_request
+    enabled: true
+    config:
+      requests_per_second: 120
+      burst: 20
 
-  - name: cache
-    type: redis-cache
-    redis_url: redis://redis:6379/0
-    ttl_seconds: 3600
-
-routes:
-  - path: /v1/chat/completions
-    provider: openai
-    model: gpt-4o
-    plugins:
-      - request-logger
-      - rate-limit
-      - cache
-
-  - path: /v1/messages
-    provider: anthropic
-    model: claude-sonnet-4-20250514
-    plugins:
-      - request-logger
-      - rate-limit
+  # In-memory response cache (per-process; not distributed).
+  - name: response-cache
+    type: transform
+    stage: before_request
+    enabled: true
+    config:
+      max_age: 3600
+      max_entries: 1000
 ```
 
 ## Docker Compose file
@@ -101,7 +94,8 @@ services:
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - CONFIG_PATH=/etc/ferro/config.yaml
+      - GATEWAY_CONFIG=/etc/ferro/config.yaml
+      - PORT=8080
     volumes:
       - ./config.yaml:/etc/ferro/config.yaml:ro
     healthcheck:
@@ -112,8 +106,6 @@ services:
       start_period: 5s
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
 
   postgres:
@@ -134,21 +126,6 @@ services:
       timeout: 3s
       retries: 5
 
-  redis:
-    image: redis:7-alpine
-    container_name: ferro-redis
-    restart: unless-stopped
-    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
-    volumes:
-      - redis_data:/data
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-
   prometheus:
     image: prom/prometheus:v2.53.0
     container_name: ferro-prometheus
@@ -164,7 +141,6 @@ services:
 
 volumes:
   postgres_data:
-  redis_data:
   prometheus_data:
 ```
 
@@ -172,9 +148,8 @@ volumes:
 
 | Service    | Mount                            | Purpose                                    |
 |------------|----------------------------------|--------------------------------------------|
-| gateway    | `./config.yaml` (read-only)      | Gateway route and plugin configuration     |
+| gateway    | `./config.yaml` (read-only)      | Gateway strategy, targets, and plugin config |
 | postgres   | `postgres_data` named volume     | Persist request logs across restarts       |
-| redis      | `redis_data` named volume        | Persist cached responses across restarts   |
 | prometheus | `./prometheus.yml` (read-only)   | Prometheus scrape configuration            |
 | prometheus | `prometheus_data` named volume   | Persist metrics data across restarts       |
 

@@ -24,7 +24,7 @@ type: Opaque
 stringData:
   OPENAI_API_KEY: "sk-..."        # ← your key
   ANTHROPIC_API_KEY: "sk-ant-..." # ← your key
-  ADMIN_API_KEY: "admin-..."      # ← random secret for /admin endpoints
+  MASTER_KEY: "admin-..."         # ← random secret for admin/proxy auth (ferrogw init)
 ```
 
 ### ConfigMap
@@ -37,19 +37,9 @@ metadata:
   namespace: default
 data:
   config.yaml: |
-    server:
-      port: 8080
-      admin_api_key: "${ADMIN_API_KEY}"
-
-    providers:
-      - key: openai
-        provider: openai
-        api_key: "${OPENAI_API_KEY}"
-
-      - key: anthropic
-        provider: anthropic
-        api_key: "${ANTHROPIC_API_KEY}"
-
+    # Provider credentials (OPENAI_API_KEY, ANTHROPIC_API_KEY) and the
+    # admin/proxy MASTER_KEY are supplied as environment variables from the
+    # Secret — not in this ConfigMap. The HTTP port comes from the PORT env var.
     strategy:
       mode: fallback
 
@@ -57,12 +47,12 @@ data:
       - virtual_key: openai
         retry:
           attempts: 3
-          retry_on_status: [429, 502, 503, 504]
+          on_status_codes: [429, 502, 503, 504]
       - virtual_key: anthropic
 
     plugins:
       - name: rate-limit
-        type: ratelimit
+        type: guardrail
         stage: before_request
         enabled: true
         config:
@@ -95,8 +85,11 @@ spec:
           image: ghcr.io/ferro-labs/ai-gateway:v1.0.0-rc.1  # ← pin to a release tag
           ports:
             - containerPort: 8080
-          args:
-            - "-config=/etc/ferrogw/config.yaml"
+          env:
+            - name: GATEWAY_CONFIG
+              value: /etc/ferrogw/config.yaml
+            - name: PORT
+              value: "8080"
           envFrom:
             - secretRef:
                 name: ferrogw-secrets

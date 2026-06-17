@@ -1,6 +1,6 @@
 ---
 title: Introduction
-description: "Ferro Labs AI Gateway is an open-source Go LLM proxy that routes traffic across 30 AI providers and 2,500+ models with sub-millisecond overhead. Drop-in OpenAI-compatible API with 8 routing strategies, 11 plugins, and MCP tool-calling."
+description: "Ferro Labs AI Gateway is an open-source Go LLM proxy that routes traffic across 30 AI providers and 2,500+ models with sub-millisecond overhead. Drop-in OpenAI-compatible API with 8 routing strategies, 6 built-in plugins, and MCP tool-calling."
 keywords: [AI gateway, open source AI gateway, LLM proxy, OpenAI compatible, Go LLM proxy, self-hosted LLM gateway, AI middleware, multi-provider AI, LLM routing, AI gateway v1.1.0]
 ---
 
@@ -11,7 +11,7 @@ import TabItem from '@theme/TabItem';
 
 You're calling OpenAI directly. When they go down, your product goes down. When they raise prices, you scramble. When you need to test a new model, you rewrite integration code. When you want observability, you build it yourself.
 
-**Ferro Labs AI Gateway** is a single Go binary that sits in front of all your LLM traffic. It exposes an OpenAI-compatible API, routes requests across 30 providers and 2,500+ models, enforces safety policies with 11 plugins, and emits production observability — without changing your existing client code.
+**Ferro Labs AI Gateway** is a single Go binary that sits in front of all your LLM traffic. It exposes an OpenAI-compatible API, routes requests across 30 providers and 2,500+ models, enforces safety policies with 6 built-in plugins, and emits production observability — without changing your existing client code.
 
 :::tip Ferro Labs Managed — Managed AI Gateway
 Ferro Labs Managed wraps the open-source gateway with multi-tenancy, a dashboard, durable billing, semantic caching, and 5 enterprise security plugins. [Join the early access waitlist →](https://www.ferrolabs.ai/)
@@ -69,7 +69,7 @@ Go's goroutine scheduler, low-GC overhead, and lack of a GIL make it ideal for a
 - [Provider configuration](/guides/providers-config) — Environment variables per provider
 - [Authentication](/guides/auth) — API key configuration
 - [Routing policies](/guides/routing-policies) — All 8 routing strategies with examples
-- [Plugins](/guides/plugins) — All 11 plugins with YAML config
+- [Plugins](/guides/plugins) — 6 built-in + 5 managed plugins with YAML config
 - [MCP integration](/guides/mcp) — Model Context Protocol tool servers
 - [Observability](/guides/observability) — Metrics, logs, health checks
 - [Rate limiting](/guides/rate-limiting) — IP-level and request-level limiting

@@ -51,55 +51,88 @@ func main() {
 
 ## 2. Embedding Ferro as a Library
 
-You can embed the gateway directly into your Go application instead of running it as a standalone process. This is useful for custom orchestration or testing.
+You can embed the gateway engine directly into your Go application instead of running it as a standalone process. This is useful for custom orchestration or testing.
+
+The public `aigateway` package does **not** expose an HTTP server — it gives you a routing engine. You create a `Gateway`, register providers, optionally load plugins, and then call `Route` / `RouteStream` / `Embed` / `GenerateImage` directly. (If you want the full HTTP server with the admin dashboard, run the `ferrogw` binary instead — see [Quickstart](/getting-started/quickstart).)
 
 ```go
 package main
 
 import (
+	"context"
+	"fmt"
 	"log"
-	"os"
-	"os/signal"
-	"syscall"
 
 	gateway "github.com/ferro-labs/ai-gateway"
+	"github.com/ferro-labs/ai-gateway/providers"
+
+	// Built-in plugins are compiled in via blank imports of internal/plugins/*.
+	_ "github.com/ferro-labs/ai-gateway/internal/plugins/wordfilter"
 )
 
 func main() {
-	// Load configuration from a YAML file.
+	// LoadConfig returns *Config; New takes a Config value, so dereference it.
 	cfg, err := gateway.LoadConfig("ferro.yaml")
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
 	}
 
-	// Create a new gateway instance.
-	gw, err := gateway.New(cfg)
+	gw, err := gateway.New(*cfg)
 	if err != nil {
 		log.Fatalf("failed to create gateway: %v", err)
 	}
+	defer gw.Close()
 
-	// Start serving in a goroutine.
-	go func() {
-		if err := gw.Serve(":8080"); err != nil {
-			log.Fatalf("gateway exited: %v", err)
+	// Register every provider whose required environment variables are set
+	// (e.g. OPENAI_API_KEY, ANTHROPIC_API_KEY).
+	for _, entry := range providers.AllProviders() {
+		pcfg := providers.ProviderConfigFromEnv(entry)
+		if pcfg == nil {
+			continue // required env var unset — skip
 		}
-	}()
+		p, err := entry.Build(pcfg)
+		if err != nil {
+			log.Fatalf("provider %s init failed: %v", entry.ID, err)
+		}
+		gw.RegisterProvider(p)
+	}
 
-	log.Println("AI Gateway listening on :8080")
+	// Initialize and register plugins declared in the config file.
+	if err := gw.LoadPlugins(); err != nil {
+		log.Fatalf("failed to load plugins: %v", err)
+	}
 
-	// Wait for interrupt signal to gracefully shut down.
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	// Route a request through the engine.
+	resp, err := gw.Route(context.Background(), providers.Request{
+		Model: "gpt-4o-mini",
+		Messages: []providers.Message{
+			{Role: "user", Content: "Explain the CAP theorem in two sentences."},
+		},
+	})
+	if err != nil {
+		log.Fatalf("route error: %v", err)
+	}
 
-	log.Println("shutting down...")
-	gw.Shutdown()
+	fmt.Println(resp.Choices[0].Message.Content)
 }
 ```
 
+Streaming uses `gw.RouteStream`, which returns a `<-chan providers.StreamChunk` you range over. Call `gw.Close()` once at shutdown to stop the background hook workers and catalog refresher.
+
 ## 3. Writing a Custom Plugin
 
-Plugins implement the `Plugin` interface. Each plugin can hook into the request lifecycle at two points: before the request is forwarded to the provider and after the response is received.
+Plugins implement the `plugin.Plugin` interface from `github.com/ferro-labs/ai-gateway/plugin`:
+
+```go
+type Plugin interface {
+	Name() string
+	Type() PluginType
+	Init(config map[string]interface{}) error
+	Execute(ctx context.Context, pctx *Context) error
+}
+```
+
+A plugin is registered at a lifecycle **stage** (`before_request`, `after_request`, or `on_error`) and is invoked via `Execute` at that stage. The `*plugin.Context` carries the request, the response (on later stages), and a `Metadata` map you can use to pass state between stages of the same request — there is no `SetMeta`/`GetMeta`.
 
 ```go
 package myplugin
@@ -109,50 +142,63 @@ import (
 	"log"
 	"time"
 
-	gateway "github.com/ferro-labs/ai-gateway"
+	"github.com/ferro-labs/ai-gateway/plugin"
 )
 
 // TimingPlugin logs the round-trip duration for every request.
 type TimingPlugin struct{}
 
 // Name returns the plugin identifier used in configuration.
-func (p *TimingPlugin) Name() string {
-	return "timing"
-}
+func (p *TimingPlugin) Name() string { return "timing" }
 
-// BeforeRequest is called before the request is forwarded to the provider.
-// Return a non-nil error to abort the request.
-func (p *TimingPlugin) BeforeRequest(ctx context.Context, req *gateway.Request) error {
-	// Store the start time in the request context.
-	req.SetMeta("timing_start", time.Now())
-	log.Printf("[timing] request to model=%s started", req.Model)
-	return nil
-}
+// Type categorizes the plugin.
+func (p *TimingPlugin) Type() plugin.PluginType { return plugin.TypeLogging }
 
-// AfterResponse is called after the provider responds.
-func (p *TimingPlugin) AfterResponse(ctx context.Context, req *gateway.Request, resp *gateway.Response) error {
-	start, ok := req.GetMeta("timing_start").(time.Time)
+// Init receives the plugin's config block from the gateway configuration.
+func (p *TimingPlugin) Init(config map[string]interface{}) error { return nil }
+
+// Execute runs at whatever stage the plugin is registered for. Stash the start
+// time on pctx.Metadata in the before_request stage and read it back later.
+func (p *TimingPlugin) Execute(ctx context.Context, pctx *plugin.Context) error {
+	if pctx.Response == nil {
+		// before_request stage — record the start time.
+		pctx.Metadata["timing_start"] = time.Now()
+		log.Printf("[timing] request to model=%s started", pctx.Request.Model)
+		return nil
+	}
+
+	// after_request stage — measure elapsed time.
+	start, ok := pctx.Metadata["timing_start"].(time.Time)
 	if !ok {
 		return nil
 	}
-	elapsed := time.Since(start)
 	log.Printf("[timing] model=%s completed in %s (tokens: %d)",
-		req.Model, elapsed, resp.Usage.TotalTokens)
+		pctx.Response.Model, time.Since(start), pctx.Response.Usage.TotalTokens)
 	return nil
 }
 ```
 
-Register the plugin when creating the gateway:
+Register the same instance at both stages programmatically:
 
 ```go
-gw, err := gateway.New(cfg, gateway.WithPlugins(
-	&myplugin.TimingPlugin{},
-))
+p := &myplugin.TimingPlugin{}
+_ = gw.RegisterPlugin(plugin.StageBeforeRequest, p)
+_ = gw.RegisterPlugin(plugin.StageAfterRequest, p)
+```
+
+Alternatively, register a factory in an `init()` so the plugin can be enabled from config by name. Add a blank import of your package to `cmd/ferrogw/main.go` (this is how the built-in plugins are wired in), then list it under `plugins:` in your config and let `gw.LoadPlugins()` construct it:
+
+```go
+func init() {
+	plugin.RegisterFactory("timing", func() plugin.Plugin {
+		return &TimingPlugin{}
+	})
+}
 ```
 
 ## 4. Context Propagation and Trace ID Extraction
 
-The AI Gateway injects a `X-Ferro-Trace-Id` header into every response. Use this to correlate gateway logs with your application traces.
+The AI Gateway injects an `X-Request-ID` header into every response. Use this to correlate gateway logs with your application traces.
 
 ```go
 package main
@@ -176,7 +222,7 @@ func main() {
 		Transport: &traceTransport{
 			base: http.DefaultTransport,
 			onResponse: func(resp *http.Response) {
-				traceID = resp.Header.Get("X-Ferro-Trace-Id")
+				traceID = resp.Header.Get("X-Request-ID")
 			},
 		},
 	}
@@ -224,15 +270,15 @@ Enable the `pprof` endpoint to profile the gateway under load.
 
 ### Enable the pprof endpoint
 
-Add the following to your `ferro.yaml`:
+The `ferrogw` binary mounts the standard `net/http/pprof` handlers on its own server (port `8080` by default) under `/debug/pprof/*` when the `ENABLE_PPROF` environment variable is truthy:
 
-```yaml
-debug:
-  pprof: true
-  pprof_addr: "localhost:6060"
+```bash
+ENABLE_PPROF=1 ferrogw serve
 ```
 
-Or enable it programmatically when embedding:
+The profiling endpoints are then available at `http://localhost:8080/debug/pprof/`.
+
+If you are embedding the engine as a library (section 2), there is no HTTP server, so expose pprof yourself on a separate port using the standard library:
 
 ```go
 import "net/http"

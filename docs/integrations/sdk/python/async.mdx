@@ -115,12 +115,12 @@ asyncio.run(main())
 |----------|--------------|
 | chat.completions | ✅ Full (including streaming) |
 | embeddings | ✅ Full |
-| images | ⏳ Coming soon (uses sync internally) |
-| models | ⏳ Coming soon (uses sync internally) |
-| admin | ⏳ Coming soon (uses sync internally) |
+| images | ✅ Full |
+| models | ✅ Full |
+| admin | ✅ Full |
 
 :::info
-Full async coverage for images, models, and admin is planned for v0.2.0. In the meantime, these namespaces work but use synchronous HTTP under the hood.
+`AsyncFerroClient` exposes fully native async resources across every namespace — `chat`, `embeddings`, `images`, `models`, and `admin` — all backed by `httpx.AsyncClient`. `await` every call and stream as shown above.
 :::
 
 ## Next steps

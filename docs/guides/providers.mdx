@@ -28,11 +28,11 @@ The gateway supports 30 AI providers. A provider becomes active when its require
 | **Ollama Cloud** | `ollama-cloud` | `OLLAMA_API_KEY` |
 | **AWS Bedrock** | `bedrock` | `AWS_REGION` or `AWS_ACCESS_KEY_ID` |
 | **Replicate** | `replicate` | `REPLICATE_API_TOKEN` |
-| **Vertex AI** | `vertex-ai` | `VERTEX_AI_PROJECT_ID` |
+| **Vertex AI** | `vertex-ai` | `VERTEX_AI_PROJECT_ID` + `VERTEX_AI_REGION` + (`VERTEX_AI_API_KEY` or `VERTEX_AI_SERVICE_ACCOUNT_JSON`) |
 | **Hugging Face** | `hugging-face` | `HUGGING_FACE_API_KEY` |
 | **Cerebras** | `cerebras` | `CEREBRAS_API_KEY` |
 | **NVIDIA NIM** | `nvidia-nim` | `NVIDIA_NIM_API_KEY` |
-| **Cloudflare Workers AI** | `cloudflare` | `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN` |
+| **Cloudflare Workers AI** | `cloudflare` | `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_KEY` |
 | **Databricks** | `databricks` | `DATABRICKS_HOST` + `DATABRICKS_TOKEN` |
 | **Novita AI** | `novita` | `NOVITA_API_KEY` |
 | **Qwen (Alibaba)** | `qwen` | `QWEN_API_KEY` |
@@ -45,8 +45,8 @@ The gateway supports 30 AI providers. A provider becomes active when its require
 
 All providers support chat completions and streaming. Capability support varies by provider:
 
-- **Embeddings** — OpenAI, Cohere, Mistral, Azure OpenAI, Hugging Face, Cloudflare Workers AI
-- **Image generation** — OpenAI (DALL·E), Replicate, Fireworks
+- **Embeddings** — AWS Bedrock, Cloudflare Workers AI, Cohere, Databricks, Fireworks AI, Google Gemini, Hugging Face, Mistral, Novita AI, OpenAI, Together AI
+- **Image generation** — OpenAI (DALL·E), Hugging Face, Replicate
 - **Local / self-hosted** — Ollama
 - **Managed cloud inference** — AWS Bedrock, Vertex AI, Azure Foundry, Databricks
 - **High-speed inference** — Cerebras, SambaNova, Groq

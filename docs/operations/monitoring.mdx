@@ -105,6 +105,6 @@ Filter gateway logs by `trace_id` in your aggregator to correlate all events for
 ## Resiliency controls
 
 - **Circuit breakers** — automatically exclude failing providers; see the `gateway_circuit_breaker_state` metric
-- **Retries** — configurable per target with status-code filtering (`retry_on_status`)
+- **Retries** — configurable per target with status-code filtering (`on_status_codes`)
 - **Fallback strategy** — automatically promotes to the next target when primary fails
 - **Health endpoint** — integrate into your load balancer's health check for automatic traffic shifting
