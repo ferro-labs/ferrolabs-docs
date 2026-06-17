@@ -48,6 +48,9 @@ jobs:
       - name: TypeScript typecheck
         run: pnpm typecheck
 
+      - name: Check doc frontmatter (descriptions)
+        run: pnpm check:frontmatter
+
       - name: Build docs
         run: pnpm build
         env:

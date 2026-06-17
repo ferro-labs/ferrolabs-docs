@@ -4,17 +4,14 @@
  * work well for content-centric websites.
  */
 
+/* Roobert is a single variable font (one file, full weight axis). Declaring it
+   once with the real 100–900 range lets the browser reach true 400/500/600/700
+   instead of synthesizing fake bold from a 400-only face. */
 @font-face {
   font-family: 'Roobert';
-  src: url('/fonts/roobert-proportional-vf.woff2') format('woff2');
-  font-weight: 400;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Roobert';
-  src: url('/fonts/roobert-proportional-vf.woff2') format('woff2');
-  font-weight: 600;
+  src: url('/fonts/roobert-proportional-vf.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-style: normal;
   font-display: swap;
 }
 
@@ -33,8 +30,12 @@
   --ifm-background-surface-color: #ffffff;
   --ifm-font-color-base: #101828;
   --ifm-heading-color: #0f172a;
-  --ifm-font-size-base: 15px;
+  /* 16px base matches Stripe/Vercel/Anthropic docs; 15px read slightly cramped. */
+  --ifm-font-size-base: 16px;
   --ifm-line-height-base: 1.62;
+  /* Optimal reading measure for the prose column (~70ch). Tables, code blocks
+     and admonitions opt out below so they keep full width. */
+  --ferro-prose-measure: 46rem;
   --ifm-heading-line-height: 1.25;
   --ifm-h1-font-size: 3rem;
   --ifm-h2-font-size: 2.1rem;
@@ -43,6 +44,13 @@
   --ifm-navbar-height: 4.5rem;
   --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
   --subnav-height: 42px;
+}
+
+html,
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 .main-wrapper {
@@ -141,6 +149,19 @@
   line-height: 1.62;
 }
 
+/* Constrain prose to a comfortable reading measure (~70ch) like Stripe/Vercel,
+   while tables, code blocks, admonitions and diagrams keep the full column. */
+.theme-doc-markdown > p,
+.theme-doc-markdown > ul,
+.theme-doc-markdown > ol,
+.theme-doc-markdown > h1,
+.theme-doc-markdown > h2,
+.theme-doc-markdown > h3,
+.theme-doc-markdown > h4,
+.theme-doc-markdown > blockquote {
+  max-width: var(--ferro-prose-measure);
+}
+
 .theme-doc-markdown h1 {
   letter-spacing: -0.02em;
   margin-bottom: 1rem;
@@ -157,7 +178,8 @@
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: #000000;
+  /* muted slate label (like leading docs) rather than harsh pure black */
+  color: #64748b;
   padding: 0.65rem 0.75rem 0.25rem;
   margin-top: 0.75rem;
   user-select: none;
@@ -170,7 +192,7 @@
 }
 
 [data-theme='dark'] .sidebar-divider {
-  color: #ffffff;
+  color: #94a3b8;
 }
 
 /* ── Chevron on sidebar items that have sub-pages ──────────────── */

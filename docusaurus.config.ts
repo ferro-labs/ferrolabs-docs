@@ -4,6 +4,58 @@ import type * as Preset from '@docusaurus/preset-classic';
 
 // This runs in Node.js - Don't use client-side code here (browser APIs, JSX...)
 
+const SITE_URL = 'https://docs.ferrolabs.ai';
+
+// Algolia DocSearch keys are injected at build time. Warn loudly if a
+// production build is missing them so search never ships silently broken.
+const algoliaAppId = process.env.ALGOLIA_APP_ID ?? 'YOUR_APP_ID';
+const algoliaApiKey = process.env.ALGOLIA_SEARCH_KEY ?? 'YOUR_SEARCH_API_KEY';
+const algoliaIndexName = process.env.ALGOLIA_INDEX_NAME ?? 'ferrolabs';
+if (process.env.NODE_ENV === 'production' && algoliaAppId === 'YOUR_APP_ID') {
+  console.warn(
+    '\n⚠️  [ferrolabs-docs] ALGOLIA_APP_ID / ALGOLIA_SEARCH_KEY are not set — ' +
+      'site search will be non-functional in this production build.\n',
+  );
+}
+
+// Site-wide structured data (JSON-LD). Helps Google render rich results and
+// gives LLM crawlers a clean machine-readable description of the product.
+const structuredData = {
+  '@context': 'https://schema.org',
+  '@graph': [
+    {
+      '@type': 'Organization',
+      '@id': `${SITE_URL}/#organization`,
+      name: 'Ferro Labs',
+      url: 'https://www.ferrolabs.ai',
+      logo: `${SITE_URL}/assets/branding/logo-light.png`,
+      sameAs: [
+        'https://github.com/ferro-labs/ai-gateway',
+        'https://x.com/ferroLabsAI',
+      ],
+    },
+    {
+      '@type': 'SoftwareApplication',
+      '@id': `${SITE_URL}/#software`,
+      name: 'Ferro Labs AI Gateway',
+      applicationCategory: 'DeveloperApplication',
+      operatingSystem: 'Linux, macOS, Windows, Docker, Kubernetes',
+      description:
+        'Open-source, high-performance AI gateway written in Go. Routes LLM requests across 29 providers and 2,500+ models through a single OpenAI-compatible API, with 11 plugins and 8 routing strategies.',
+      url: SITE_URL,
+      offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+      publisher: { '@id': `${SITE_URL}/#organization` },
+    },
+    {
+      '@type': 'WebSite',
+      '@id': `${SITE_URL}/#website`,
+      url: SITE_URL,
+      name: 'Ferro Labs AI Gateway Docs',
+      publisher: { '@id': `${SITE_URL}/#organization` },
+    },
+  ],
+};
+
 const config: Config = {
   title: 'Ferro Labs AI Gateway',
   tagline: 'One gateway for every AI model — 29 providers, 2,500+ models, 11 plugins, 8 routing strategies.',
@@ -26,6 +78,7 @@ const config: Config = {
   projectName: 'ai-gateway',
 
   onBrokenLinks: 'throw',
+  onBrokenAnchors: 'throw',
 
   // Explicit trailing slash prevents Cloudflare 301 redirect loops and
   // ensures canonical tags match the crawled URLs exactly.
@@ -41,7 +94,32 @@ const config: Config = {
 
   markdown: {
     mermaid: true,
+    // v4 location for broken-markdown-link strictness (top-level key is deprecated).
+    hooks: {
+      onBrokenMarkdownLinks: 'throw',
+    },
   },
+
+  headTags: [
+    // Preload the variable font so it paints with the first frame — removes the
+    // flash-of-unstyled-text and the layout shift it caused (better LCP/CLS).
+    {
+      tagName: 'link',
+      attributes: {
+        rel: 'preload',
+        href: '/fonts/roobert-proportional-vf.woff2',
+        as: 'font',
+        type: 'font/woff2',
+        crossorigin: 'anonymous',
+      },
+    },
+    // Site-wide JSON-LD structured data.
+    {
+      tagName: 'script',
+      attributes: { type: 'application/ld+json' },
+      innerHTML: JSON.stringify(structuredData),
+    },
+  ],
 
   themes: [
     '@docusaurus/theme-mermaid',
@@ -78,6 +156,10 @@ const config: Config = {
         docs: {
           sidebarPath: './sidebars.ts',
           routeBasePath: '/',
+          // "Edit this page" + visible freshness — trust signal for readers and a
+          // recency signal for search engines.
+          editUrl: 'https://github.com/ferro-labs/ferrolabs-docs/edit/main/',
+          showLastUpdateTime: true,
         },
         blog: false,
         theme: {
@@ -92,10 +174,10 @@ const config: Config = {
   ],
 
   themeConfig: {
-    image: 'assets/branding/logo-light.png',
+    image: 'assets/branding/og-card.png',
     titleDelimiter: '|',
     metadata: [
-      { name: 'keywords', content: 'AI gateway, LLM proxy, OpenAI compatible, open source AI gateway, Go LLM proxy, LLM routing, multi-provider AI, self-hosted LLM gateway, AI middleware, Ferro Labs Managed, AI gateway v1.0.0' },
+      { name: 'keywords', content: 'AI gateway, LLM proxy, OpenAI compatible API, open source AI gateway, Go LLM proxy, LLM routing, multi-provider AI, self-hosted LLM gateway, AI middleware, LLM load balancing, semantic caching, Ferro Labs Managed' },
       { property: 'og:type', content: 'website' },
       { property: 'og:site_name', content: 'Ferro Labs AI Gateway Docs' },
       { name: 'twitter:card', content: 'summary_large_image' },
@@ -161,9 +243,9 @@ const config: Config = {
       style: 'dark',
     },
     algolia: {
-      appId: process.env.ALGOLIA_APP_ID ?? 'YOUR_APP_ID',
-      apiKey: process.env.ALGOLIA_SEARCH_KEY ?? 'YOUR_SEARCH_API_KEY', // public, read-only Search API key
-      indexName: process.env.ALGOLIA_INDEX_NAME ?? 'ferrolabs',
+      appId: algoliaAppId,
+      apiKey: algoliaApiKey, // public, read-only Search API key
+      indexName: algoliaIndexName,
       // false = no docusaurus_tag facet filter; correct for single-version docs
       contextualSearch: false,
       searchPagePath: 'search',

@@ -1,0 +1,72 @@
+.wrapper {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 5rem 1.5rem 6rem;
+  text-align: center;
+}
+
+.code {
+  font-size: 5rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  margin: 0 0 0.5rem;
+  background: linear-gradient(135deg, var(--ifm-color-primary) 0%, #0891b2 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.title {
+  font-size: 2rem;
+  letter-spacing: -0.02em;
+  margin: 0 0 0.75rem;
+}
+
+.subtitle {
+  font-size: 1.05rem;
+  color: var(--ifm-color-emphasis-700);
+  max-width: 36rem;
+  margin: 0 auto 2.5rem;
+  line-height: 1.6;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.85rem;
+  text-align: left;
+  margin-bottom: 2.5rem;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 1rem 1.15rem;
+  border: 1px solid var(--ifm-toc-border-color);
+  border-radius: 12px;
+  background: var(--ifm-background-surface-color);
+  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.card:hover {
+  text-decoration: none;
+  border-color: var(--ifm-color-primary);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
+}
+
+.cardLabel {
+  font-weight: 600;
+  color: var(--ifm-heading-color);
+}
+
+.cardDesc {
+  font-size: 0.875rem;
+  color: var(--ifm-color-emphasis-600);
+}
+
+.homeLink {
+  font-weight: 600;
+}
