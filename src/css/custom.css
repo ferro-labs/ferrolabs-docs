@@ -248,6 +248,35 @@ body {
     padding-right: 0;
   }
 
+  /* ── Centered primary nav ──────────────────────────────────────────
+     Pin the brand left and the GitHub/theme/search group right (both out
+     of flow), so the primary links sit centered and balanced in the bar. */
+  .navbar__inner {
+    position: relative;
+  }
+
+  .navbar__brand {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    margin: 0;
+  }
+
+  .navbar__items:not(.navbar__items--right) {
+    width: 100%;
+    justify-content: center;
+    gap: 0.5rem;
+  }
+
+  .navbar__items--right {
+    position: absolute;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    padding-right: 0;
+  }
+
   .theme-doc-sidebar-container {
     background-color: var(--ifm-background-surface-color);
     padding-top: 0;
