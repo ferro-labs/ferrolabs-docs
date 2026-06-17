@@ -1,0 +1,77 @@
+---
+title: Provider Capability Matrix
+description: Provider capability matrix for the Ferro Labs AI Gateway — chat, streaming, embeddings, image generation, model discovery, and proxy support across 30 providers.
+keywords: [provider capabilities, capability matrix, embeddings, image generation, model discovery, streaming, passthrough proxy, AI gateway providers]
+---
+
+The gateway exposes a single OpenAI-compatible surface, but not every provider implements every capability. This page is a **provider × capability matrix** generated from the gateway's built-in provider registry (`providers/providers_list.go`), so it always reflects exactly what each provider actually advertises.
+
+## What the capabilities mean
+
+- **Chat** — chat completions via `POST /v1/chat/completions`. Every provider supports this.
+- **Stream** — incremental token streaming with `"stream": true` (server-sent events).
+- **Embed** — vector embeddings for retrieval, search, and clustering.
+- **Image** — image generation from a text prompt.
+- **Discovery** — live model discovery, so `GET /v1/models` reflects the provider's current catalog rather than only the static built-in catalog.
+- **Proxy** — transparent passthrough of unhandled `/v1/*` endpoints straight to the provider, preserving provider-native request and response shapes.
+
+Each row corresponds to a provider's virtual key. A ✅ means the provider declares that capability in the registry; a — means it does not.
+
+## The matrix
+
+| Provider | Virtual Key | Chat | Stream | Embed | Image | Discovery | Proxy |
+|---|---|:--:|:--:|:--:|:--:|:--:|:--:|
+| **AI21** | `ai21` | ✅ | ✅ | — | — | — | ✅ |
+| **Anthropic** | `anthropic` | ✅ | ✅ | — | — | — | ✅ |
+| **Azure Foundry** | `azure-foundry` | ✅ | ✅ | — | — | — | ✅ |
+| **Azure OpenAI** | `azure-openai` | ✅ | ✅ | — | — | — | ✅ |
+| **AWS Bedrock** | `bedrock` | ✅ | ✅ | ✅ | — | — | ✅ |
+| **Cerebras** | `cerebras` | ✅ | ✅ | — | — | ✅ | ✅ |
+| **Cloudflare Workers AI** | `cloudflare` | ✅ | ✅ | ✅ | — | — | ✅ |
+| **Cohere** | `cohere` | ✅ | ✅ | ✅ | — | — | ✅ |
+| **Databricks** | `databricks` | ✅ | ✅ | ✅ | — | — | ✅ |
+| **DeepInfra** | `deepinfra` | ✅ | ✅ | — | — | — | ✅ |
+| **DeepSeek** | `deepseek` | ✅ | ✅ | — | — | — | ✅ |
+| **Fireworks AI** | `fireworks` | ✅ | ✅ | ✅ | — | ✅ | ✅ |
+| **Google Gemini** | `gemini` | ✅ | ✅ | ✅ | — | — | ✅ |
+| **Groq** | `groq` | ✅ | ✅ | — | — | — | ✅ |
+| **Hugging Face** | `hugging-face` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Mistral** | `mistral` | ✅ | ✅ | ✅ | — | — | ✅ |
+| **Moonshot AI** | `moonshot` | ✅ | ✅ | — | — | — | ✅ |
+| **Novita AI** | `novita` | ✅ | ✅ | ✅ | — | ✅ | ✅ |
+| **NVIDIA NIM** | `nvidia-nim` | ✅ | ✅ | — | — | — | ✅ |
+| **Ollama** | `ollama` | ✅ | ✅ | — | — | — | ✅ |
+| **Ollama Cloud** | `ollama-cloud` | ✅ | ✅ | — | — | ✅ | — |
+| **OpenAI** | `openai` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **OpenRouter** | `openrouter` | ✅ | ✅ | — | — | ✅ | ✅ |
+| **Perplexity** | `perplexity` | ✅ | ✅ | — | — | ✅ | ✅ |
+| **Qwen (Alibaba)** | `qwen` | ✅ | ✅ | — | — | — | ✅ |
+| **Replicate** | `replicate` | ✅ | — | — | ✅ | — | ✅ |
+| **SambaNova** | `sambanova` | ✅ | ✅ | — | — | — | ✅ |
+| **Together AI** | `together` | ✅ | ✅ | ✅ | — | — | ✅ |
+| **Vertex AI** | `vertex-ai` | ✅ | ✅ | ✅ | — | — | ✅ |
+| **xAI (Grok)** | `xai` | ✅ | ✅ | — | — | ✅ | ✅ |
+
+## Capability totals
+
+Across the 30 built-in providers:
+
+- **Chat** — 30 providers
+- **Stream** — 29 providers (every provider except Replicate) <!-- drift-ok -->
+- **Embed** — 11 providers <!-- drift-ok -->
+- **Image** — 3 providers (Hugging Face, OpenAI, Replicate) <!-- drift-ok -->
+- **Discovery** — 9 providers <!-- drift-ok -->
+- **Proxy** — 29 providers (every provider except Ollama Cloud) <!-- drift-ok -->
+
+## Notes
+
+- **Chat is universal.** All 30 providers implement chat completions, so the gateway can route any request to any of them under your chosen strategy.
+- **Streaming is near-universal.** Only Replicate does not stream, because its text and image models run as polled predictions rather than token streams.
+- **Discovery vs. the static catalog.** Providers without Discovery still return models — they fall back to the built-in model catalog used for cost estimation and `GET /v1/models` — but they will not reflect newly released provider models until the catalog is updated.
+- **Proxy reach.** Almost every provider allows passthrough of provider-native endpoints; Ollama Cloud is the exception and is reached through the gateway's normalized chat and discovery paths only.
+
+## Next steps
+
+- [Providers](/guides/providers) — the full list of providers and required environment variables.
+- [Provider configuration](/guides/providers-config) — environment variables and setup details for each provider.
+- [Routing policies](/guides/routing-policies) — how to route and fail over across providers.

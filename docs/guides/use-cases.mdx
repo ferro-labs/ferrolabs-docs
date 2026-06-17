@@ -20,7 +20,8 @@ targets:
   - virtual_key: openai
     retry:
       attempts: 3
-      retry_on_status: [429, 502, 503, 504]
+      on_status_codes: [429, 502, 503]
+      initial_backoff_ms: 100
     circuit_breaker:
       failure_threshold: 5
       success_threshold: 2
@@ -28,7 +29,7 @@ targets:
   - virtual_key: anthropic
     retry:
       attempts: 2
-      retry_on_status: [429, 502, 503]
+      on_status_codes: [429, 502, 503]
     circuit_breaker:
       failure_threshold: 3
       success_threshold: 2
@@ -137,18 +138,18 @@ curl -s http://localhost:8080/v1/chat/completions \
   }'
 ```
 
-The `label` field (`control` or `challenger`) is emitted in every `gateway.request.completed` log event and stored in the request logger. Query your Postgres logs to compare response quality, latency, and cost per variant:
+The variant `label` (`control` or `challenger`) is currently visible only in the gateway's DEBUG logs — it is not emitted to events or stored as a queryable log column. The request logger still persists latency and cost for every request, which you can aggregate in Postgres:
 
 ```sql
 SELECT
-  metadata->>'ab_variant' AS variant,
-  COUNT(*)                AS requests,
-  AVG(latency_ms)         AS avg_latency,
-  AVG(total_cost_usd)     AS avg_cost
+  COUNT(*)            AS requests,
+  AVG(latency_ms)     AS avg_latency,
+  AVG(total_cost_usd) AS avg_cost
 FROM request_logs
-WHERE created_at > NOW() - INTERVAL '24 hours'
-GROUP BY variant;
+WHERE created_at > NOW() - INTERVAL '24 hours';
 ```
+
+To attribute results per variant, read the variant `label` from the gateway's DEBUG logs.
 
 ---
 

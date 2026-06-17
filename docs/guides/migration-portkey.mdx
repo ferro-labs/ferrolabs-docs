@@ -67,7 +67,7 @@ targets:
   - virtual_key: openai
     retry:
       attempts: 3
-      retry_on_status: [429, 502, 503, 504]
+      on_status_codes: [429, 502, 503, 504]
   - virtual_key: anthropic
     retry:
       attempts: 2
@@ -125,15 +125,15 @@ targets:
 ### Conditional routing by model
 
 ```yaml
-# Route by model prefix (Portkey calls this "router" in their docs)
+# Route by exact model match (Portkey calls this "router" in their docs)
 strategy:
   mode: conditional
   conditions:
-    - key: model_prefix
-      value: gpt
+    - key: model
+      value: gpt-4o
       target_key: openai
-    - key: model_prefix
-      value: claude
+    - key: model
+      value: claude-3-5-sonnet-20241022
       target_key: anthropic
 
 targets:

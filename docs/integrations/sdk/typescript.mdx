@@ -1,0 +1,494 @@
+---
+title: "TypeScript SDK Reference"
+description: "Full API reference for the @ferro-labs-ai/sdk TypeScript SDK: FerroClient options, chat completions, streaming, embeddings, images, models, admin, and errors."
+keywords: [ferro labs typescript sdk, "@ferro-labs-ai/sdk", FerroClient, AI gateway TypeScript, OpenAI compatible TypeScript, Node LLM client]
+---
+
+# TypeScript SDK Reference
+
+The native TypeScript SDK for the Ferro Labs AI Gateway. A single OpenAI-compatible client routes chat, embeddings, and image requests across 30 providers, with first-class types, streaming, and an admin API.
+
+- **Package:** `@ferro-labs-ai/sdk` (v0.2.0)
+- **Runtime:** Node.js 18+ (uses the global `fetch`)
+- **Modules:** ESM and CommonJS, fully typed
+
+## Installation
+
+```bash
+npm install @ferro-labs-ai/sdk
+```
+
+## Authentication
+
+The client reads credentials from environment variables or constructor options:
+
+```bash
+export FERRO_API_KEY=sk-ferro-...
+export FERRO_BASE_URL=http://localhost:8080   # default
+```
+
+Or pass them directly:
+
+```ts
+import { FerroClient } from "@ferro-labs-ai/sdk";
+
+const client = new FerroClient({
+  apiKey: "sk-ferro-...",
+  baseUrl: "https://gateway.example.com",
+});
+```
+
+:::tip
+If `apiKey` is omitted, the client checks `FERRO_API_KEY` and then falls back to `OPENAI_API_KEY`, so existing OpenAI key setups work out of the box. When no key is found, the constructor throws `FerroAuthError`.
+:::
+
+## FerroClient
+
+```ts
+import { FerroClient } from "@ferro-labs-ai/sdk";
+
+const client = new FerroClient();
+```
+
+### Constructor options
+
+`new FerroClient(options?: FerroClientOptions)`
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `apiKey` | `string` | — | API key. Falls back to `FERRO_API_KEY`, then `OPENAI_API_KEY` |
+| `baseUrl` | `string` | `"http://localhost:8080"` | Gateway URL. Falls back to `FERRO_BASE_URL`. Trailing slashes are trimmed |
+| `timeout` | `number` | `120000` | Request timeout in **milliseconds** |
+| `maxRetries` | `number` | `2` | Retries for connection errors and timeouts (must be a non-negative integer) |
+| `defaultHeaders` | `Record<string, string>` | — | Extra headers merged into every request |
+| `fetch` | `typeof fetch` | `globalThis.fetch` | Custom fetch implementation |
+| `logLevel` | `"debug" \| "info" \| "warn" \| "error" \| "none"` | `"none"` | SDK debug logging. Also set via `FERRO_LOG_LEVEL` |
+
+The client exposes the resource groups `client.chat.completions`, `client.embeddings`, `client.images`, `client.models`, and `client.admin`, plus a read-only `client.version` string.
+
+## client.chat.completions.create()
+
+Create a chat completion. The method is overloaded: pass `stream: true` to receive a `Stream<ChatCompletionChunk>`; otherwise it resolves to a `ChatCompletion`.
+
+```ts
+const response = await client.chat.completions.create({
+  model: "gpt-4o",
+  messages: [{ role: "user", content: "Hello from Ferro Labs!" }],
+});
+
+console.log(response.choices[0].message.content);
+console.log(`Provider: ${response.provider}`);
+console.log(`Cost: $${response.usage?.cost_usd}`);
+console.log(`Trace ID: ${response.trace_id}`);
+```
+
+The response carries Ferro-specific fields — `provider`, `trace_id`, `latency_ms`, and `usage.cost_usd` / `usage.cache_hit` — alongside the standard OpenAI response shape.
+
+### Parameters (`ChatCompletionCreateParams`)
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `model` | `string` | Yes | Model name (e.g. `"gpt-4o"`, `"claude-3-5-sonnet-20241022"`) |
+| `messages` | `ChatMessageParam[]` | Yes | Conversation messages |
+| `stream` | `boolean` | No | If `true`, returns `Stream<ChatCompletionChunk>` |
+| `temperature` | `number` | No | Sampling temperature |
+| `max_tokens` | `number` | No | Maximum tokens in the response |
+| `max_completion_tokens` | `number` | No | Maximum completion tokens |
+| `top_p` | `number` | No | Nucleus sampling parameter |
+| `n` | `number` | No | Number of completions |
+| `seed` | `number` | No | Deterministic sampling seed |
+| `frequency_penalty` | `number` | No | Frequency penalty |
+| `presence_penalty` | `number` | No | Presence penalty |
+| `stop` | `string \| string[]` | No | Stop sequences |
+| `tools` | `Tool[]` | No | Tool/function definitions |
+| `tool_choice` | `string \| ToolChoice` | No | Tool selection strategy |
+| `response_format` | `ResponseFormat` | No | `text`, `json_object`, or `json_schema` |
+| `logprobs` | `boolean` | No | Return log probabilities |
+| `top_logprobs` | `number` | No | Number of top log probabilities |
+| `logit_bias` | `Record<string, number>` | No | Token bias map |
+| `user` | `string` | No | End-user identifier |
+| `template_id` | `string` | No | **Ferro-specific (Managed only):** server-side prompt template ID |
+| `template_variables` | `Record<string, unknown>` | No | **Ferro-specific (Managed only):** template variables |
+| `route_tag` | `string` | No | **Ferro-specific:** override routing strategy |
+
+### Returns
+
+- **Non-streaming:** `Promise<ChatCompletion>`
+- **Streaming:** `Promise<Stream<ChatCompletionChunk>>`
+
+### Streaming
+
+`Stream<T>` implements `AsyncIterable<T>`, so you consume it with `for await`. Call `.abort()` to cancel the underlying request.
+
+```ts
+const stream = await client.chat.completions.create({
+  model: "claude-3-5-sonnet-20241022",
+  messages: [{ role: "user", content: "Write a haiku about AI gateways" }],
+  stream: true,
+});
+
+for await (const chunk of stream) {
+  process.stdout.write(chunk.choices[0]?.delta.content ?? "");
+}
+```
+
+```ts
+// Cancel an in-flight stream
+const stream = await client.chat.completions.create({
+  model: "gpt-4o",
+  messages: [{ role: "user", content: "Tell me a long story" }],
+  stream: true,
+});
+
+setTimeout(() => stream.abort(), 1000);
+```
+
+### Tool calling
+
+```ts
+const response = await client.chat.completions.create({
+  model: "gpt-4o",
+  messages: [{ role: "user", content: "What is the weather in Tokyo?" }],
+  tools: [
+    {
+      type: "function",
+      function: {
+        name: "get_weather",
+        description: "Get the current weather for a city",
+        parameters: {
+          type: "object",
+          properties: { city: { type: "string" } },
+          required: ["city"],
+        },
+      },
+    },
+  ],
+  tool_choice: "auto",
+});
+
+const toolCalls = response.choices[0].message.tool_calls;
+```
+
+### Ferro-specific routing
+
+```ts
+const response = await client.chat.completions.create({
+  model: "gpt-4o",
+  messages: [{ role: "user", content: "Summarize this document" }],
+  template_id: "summarizer-v2",            // server-side template (Managed only)
+  template_variables: { tone: "formal" },  // template variables (Managed only)
+  route_tag: "premium",                     // override routing strategy
+});
+```
+
+:::note
+`template_id` / `template_variables` require server-side [prompt templates](/guides/prompt-templates), a **Ferro Labs Managed** feature. They are ignored by the open-source gateway.
+:::
+
+## Response types
+
+```ts
+interface ChatCompletion {
+  id: string;
+  object: string;
+  created: number;
+  model: string;
+  choices: Choice[];
+  usage: Usage | null;
+  trace_id?: string;    // Ferro-specific
+  provider?: string;    // Ferro-specific
+  latency_ms?: number;  // Ferro-specific
+}
+
+interface Choice {
+  index: number;
+  message: ChatMessage;
+  finish_reason: string;
+}
+
+interface ChatMessage {
+  role: string;
+  content: string | null;
+  tool_calls?: ToolCall[];
+}
+
+interface Usage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cost_usd?: number;    // Ferro-specific
+  cache_hit?: boolean;  // Ferro-specific
+  provider?: string;    // Ferro-specific
+}
+```
+
+For streaming, each chunk is a `ChatCompletionChunk` whose `choices[i].delta` is a `StreamDelta` (`role?`, `content?`, `tool_calls?`).
+
+## client.embeddings.create()
+
+Generate embeddings for one or more inputs.
+
+```ts
+const response = await client.embeddings.create({
+  model: "text-embedding-3-small",
+  input: ["Ferro routes LLM requests", "across many providers"],
+});
+
+for (const item of response.data) {
+  console.log(`Dimension: ${item.embedding.length}`);
+}
+```
+
+### Parameters (`EmbeddingCreateParams`)
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `model` | `string` | Yes | Embedding model name |
+| `input` | `string \| string[]` | Yes | Text to embed (single string or batch) |
+| `encoding_format` | `"float" \| "base64"` | No | Output encoding format |
+| `dimensions` | `number` | No | Desired embedding dimensions (model-dependent) |
+| `user` | `string` | No | End-user identifier |
+
+**Returns:** `Promise<EmbeddingResponse>` — `{ object, data: EmbeddingData[], model, usage }`, where each `EmbeddingData` is `{ index, embedding: number[], object }`.
+
+## client.images.generate()
+
+Generate images from a text prompt.
+
+```ts
+const response = await client.images.generate({
+  model: "dall-e-3",
+  prompt: "A futuristic AI gateway routing requests across the cosmos",
+  size: "1024x1024",
+});
+
+console.log(response.data[0].url);
+```
+
+### Parameters (`ImageGenerateParams`)
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `model` | `string` | Yes | Image generation model name |
+| `prompt` | `string` | Yes | Description of the desired image |
+| `n` | `number` | No | Number of images to generate |
+| `size` | `string` | No | Image size (e.g. `"1024x1024"`) |
+| `quality` | `"standard" \| "hd"` | No | Image quality |
+| `response_format` | `"url" \| "b64_json"` | No | Response format |
+| `style` | `string` | No | Image style |
+| `user` | `string` | No | End-user identifier |
+
+**Returns:** `Promise<ImageResponse>` — `{ created, data: ImageData[] }`, where each `ImageData` is `{ url?, b64_json?, revised_prompt? }`.
+
+## client.models
+
+Discover the models available on the gateway.
+
+```ts
+// List models from a specific provider
+const models = await client.models.list({ provider: "anthropic" });
+for (const m of models) {
+  console.log(`${m.id} — ${m.context_window} tokens`);
+}
+
+// Retrieve a single model
+const model = await client.models.retrieve("gpt-4o");
+
+// Search the catalog
+const results = await client.models.search("embedding");
+```
+
+| Method | Signature | Returns |
+|--------|-----------|---------|
+| `list` | `list(params?: ModelListParams)` | `Promise<ModelInfo[]>` |
+| `retrieve` | `retrieve(modelId: string)` | `Promise<ModelInfo>` |
+| `search` | `search(query: string)` | `Promise<ModelInfo[]>` |
+
+`ModelListParams` accepts optional `provider` and `capability` filters. `ModelInfo` exposes `id`, `object`, `provider`, `context_window`, `max_output_tokens`, `capabilities`, `status`, and per-token pricing fields.
+
+## client.admin
+
+Administrative API for managing keys, configuration, logs, providers, and plugins.
+
+:::caution
+Admin endpoints require an API key with admin-level scopes.
+:::
+
+### admin.keys
+
+```ts
+// Create a key — the plaintext `key` is only returned on creation
+const created = await client.admin.keys.create({
+  name: "production-backend",
+  scopes: ["chat", "embeddings"],
+  expires_at: "2026-12-31T23:59:59Z",
+});
+console.log(created.key);
+
+const keys = await client.admin.keys.list();
+const key = await client.admin.keys.retrieve("key_abc123");
+await client.admin.keys.update("key_abc123", { name: "renamed-key", active: false });
+const rotated = await client.admin.keys.rotate("key_abc123");
+await client.admin.keys.revoke("key_abc123");
+await client.admin.keys.delete("key_abc123");
+const usage = await client.admin.keys.usage({ limit: 10, sort: "usage", active: true });
+```
+
+| Method | Signature | Returns |
+|--------|-----------|---------|
+| `list` | `list()` | `Promise<APIKey[]>` |
+| `retrieve` | `retrieve(id: string)` | `Promise<APIKey>` |
+| `create` | `create(params: KeyCreateParams)` | `Promise<CreatedAPIKey>` |
+| `update` | `update(id: string, params: KeyUpdateParams)` | `Promise<APIKey>` |
+| `delete` | `delete(id: string)` | `Promise<void>` |
+| `revoke` | `revoke(id: string)` | `Promise<void>` |
+| `rotate` | `rotate(id: string)` | `Promise<CreatedAPIKey>` |
+| `usage` | `usage(params?: KeyUsageParams)` | `Promise<Record<string, unknown>>` |
+
+### admin.config
+
+```ts
+const config = await client.admin.config.get();
+await client.admin.config.update({ routing: { strategy: "latency" } });
+const history = await client.admin.config.history();
+await client.admin.config.rollback(3);
+```
+
+| Method | Signature | Returns |
+|--------|-----------|---------|
+| `get` | `get()` | `Promise<GatewayConfig>` |
+| `create` | `create(config: Record<string, unknown>)` | `Promise<Record<string, unknown>>` |
+| `update` | `update(config: Record<string, unknown>)` | `Promise<Record<string, unknown>>` |
+| `delete` | `delete()` | `Promise<Record<string, unknown>>` |
+| `history` | `history()` | `Promise<ConfigHistoryEntry[]>` |
+| `rollback` | `rollback(version: number)` | `Promise<Record<string, unknown>>` |
+
+`GatewayConfig` is `{ strategy, targets, plugins, aliases, raw }`.
+
+### admin.logs
+
+```ts
+const logs = await client.admin.logs.list({ limit: 50, provider: "openai", model: "gpt-4o" });
+const stats = await client.admin.logs.stats({ since: "2026-01-01T00:00:00Z" });
+await client.admin.logs.delete({ before: "2025-01-01T00:00:00Z" });
+```
+
+| Method | Signature | Returns |
+|--------|-----------|---------|
+| `list` | `list(params?: LogListParams)` | `Promise<Record<string, unknown>>` |
+| `stats` | `stats(params?: LogStatsParams)` | `Promise<Record<string, unknown>>` |
+| `delete` | `delete(params?: LogDeleteParams)` | `Promise<Record<string, unknown>>` |
+
+### admin.providers and admin.plugins
+
+```ts
+const providers = await client.admin.providers.list();
+const plugins = await client.admin.plugins.list();
+```
+
+Both return `Promise<Record<string, unknown>[]>`.
+
+### Convenience methods
+
+```ts
+const dashboard = await client.admin.dashboard(); // gateway health + usage summary
+const health = await client.admin.health();        // gateway health status
+```
+
+Both return `Promise<Record<string, unknown>>`.
+
+## Error handling
+
+The SDK raises typed errors for every failure mode. HTTP errors inherit from `FerroAPIError`, which exposes `status`, `code`, and `requestId`. All SDK errors inherit from the base `FerroError`.
+
+```
+FerroError                        // Base — catch-all for all SDK errors
+├── FerroAPIError                 // Any non-2xx HTTP response (status, code, requestId)
+│   ├── FerroAuthError            // 401 Unauthorized
+│   ├── FerroRateLimitError       // 429 Too Many Requests
+│   ├── FerroNotFoundError        // 404 Not Found
+│   └── FerroServerError          // 5xx Server Error
+├── FerroConnectionError          // Network / timeout (retried automatically)
+└── FerroStreamError              // SSE parse failure during streaming
+```
+
+| Error | HTTP status | Description |
+|-------|-------------|-------------|
+| `FerroAuthError` | 401 | Invalid or missing API key |
+| `FerroNotFoundError` | 404 | Model or endpoint not found |
+| `FerroRateLimitError` | 429 | Rate limit or quota exceeded |
+| `FerroServerError` | 5xx | Gateway or upstream provider error |
+| `FerroAPIError` | non-2xx | Base class for all HTTP errors |
+| `FerroConnectionError` | — | Cannot reach the gateway (network error, timeout) |
+| `FerroStreamError` | — | Error while consuming a streaming response |
+| `FerroError` | — | Base class for all SDK errors |
+
+```ts
+import {
+  FerroClient,
+  FerroAuthError,
+  FerroRateLimitError,
+  FerroNotFoundError,
+  FerroServerError,
+  FerroConnectionError,
+  FerroStreamError,
+  FerroAPIError,
+  FerroError,
+} from "@ferro-labs-ai/sdk";
+
+const client = new FerroClient();
+
+try {
+  const response = await client.chat.completions.create({
+    model: "gpt-4o",
+    messages: [{ role: "user", content: "Hello" }],
+  });
+  console.log(response.choices[0].message.content);
+} catch (err) {
+  if (err instanceof FerroAuthError) {
+    console.error("Invalid or missing API key");
+  } else if (err instanceof FerroRateLimitError) {
+    console.error("Rate limited — back off and retry");
+  } else if (err instanceof FerroNotFoundError) {
+    console.error("Model or endpoint not found");
+  } else if (err instanceof FerroServerError) {
+    console.error(`Server error (${err.status}): ${err.message}`);
+  } else if (err instanceof FerroConnectionError) {
+    console.error("Network error — retries exhausted");
+  } else if (err instanceof FerroStreamError) {
+    console.error("Failed to parse streaming response");
+  } else if (err instanceof FerroAPIError) {
+    console.error(`API error ${err.status} (request ${err.requestId}): ${err.message}`);
+  } else if (err instanceof FerroError) {
+    console.error(`Unexpected SDK error: ${err.message}`);
+  } else {
+    throw err;
+  }
+}
+```
+
+:::warning
+Only connection errors and timeouts are retried (up to `maxRetries`). HTTP 4xx and 5xx responses are never retried — the gateway already handles provider-level retries, so the SDK treats its response as final.
+:::
+
+## LangChain integration
+
+The package ships an optional LangChain chat model under the `@ferro-labs-ai/sdk/langchain` subpath (requires `@langchain/core` as a peer dependency):
+
+```ts
+import { FerroChatModel } from "@ferro-labs-ai/sdk/langchain";
+
+const model = new FerroChatModel({
+  model: "gpt-4o",
+  apiKey: "sk-ferro-...",
+  baseUrl: "https://gateway.example.com",
+});
+
+const result = await model.invoke("Hello from LangChain!");
+```
+
+## Next steps
+
+- [Python SDK Reference](/integrations/sdk/python/reference) — the Python client for the same gateway
+- [API Reference](/api-reference/endpoints) — raw HTTP endpoints
+- [Configuration](/getting-started/configuration) — gateway-side routing and plugin setup

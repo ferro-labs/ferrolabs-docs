@@ -21,7 +21,7 @@
 
 /* ── Inner container ──────────────────────────────────────────── */
 .inner {
-  max-width: 1320px;
+  max-width: 1480px;
   margin: 0 auto;
   padding: 0 1.5rem;
   display: flex;
@@ -40,6 +40,7 @@
 .item {
   display: inline-flex;
   align-items: center;
+  gap: 0.4rem;
   padding: 0 1rem;
   font-size: 0.815rem;
   font-weight: 500;
@@ -80,10 +81,26 @@
   border-bottom-color: #2dd4bf;
 }
 
-/* ── Mobile: hide on very small screens ───────────────────────── */
+/* ── Leading line-icon ────────────────────────────────────────── */
+.icon {
+  width: 0.95rem;
+  height: 0.95rem;
+  flex: 0 0 auto;
+  opacity: 0.85;
+}
+
+.item.active .icon {
+  opacity: 1;
+}
+
+/* ── Mobile: tighten, then drop icons on very small screens ──────── */
 @media (max-width: 480px) {
   .item {
     padding: 0 0.65rem;
     font-size: 0.78rem;
+  }
+
+  .icon {
+    display: none;
   }
 }

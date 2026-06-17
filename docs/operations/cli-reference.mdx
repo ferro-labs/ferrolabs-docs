@@ -1,0 +1,348 @@
+---
+title: ferrogw CLI reference
+description: Command-line reference for the ferrogw binary — init, serve, validate, doctor, status, version, plugins, and admin subcommands, with global flags and env vars.
+keywords: [ferrogw CLI, AI gateway CLI, ferrogw commands, ferrogw admin, gateway command line, LLM gateway CLI reference]
+---
+
+`ferrogw` is the single binary that both **runs the Ferro Labs AI Gateway server** and provides a **CLI** for scaffolding config, validating it, diagnosing your environment, and managing a running instance over its Admin API.
+
+Running `ferrogw` with no subcommand starts the server (backward compatible with `ferrogw serve`). Every other subcommand is a CLI operation.
+
+## Installation and running
+
+Build the binary from source (the `Makefile` produces `./bin/ferrogw`), or run it through the published container image:
+
+```bash
+# Build from source
+make build
+./bin/ferrogw serve
+
+# Or run with Docker
+docker run -p 8080:8080 -e OPENAI_API_KEY=sk-... ghcr.io/ferro-labs/ai-gateway serve
+```
+
+The examples below assume `ferrogw` is on your `PATH`.
+
+:::note
+CLI subcommands that talk to a **running** gateway (`status`, `plugins`, `admin`, and the connectivity check in `doctor`) need a reachable gateway URL and, for protected routes, an API key. Both resolve from global flags or environment variables — see [Global flags](#global-flags) and [Environment variables](#environment-variables).
+:::
+
+## Subcommand reference
+
+| Command | Purpose |
+|---|---|
+| [`init`](#ferrogw-init) | Scaffold a config file and generate a master key |
+| [`serve`](#ferrogw-serve) | Start the gateway server |
+| [`validate`](#ferrogw-validate) | Validate a config file (offline) |
+| [`doctor`](#ferrogw-doctor) | Check environment, config, and connectivity |
+| [`status`](#ferrogw-status) | Check health of a running gateway |
+| [`plugins`](#ferrogw-plugins) | List plugins registered in a running gateway |
+| [`version`](#ferrogw-version) | Print version information |
+| [`admin`](#ferrogw-admin) | Manage a running gateway over the Admin API |
+
+### `ferrogw init`
+
+Creates a minimal configuration file and generates a **master key** used to authenticate with the dashboard and Admin API. The key is a random value with an `fgw_` prefix.
+
+**Usage**
+
+```bash
+ferrogw init [flags]
+```
+
+**Flags**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--config-format` | `yaml` | Config file format: `yaml` or `json` |
+| `-o`, `--output` | `config.yaml` / `config.json` | Config file path |
+| `--non-interactive` | `false` | Skip prompts, use defaults |
+
+**Example**
+
+```bash
+ferrogw init
+```
+
+```text
+  Ferro Labs AI Gateway -- Setup
+
+  ✔ Created config.yaml
+  ✔ Master key: fgw_4f9c2a1b7e3d8650a1c4f0b29d6e7a83
+
+  ⚠ Save this key -- you need it for the dashboard and API.
+    export MASTER_KEY=fgw_4f9c2a1b7e3d8650a1c4f0b29d6e7a83
+
+  Next steps:
+    1. Set provider API keys (e.g. export OPENAI_API_KEY=sk-...)
+    2. Start the gateway:  ferrogw serve
+    3. Open dashboard:     http://localhost:8080/dashboard
+```
+
+:::warning
+The master key is shown **once**. Store it securely (export it as `MASTER_KEY` or place it in your secret manager). If an existing config file is present, `init` skips writing it but still prints a freshly generated key.
+:::
+
+The generated `config.yaml` starts with a `fallback` strategy across `openai` and `anthropic` targets, with other providers commented out for you to enable.
+
+### `ferrogw serve`
+
+Starts the gateway HTTP server. This is also the default action when you run `ferrogw` with no subcommand.
+
+**Usage**
+
+```bash
+ferrogw serve
+```
+
+**Example**
+
+```bash
+GATEWAY_CONFIG=config.yaml \
+MASTER_KEY=fgw_... \
+OPENAI_API_KEY=sk-... \
+ferrogw serve
+```
+
+The listen port comes from `PORT` (default `8080`), and the config path from `GATEWAY_CONFIG`. See [Environment variables](#environment-variables).
+
+### `ferrogw validate`
+
+Loads and validates a configuration file **offline** — no running gateway is required. Accepts YAML or JSON (auto-detected). Exits non-zero if the file fails to load or fails validation.
+
+**Usage**
+
+```bash
+ferrogw validate <config-file>
+```
+
+**Example**
+
+```bash
+ferrogw validate config.yaml
+```
+
+```text
+✔ Config is valid
+  Strategy:  fallback
+  Targets:   2
+  Providers: openai, anthropic
+```
+
+With `--format json` or `--format yaml`, the parsed config is printed in that format instead of the summary table.
+
+### `ferrogw doctor`
+
+Runs a set of environment, configuration, and connectivity checks to help diagnose setup problems. It reports:
+
+- **Provider API keys** — presence of `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `MISTRAL_API_KEY`.
+- **Configuration** — loads and validates the file at `GATEWAY_CONFIG` (if set).
+- **Auth** — whether `MASTER_KEY` is set.
+- **Gateway connectivity** — a `GET /health` round-trip to the configured gateway URL, with latency.
+
+**Usage**
+
+```bash
+ferrogw doctor
+```
+
+**Example**
+
+```bash
+ferrogw doctor
+```
+
+```text
+  Provider API Keys
+    ✔ openai
+    ✔ anthropic
+    - gemini
+    - groq
+    - mistral
+
+    2 found
+
+  Configuration
+    ✔ config.yaml (strategy=fallback, targets=2)
+
+  Auth
+    ✔ MASTER_KEY is set
+
+  Gateway Connectivity
+    ✔ http://localhost:8080 -- healthy (3ms)
+```
+
+### `ferrogw status`
+
+Checks the health of a running gateway by calling `GET /health`, then reports the version and provider/model counts (when available from `/admin/providers`).
+
+**Usage**
+
+```bash
+ferrogw status
+```
+
+**Example**
+
+```bash
+ferrogw status --gateway-url http://localhost:8080
+```
+
+```text
+  ✔ http://localhost:8080 -- healthy (4ms)
+  Version: 1.1.0
+  Providers: 30 (412 models)
+```
+
+### `ferrogw plugins`
+
+Lists the plugins registered in a running gateway instance, read from `GET /admin/plugins`.
+
+**Usage**
+
+```bash
+ferrogw plugins
+```
+
+**Example**
+
+```bash
+ferrogw plugins
+```
+
+```text
+NAME                     TYPE             ENABLED
+----                     ----             -------
+word-filter              guardrail        yes
+rate-limit               middleware       yes
+request-logger           middleware       no
+```
+
+Use `--format json` or `--format yaml` for machine-readable output.
+
+### `ferrogw version`
+
+Prints build and runtime version information (version, commit, build date, Go version, OS/arch).
+
+**Usage**
+
+```bash
+ferrogw version
+```
+
+**Example**
+
+```bash
+ferrogw version
+```
+
+```text
+  Version      1.1.0
+  Commit       a1b2c3d
+  Built        2026-06-01T12:00:00Z
+  Go           go1.25.0
+  OS/Arch      linux/amd64
+```
+
+### `ferrogw admin`
+
+Manages a running gateway over its Admin API. Requires a reachable gateway URL and an API key (the master key works). Configure them via `--gateway-url` / `--api-key` or the matching environment variables.
+
+The `admin` command groups operations into four areas: `keys`, `config`, `logs`, and `providers`.
+
+#### `admin keys` — API key management
+
+| Command | Description |
+|---|---|
+| `admin keys list` | List all API keys |
+| `admin keys get <id>` | Show details of one key |
+| `admin keys create` | Create a new key |
+| `admin keys revoke <id>` | Revoke a key |
+| `admin keys rotate <id>` | Rotate a key (issue a new key value) |
+
+`admin keys create` flags:
+
+| Flag | Default | Description |
+|---|---|---|
+| `--name` | `""` | Human-readable label for the key |
+| `--scope` | `read_only` | Key scope: `admin` or `read_only` |
+| `--expires-in` | `""` | Expiry duration, e.g. `720h` (30 days) |
+
+```bash
+ferrogw admin keys create --name ci-bot --scope read_only --expires-in 720h
+```
+
+#### `admin config` — runtime configuration
+
+| Command | Description |
+|---|---|
+| `admin config get` | Print the current runtime configuration |
+| `admin config history` | Show configuration change history |
+| `admin config set --file <path>` | Apply a new configuration (JSON file) |
+| `admin config rollback <version>` | Roll back to a previous config version |
+
+`admin config set` requires `--file` pointing at a **JSON** config file (convert YAML first).
+
+```bash
+ferrogw admin config set --file new-config.json
+ferrogw admin config rollback 3
+```
+
+#### `admin logs` — request logs
+
+| Command | Description |
+|---|---|
+| `admin logs list` | List persisted request logs |
+| `admin logs stats` | Show aggregated log statistics |
+
+`admin logs list` flags:
+
+| Flag | Default | Description |
+|---|---|---|
+| `--limit` | `50` | Maximum number of log entries to return |
+
+```bash
+ferrogw admin logs list --limit 100 --format json
+```
+
+#### `admin providers` — provider inspection
+
+| Command | Description |
+|---|---|
+| `admin providers list` | List registered providers and their model counts |
+| `admin providers health` | Show per-provider health status |
+
+```bash
+ferrogw admin providers list
+ferrogw admin providers health --format json
+```
+
+## Global flags
+
+These persistent flags apply to all subcommands.
+
+| Flag | Env var | Default | Description |
+|---|---|---|---|
+| `--gateway-url` | `FERROGW_URL` | `http://localhost:8080` | Gateway base URL for Admin API calls |
+| `--api-key` | `FERROGW_API_KEY` | (falls back to `MASTER_KEY`) | Admin API key (sent as `Authorization: Bearer`) |
+| `--format` | — | `table` | Output format: `table`, `json`, or `yaml` |
+
+:::note
+The API key resolves in order: `--api-key` flag → `FERROGW_API_KEY` → `MASTER_KEY`. This means once you export `MASTER_KEY`, the admin commands authenticate without any extra flag.
+:::
+
+## Environment variables
+
+`ferrogw` reads the following environment variables. Server-side variables are read by `serve`; CLI variables are read by the Admin API client.
+
+| Variable | Read by | Description |
+|---|---|---|
+| `GATEWAY_CONFIG` | `serve`, `doctor` | Path to the config file (YAML or JSON) |
+| `PORT` | `serve` | HTTP listen port (default `8080`) |
+| `MASTER_KEY` | `serve`, admin CLI | Admin + proxy credential; generated by `ferrogw init` |
+| `FERROGW_URL` | CLI | Gateway base URL when `--gateway-url` is not set |
+| `FERROGW_API_KEY` | CLI | Admin API key when `--api-key` is not set |
+| `ALLOW_UNAUTHENTICATED_PROXY` | `serve` | Set to `true` to leave proxy routes unauthenticated (development only — not recommended for production) |
+| `ENABLE_PPROF` | `serve` | Set to `true` to mount `/debug/pprof/*` profiling routes |
+
+Provider credentials (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and the rest) are documented in the [Providers guide](/guides/providers). For the full server configuration schema, see [Configuration](/getting-started/configuration).

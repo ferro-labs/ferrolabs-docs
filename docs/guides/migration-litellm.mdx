@@ -71,7 +71,7 @@ targets:
   - virtual_key: openai
     retry:
       attempts: 3
-      retry_on_status: [429, 502, 503, 504]
+      on_status_codes: [429, 502, 503, 504]
   - virtual_key: anthropic
 ```
 

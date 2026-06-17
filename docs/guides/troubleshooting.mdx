@@ -24,17 +24,16 @@ docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' ferrogw | gr
 env | grep OPENAI_API_KEY
 ```
 
-Verify the variable name in `config.yaml` matches exactly (including case):
+Provider credentials are read from environment variables (e.g. `OPENAI_API_KEY`), not from `config.yaml`. Make sure each target's `virtual_key` names a provider whose key env var is set:
 
 ```yaml
-providers:
-  - name: openai
-    type: openai
-    api_key: ${OPENAI_API_KEY}   # must match the env var name exactly
+targets:
+  - virtual_key: openai      # requires OPENAI_API_KEY in the environment
+  - virtual_key: anthropic   # requires ANTHROPIC_API_KEY in the environment
 ```
 
 :::warning
-Never hard-code API keys in `config.yaml`. Always use environment variable references (`${VAR}`) and inject secrets via your orchestrator or `.env` file.
+Never hard-code API keys. Provider keys are supplied only via environment variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, …); inject them through your orchestrator or `.env` file.
 :::
 
 ---
@@ -145,7 +144,7 @@ Review your rate-limit plugin configuration. The global `requests_per_second` ap
 ```yaml
 plugins:
   - name: rate-limit
-    type: ratelimit
+    type: guardrail
     stage: before_request
     enabled: true
     config:
@@ -159,7 +158,7 @@ If you only want per-key limits and no global cap, omit `requests_per_second` an
 ```yaml
 plugins:
   - name: rate-limit
-    type: ratelimit
+    type: guardrail
     stage: before_request
     enabled: true
     config:
@@ -221,7 +220,7 @@ plugins:
     enabled: true
     config:
       max_entries: 5000         # cap the cache to prevent unbounded growth
-      ttl_seconds: 300
+      max_age: 300              # entry TTL in seconds
 ```
 
 Profile the gateway with pprof to identify the source of allocations:
@@ -477,10 +476,14 @@ Verify the plugin config matches the actual Postgres host, port, user, and datab
 ```yaml
 plugins:
   - name: request-logger
-    type: postgres-logger
-    connection_string: postgres://ferro:ferro_secret@postgres:5432/ferro_logs?sslmode=disable
-    log_request_body: true
-    log_response_body: false
+    type: logging
+    stage: before_request
+    enabled: true
+    config:
+      level: info
+      persist: true
+      backend: postgres
+      dsn: postgres://ferro:ferro_secret@postgres:5432/ferro_logs?sslmode=disable
 ```
 
 :::tip

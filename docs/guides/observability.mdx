@@ -25,6 +25,7 @@ Metrics are exposed at `GET /metrics` in the standard Prometheus text format. Sc
 | `gateway_server_connections_current` | Gauge | `state` | Current inbound HTTP connections by state |
 | `gateway_server_connection_transitions_total` | Counter | `state` | Inbound HTTP connection state transitions |
 | `gateway_hook_events_dropped_total` | Counter | `subject` | Hook dispatches dropped because the worker queue was full |
+| `gateway_catalog_loads_total` | Counter | `source`, `result` | Model-catalog load attempts (`source`: `remote`\|`fallback`; `result`: `success`\|`error`) |
 
 ### Example Prometheus scrape config
 
@@ -97,6 +98,76 @@ Standard OpenTelemetry environment variables take precedence over the config fil
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector endpoint; enables tracing when set |
 | `OTEL_EXPORTER_OTLP_HEADERS` | Headers sent to the collector (e.g. auth tokens) |
 | `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` | Head-sampler overrides |
+
+When both a config value and the matching `OTEL_*` variable are present, the environment variable wins.
+
+### Export headers
+
+To attach static metadata or backend auth tokens to every OTLP export, set the in-config `observability.tracing.headers` map. Each value supports `${ENV_VAR}` (and `$ENV_VAR`) interpolation that is resolved at exporter-build time — so secrets live in the environment, never literally in the in-memory config. A header whose value resolves to empty (e.g. it references an unset variable) is dropped and a warning is logged.
+
+```yaml
+observability:
+  tracing:
+    enabled: true
+    endpoint: api.honeycomb.io:443
+    protocol: grpc
+    headers:
+      x-honeycomb-team: ${HONEYCOMB_API_KEY}   # resolved from the environment
+      x-ferro-env: production                  # literal value, passed through
+```
+
+The standard `OTEL_EXPORTER_OTLP_HEADERS` environment variable is also honored and takes precedence.
+
+### Span attributes
+
+Each span is stamped with two attribute groups. Group A follows the [OpenTelemetry GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/); Group B is the Ferro `ferro.*` extension namespace. Every build advertises its attribute schema version via `ferro.schema.version` (currently **`1.0.0-draft`**), so exporters can branch on schema migrations.
+
+**Group A — `gen_ai.*` (OpenTelemetry GenAI conventions)**
+
+| Attribute | Meaning |
+|---|---|
+| `gen_ai.system` | Provider system (e.g. `openai`, `anthropic`) |
+| `gen_ai.operation.name` | Operation (e.g. `chat`) |
+| `gen_ai.request.model` | Requested model ID |
+| `gen_ai.response.model` | Model that actually served the response |
+| `gen_ai.request.max_tokens` | Requested max output tokens |
+| `gen_ai.request.temperature` | Sampling temperature |
+| `gen_ai.request.top_p` | Nucleus-sampling top-p |
+| `gen_ai.request.is_stream` | Whether streaming was requested |
+| `gen_ai.usage.input_tokens` | Prompt tokens |
+| `gen_ai.usage.output_tokens` | Completion tokens |
+| `gen_ai.usage.reasoning_tokens` | Reasoning tokens (reasoning models) |
+| `gen_ai.response.finish_reasons` | Finish reasons |
+
+**Group B — `ferro.*` (Ferro extension)**
+
+| Attribute | Meaning |
+|---|---|
+| `ferro.schema.version` | Attribute schema version (`1.0.0-draft`) |
+| `ferro.gateway.trace_id` | Unified trace ID (same value as the log `trace_id` / `X-Request-ID`) |
+| `ferro.gateway.version` | Gateway build version |
+| `ferro.routing.strategy` | Routing strategy used (`fallback`, `loadbalance`, …) |
+| `ferro.routing.target_key` | Selected target / virtual key |
+| `ferro.routing.attempt` | Attempt number within the strategy |
+| `ferro.routing.ab_variant_label` | A/B variant label, when applicable |
+| `ferro.cost.usd` | Estimated total request cost in USD |
+| `ferro.cost.input_usd` / `ferro.cost.output_usd` | Estimated input / output cost |
+| `ferro.cost.cache_read_usd` / `ferro.cost.cache_write_usd` | Estimated prompt-cache read / write cost |
+| `ferro.cost.reasoning_usd` | Estimated reasoning-token cost |
+| `ferro.cost.model_found` | Whether the model was found in the catalog for pricing |
+| `ferro.cache.hit` | Whether a response-cache hit served the request |
+| `ferro.cache.kind` | Cache kind |
+| `ferro.plugin.name` / `ferro.plugin.kind` | Plugin identity (child spans) |
+| `ferro.plugin.stage` | Plugin stage (`before_request`, `after_request`, `on_error`) |
+| `ferro.plugin.outcome` / `ferro.plugin.reason` | Plugin outcome and reason |
+| `ferro.mcp.server` / `ferro.mcp.tool` | MCP server and tool name (child spans) |
+| `ferro.mcp.depth` / `ferro.mcp.latency_ms` | MCP call depth and latency |
+| `ferro.stream.time_to_first_token_ms` | Streaming time-to-first-token |
+| `ferro.stream.time_to_last_token_ms` | Streaming time-to-last-token |
+| `ferro.circuit_breaker.state` / `ferro.circuit_breaker.opened` | Circuit-breaker state and whether it opened during the request |
+| `ferro.request.api_key_id` / `ferro.request.tenant_id` | Request API key ID and tenant ID |
+| `ferro.error.upstream_status` | Upstream HTTP status on failure |
+| `ferro.error.retry_count` | Number of retries performed |
 
 ### Privacy levels
 

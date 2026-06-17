@@ -13,7 +13,7 @@ import OpenAI from "openai";
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-  baseURL: "http://localhost:8080",
+  baseURL: "http://localhost:8080/v1",
 });
 
 const response = await client.chat.completions.create({
@@ -30,7 +30,7 @@ from openai import OpenAI
 
 client = OpenAI(
     api_key="sk-your-key",
-    base_url="http://localhost:8080",
+    base_url="http://localhost:8080/v1",
 )
 
 response = client.chat.completions.create(

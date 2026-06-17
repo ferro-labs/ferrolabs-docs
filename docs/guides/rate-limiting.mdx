@@ -1,60 +1,117 @@
 ---
 title: Rate limiting
-description: Control AI request volume in the Ferro Labs AI Gateway with per-IP HTTP rate limiting, global token-bucket limits, and per-API-key and per-user rate limits to protect your LLM budget.
+description: Control AI request volume in the Ferro Labs AI Gateway with per-IP HTTP rate limiting, a global token-bucket plugin, and optional per-API-key and per-user request budgets to protect your LLM spend.
 keywords: [AI rate limiting, LLM rate limit, per-IP rate limiting, per-key rate limiting, per-user rate limiting, AI gateway throttling, token rate limiting, request budget control]
 ---
 
-The gateway supports rate limiting in three layers.
+The gateway rate-limits in two independent places:
 
-## HTTP middleware (per IP)
+1. **Per-IP HTTP middleware** — runs at the edge, before routing, configured by environment variables.
+2. **The `rate-limit` plugin** — runs at the `before_request` stage, configured in your gateway config. It layers a global limiter with optional per-API-key and per-user limiters.
 
-Enable per IP limits with environment variables:
+These two layers are separate systems. The middleware keys on client IP; the plugin keys on global traffic, API key, and user ID. You can run either, both, or neither.
+
+## Per-IP HTTP middleware
+
+This layer is wired into the HTTP router and keyed on the client IP. It is enabled only when `RATE_LIMIT_RPS` is set to a positive number:
 
 ```bash
-export RATE_LIMIT_RPS=20
-export RATE_LIMIT_BURST=40
+export RATE_LIMIT_RPS=20    # required to enable; per-IP requests/second
+export RATE_LIMIT_BURST=40  # optional burst capacity (defaults to RATE_LIMIT_RPS when unset)
 ```
 
-Requests beyond the limit receive a `429` with an OpenAI style error response.
+The client IP is taken from the connection's remote address, or from the first entry of the `X-Forwarded-For` header when present (set this only behind a trusted proxy).
 
-## Plugin rate limiting (per request)
+When an IP exceeds its bucket, the request is rejected with HTTP `429 Too Many Requests` and an OpenAI-style JSON error body:
 
-Add the `rate-limit` plugin to apply global token-bucket limits before traffic hits a provider:
+```json
+{
+  "error": {
+    "message": "rate limit exceeded",
+    "type": "rate_limit_error",
+    "code": "rate_limit_exceeded"
+  }
+}
+```
+
+:::note
+The `429` response does **not** include a `Retry-After` header. Clients should back off using their own retry/jitter policy rather than relying on a server-provided delay.
+:::
+
+If `RATE_LIMIT_RPS` is unset (or non-positive), the per-IP middleware is disabled entirely.
+
+## The `rate-limit` plugin
+
+Add the `rate-limit` plugin to enforce limits before traffic reaches a provider. This is the same block shipped (disabled) in `config.example.yaml`:
 
 ```yaml
 plugins:
   - name: rate-limit
-    type: ratelimit
+    type: guardrail
     stage: before_request
-    enabled: true
+    enabled: false
     config:
-      requests_per_second: 50
+      # Global request-per-second limit applied to all traffic.
+      requests_per_second: 100
+      # Global burst capacity (defaults to requests_per_second when unset).
       burst: 100
+      # Optional per-API-key limit (requests per minute).
+      key_rpm: 60
+      # Optional per-user limit (requests per minute, keyed on Request.User).
+      user_rpm: 30
 ```
 
-## Per-key and per-user rate limiting
+Set `enabled: true` to turn it on. The plugin uses in-memory token buckets, so limits are enforced per gateway process (not shared across a multi-replica deployment).
 
-Extend the `rate-limit` plugin with `key_rpm` and `user_rpm` to enforce per-identity limits in addition to (or instead of) the global bucket:
+### Configuration reference
 
-```yaml
-plugins:
-  - name: rate-limit
-    type: ratelimit
-    stage: before_request
-    enabled: true
-    config:
-      requests_per_second: 100   # global limit (optional)
-      burst: 200
-      key_rpm: 60                # max 60 req/min per API key
-      user_rpm: 30               # max 30 req/min per user ID
+| Config key | Default | Granularity | Keyed on |
+|---|---|---|---|
+| `requests_per_second` | `100` | Global (all traffic) | — |
+| `burst` | `requests_per_second` | Global (all traffic) | — |
+| `key_rpm` | unset (off) | Per API key, requests/minute | `pctx.Metadata["api_key"]` |
+| `user_rpm` | unset (off) | Per user, requests/minute | request `user` field (`Request.User`) |
+
+- **`requests_per_second`** — the global rate, always active. Every request consumes one token from this bucket regardless of key or user.
+- **`burst`** — global burst capacity. When unset (or `≤ 0`) it defaults to `requests_per_second`, meaning no extra headroom above the steady rate.
+- **`key_rpm`** — optional. Caps requests per minute for each distinct API key. Internally the bucket refills at `key_rpm / 60` tokens per second with a burst of `key_rpm`, so an idle key can spend up to a full minute's worth of requests at once. Must be `> 0` if set.
+- **`user_rpm`** — optional. Caps requests per minute for each distinct user ID, using the same refill/burst semantics as `key_rpm`. Must be `> 0` if set.
+
+The per-key and per-user stores track up to 100,000 distinct keys each, evicting the least recently used entry beyond that cap to bound memory.
+
+### Evaluation order
+
+Checks run in a fixed order, and the request is rejected at the **first** limiter that denies it:
+
+```
+global (requests_per_second) → per-key (key_rpm) → per-user (user_rpm)
 ```
 
-Rate checks execute in order: **global → per-key → per-user**. The request is rejected at the first exceeded limiter with a distinct reason string so you can distinguish which limit was hit in your logs.
+Each rejection sets a distinct reason on the plugin context so you can tell which limit was hit in your logs:
 
-| Config key | Granularity | Source field |
-|---|---|---|
-| `requests_per_second` + `burst` | Global (all traffic) | — |
-| `key_rpm` | Per API key | `pctx.Metadata["api_key"]` |
-| `user_rpm` | Per user ID | `Request.User` |
+| Limiter | Reason string |
+|---|---|
+| Global | `rate limit exceeded` |
+| Per-key | `per-key rate limit exceeded` |
+| Per-user | `per-user rate limit exceeded` |
 
-Requests without an API key skip the per-key check. Requests without a `user` field skip the per-user check. All three limits are independent — configure any combination.
+Requests with no API key in metadata skip the per-key check; requests with an empty `user` field skip the per-user check. The three limiters are independent — configure any combination.
+
+## Important: `key_rpm` is inert in the bare open-source gateway
+
+:::warning
+In the bare open-source gateway, **nothing populates `pctx.Metadata["api_key"]`**. The per-key limiter only fires when that metadata is present, so `key_rpm` (and any per-key budgets) are effectively **inert when self-hosting the OSS gateway as-is** — every request simply skips the per-key check.
+
+`key_rpm` becomes active only when the embedding host injects an `api_key` into the plugin context metadata. **Ferro Labs Managed** does this as part of its credential/tenant layer; a custom embedding host can do the same. If you are self-hosting and your per-key limits appear to do nothing, this is why — it is expected behavior, not a misconfiguration.
+
+`user_rpm` has no such dependency: it keys on the request's `user` field, which any OpenAI-compatible client can send, so it works out of the box.
+:::
+
+## Choosing a layer
+
+| Goal | Use |
+|---|---|
+| Coarse abuse protection at the edge, per client IP | Per-IP HTTP middleware (`RATE_LIMIT_RPS`) |
+| A ceiling on total throughput to your providers | Plugin `requests_per_second` / `burst` |
+| Per-tenant fairness by API key | Plugin `key_rpm` (requires injected `api_key` metadata — Ferro Labs Managed or a custom host) |
+| Per-end-user fairness by user ID | Plugin `user_rpm` (send the `user` field on requests) |

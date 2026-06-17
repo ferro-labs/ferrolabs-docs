@@ -48,6 +48,12 @@ jobs:
       - name: TypeScript typecheck
         run: pnpm typecheck
 
+      - name: Check doc frontmatter (descriptions)
+        run: pnpm check:frontmatter
+
+      - name: Check doc accuracy (no known-wrong tokens)
+        run: pnpm check:docs
+
       - name: Build docs
         run: pnpm build
         env:

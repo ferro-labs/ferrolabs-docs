@@ -4,17 +4,14 @@
  * work well for content-centric websites.
  */
 
+/* Roobert is a single variable font (one file, full weight axis). Declaring it
+   once with the real 100–900 range lets the browser reach true 400/500/600/700
+   instead of synthesizing fake bold from a 400-only face. */
 @font-face {
   font-family: 'Roobert';
-  src: url('/fonts/roobert-proportional-vf.woff2') format('woff2');
-  font-weight: 400;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Roobert';
-  src: url('/fonts/roobert-proportional-vf.woff2') format('woff2');
-  font-weight: 600;
+  src: url('/fonts/roobert-proportional-vf.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-style: normal;
   font-display: swap;
 }
 
@@ -33,8 +30,13 @@
   --ifm-background-surface-color: #ffffff;
   --ifm-font-color-base: #101828;
   --ifm-heading-color: #0f172a;
-  --ifm-font-size-base: 15px;
+  /* 16px base matches Stripe/Vercel/Anthropic docs; 15px read slightly cramped. */
+  --ifm-font-size-base: 16px;
   --ifm-line-height-base: 1.62;
+  /* Reading measure for the prose column. Wide enough to fill the content
+     panel and match the full-width callouts/tables, while still capping line
+     length on very wide viewports. */
+  --ferro-prose-measure: 54rem;
   --ifm-heading-line-height: 1.25;
   --ifm-h1-font-size: 3rem;
   --ifm-h2-font-size: 2.1rem;
@@ -43,6 +45,13 @@
   --ifm-navbar-height: 4.5rem;
   --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
   --subnav-height: 42px;
+}
+
+html,
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 .main-wrapper {
@@ -141,6 +150,19 @@
   line-height: 1.62;
 }
 
+/* Constrain prose to a comfortable reading measure (~70ch) like Stripe/Vercel,
+   while tables, code blocks, admonitions and diagrams keep the full column. */
+.theme-doc-markdown > p,
+.theme-doc-markdown > ul,
+.theme-doc-markdown > ol,
+.theme-doc-markdown > h1,
+.theme-doc-markdown > h2,
+.theme-doc-markdown > h3,
+.theme-doc-markdown > h4,
+.theme-doc-markdown > blockquote {
+  max-width: var(--ferro-prose-measure);
+}
+
 .theme-doc-markdown h1 {
   letter-spacing: -0.02em;
   margin-bottom: 1rem;
@@ -153,15 +175,26 @@
 
 /* ── Sidebar section dividers (Langfuse-style) ─────────────────── */
 .sidebar-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.42rem;
   font-size: 0.73rem;
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: #000000;
+  /* muted slate label (like leading docs) rather than harsh pure black */
+  color: #64748b;
   padding: 0.65rem 0.75rem 0.25rem;
   margin-top: 0.75rem;
   user-select: none;
   pointer-events: none;
+}
+
+.sidebar-divider__icon {
+  width: 0.95rem;
+  height: 0.95rem;
+  flex: 0 0 auto;
+  opacity: 0.9;
 }
 
 /* Remove top margin on the very first divider */
@@ -170,7 +203,7 @@
 }
 
 [data-theme='dark'] .sidebar-divider {
-  color: #ffffff;
+  color: #94a3b8;
 }
 
 /* ── Chevron on sidebar items that have sub-pages ──────────────── */
@@ -201,17 +234,46 @@
 
 @media (min-width: 997px) {
   [class*='docRoot_'] {
-    width: min(100% - 2rem, 1320px);
+    width: min(100% - 2rem, 1480px);
     margin-left: auto;
     margin-right: auto;
   }
 
   .navbar__inner,
   .footer .container {
-    width: min(100% - 2rem, 1320px);
+    width: min(100% - 2rem, 1480px);
     margin-left: auto;
     margin-right: auto;
     padding-left: 0;
+    padding-right: 0;
+  }
+
+  /* ── Centered primary nav ──────────────────────────────────────────
+     Pin the brand left and the GitHub/theme/search group right (both out
+     of flow), so the primary links sit centered and balanced in the bar. */
+  .navbar__inner {
+    position: relative;
+  }
+
+  .navbar__brand {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    margin: 0;
+  }
+
+  .navbar__items:not(.navbar__items--right) {
+    width: 100%;
+    justify-content: center;
+    gap: 0.5rem;
+  }
+
+  .navbar__items--right {
+    position: absolute;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
     padding-right: 0;
   }
 
@@ -249,6 +311,8 @@
 }
 
 .theme-doc-sidebar-menu .menu__link {
+  display: flex;
+  align-items: center;
   color: var(--ifm-font-color-base);
   font-size: 0.96rem;
   line-height: 1.34;
@@ -260,6 +324,114 @@
 .theme-doc-sidebar-menu .menu__link--active {
   color: var(--ifm-color-primary);
 }
+
+/* ── Per-item line icons ───────────────────────────────────────────
+   Every sidebar link gets a leading icon. The glyph is a CSS mask, so it
+   inherits the link's color (muted by default, teal on hover/active). The
+   specific icon is chosen by `--ferro-icon`; links without an override fall
+   back to a generic document icon, so nothing is ever icon-less. */
+.theme-doc-sidebar-menu .menu__link::before {
+  content: '';
+  width: 1.02rem;
+  height: 1.02rem;
+  margin-right: 0.55rem;
+  flex: 0 0 auto;
+  background-color: currentColor;
+  opacity: 0.6;
+  -webkit-mask: center / contain no-repeat;
+  mask: center / contain no-repeat;
+  -webkit-mask-image: var(--ferro-icon, url('/assets/icons/doc.svg'));
+  mask-image: var(--ferro-icon, url('/assets/icons/doc.svg'));
+  transition: opacity 0.15s ease;
+}
+
+.theme-doc-sidebar-menu .menu__link:hover::before,
+.theme-doc-sidebar-menu .menu__link--active::before {
+  opacity: 1;
+}
+
+/* Intro (root) item */
+.theme-doc-sidebar-menu > .menu__list > .menu__list-item:first-child > .menu__link {
+  --ferro-icon: url('/assets/icons/home.svg');
+}
+
+/* Categories (icon set via className in sidebars.ts) */
+.menu__list-item.sbi-python > .menu__list-item-collapsible > .menu__link {
+  --ferro-icon: url('/assets/icons/python.svg');
+}
+.menu__list-item.sbi-code > .menu__list-item-collapsible > .menu__link {
+  --ferro-icon: url('/assets/icons/code.svg');
+}
+.menu__list-item.sbi-brackets > .menu__link {
+  --ferro-icon: url('/assets/icons/brackets.svg');
+}
+
+/* Get Started */
+.menu__link[href$='/getting-started/overview/']        { --ferro-icon: url('/assets/icons/compass.svg'); }
+.menu__link[href$='/getting-started/quickstart/']       { --ferro-icon: url('/assets/icons/bolt.svg'); }
+.menu__link[href$='/getting-started/architecture/']     { --ferro-icon: url('/assets/icons/cube.svg'); }
+.menu__link[href$='/getting-started/request-lifecycle/']{ --ferro-icon: url('/assets/icons/refresh.svg'); }
+.menu__link[href$='/getting-started/concepts/']         { --ferro-icon: url('/assets/icons/bulb.svg'); }
+.menu__link[href$='/getting-started/configuration/']    { --ferro-icon: url('/assets/icons/sliders.svg'); }
+
+/* Integrations */
+.menu__link[href$='/integrations/overview/']            { --ferro-icon: url('/assets/icons/plug.svg'); }
+.menu__link[href$='/integrations/sdk/go/']              { --ferro-icon: url('/assets/icons/code.svg'); }
+.menu__link[href$='/integrations/sdk/openai-compatible/']{ --ferro-icon: url('/assets/icons/brackets.svg'); }
+
+/* Frameworks */
+.menu__link[href$='/frameworks/']                       { --ferro-icon: url('/assets/icons/layers.svg'); }
+
+/* Self Hosting (all deployment targets) */
+.menu__link[href*='/integrations/deployment/']          { --ferro-icon: url('/assets/icons/server.svg'); }
+
+/* Guides */
+.menu__link[href$='/guides/providers/']                 { --ferro-icon: url('/assets/icons/plug.svg'); }
+.menu__link[href$='/guides/providers-config/']          { --ferro-icon: url('/assets/icons/sliders.svg'); }
+.menu__link[href$='/guides/routing-policies/']          { --ferro-icon: url('/assets/icons/refresh.svg'); }
+.menu__link[href$='/guides/use-cases/']                 { --ferro-icon: url('/assets/icons/book.svg'); }
+.menu__link[href$='/guides/plugins/']                   { --ferro-icon: url('/assets/icons/sparkle.svg'); }
+.menu__link[href$='/guides/mcp/']                       { --ferro-icon: url('/assets/icons/code.svg'); }
+.menu__link[href$='/guides/rate-limiting/']             { --ferro-icon: url('/assets/icons/gauge.svg'); }
+
+/* Auth & Security */
+.menu__link[href$='/guides/auth/']                      { --ferro-icon: url('/assets/icons/lock.svg'); }
+.menu__link[href$='/guides/admin-auth/']                { --ferro-icon: url('/assets/icons/lock.svg'); }
+.menu__link[href$='/guides/workspace-sign-in-domains/'] { --ferro-icon: url('/assets/icons/lock.svg'); }
+.menu__link[href$='/security/data-handling/']           { --ferro-icon: url('/assets/icons/shield.svg'); }
+
+/* Observability */
+.menu__link[href$='/guides/observability/']             { --ferro-icon: url('/assets/icons/chart.svg'); }
+.menu__link[href$='/operations/monitoring/']            { --ferro-icon: url('/assets/icons/chart.svg'); }
+.menu__link[href$='/operations/server-settings/']       { --ferro-icon: url('/assets/icons/gear.svg'); }
+
+/* Reference */
+.menu__link[href$='/benchmarks/']                       { --ferro-icon: url('/assets/icons/gauge.svg'); }
+.menu__link[href$='/changelog/']                        { --ferro-icon: url('/assets/icons/sparkle.svg'); }
+
+/* More */
+.menu__link[href$='/ferrocloud/overview/']              { --ferro-icon: url('/assets/icons/server.svg'); }
+.menu__link[href$='/ferrocloud/semantic-cache/']        { --ferro-icon: url('/assets/icons/bolt.svg'); }
+.menu__link[href$='/enterprise/']                       { --ferro-icon: url('/assets/icons/shield.svg'); }
+.menu__link[href$='/guides/why-ferro/']                 { --ferro-icon: url('/assets/icons/bulb.svg'); }
+.menu__link[href$='/guides/oss-vs-ferrocloud/']         { --ferro-icon: url('/assets/icons/layers.svg'); }
+.menu__link[href$='/guides/migration-litellm/']         { --ferro-icon: url('/assets/icons/refresh.svg'); }
+.menu__link[href$='/guides/migration-portkey/']         { --ferro-icon: url('/assets/icons/refresh.svg'); }
+.menu__link[href$='/guides/troubleshooting/']           { --ferro-icon: url('/assets/icons/gear.svg'); }
+.menu__link[href$='/faq/']                              { --ferro-icon: url('/assets/icons/faq.svg'); }
+
+/* Phase 2/3 pages */
+.menu__link[href$='/integrations/sdk/typescript/']      { --ferro-icon: url('/assets/icons/code.svg'); }
+.menu__link[href$='/guides/provider-capabilities/']     { --ferro-icon: url('/assets/icons/layers.svg'); }
+.menu__link[href$='/guides/virtual-keys/']              { --ferro-icon: url('/assets/icons/lock.svg'); }
+.menu__link[href$='/guides/cost-tracking/']             { --ferro-icon: url('/assets/icons/chart.svg'); }
+.menu__link[href$='/operations/cli-reference/']         { --ferro-icon: url('/assets/icons/code.svg'); }
+.menu__link[href$='/guides/migration-openrouter/']      { --ferro-icon: url('/assets/icons/refresh.svg'); }
+.menu__link[href$='/api-reference/overview/']           { --ferro-icon: url('/assets/icons/brackets.svg'); }
+.menu__link[href$='/api-reference/endpoints/']          { --ferro-icon: url('/assets/icons/brackets.svg'); }
+.menu__link[href$='/api-reference/streaming/']          { --ferro-icon: url('/assets/icons/bolt.svg'); }
+.menu__link[href$='/api-reference/admin/']              { --ferro-icon: url('/assets/icons/gear.svg'); }
+.menu__link[href$='/api-reference/errors/']             { --ferro-icon: url('/assets/icons/shield.svg'); }
 
 /* Hide the default Docusaurus triangle caret — replaced by custom chevron */
 .menu__caret {

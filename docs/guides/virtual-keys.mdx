@@ -1,0 +1,119 @@
+---
+title: Virtual Keys vs API Keys
+description: The two distinct key concepts in the Ferro Labs AI Gateway — the config virtual_key that names a provider credential set, and fgw_ admin API keys for client auth.
+keywords: [virtual key, fgw api key, gateway target, provider credentials, bearer token, admin keys]
+---
+
+The word "key" shows up in two completely different places in the Ferro Labs AI
+Gateway, and conflating them is a common source of confusion. They are unrelated:
+
+- A **`virtual_key`** is a routing identifier inside your config. It names a
+  provider and its credential set. It is **not** a secret and is never sent by
+  clients.
+- An **admin API key** (`fgw_...`) is a client credential. Clients send it as a
+  Bearer token to authenticate to the gateway.
+
+This page keeps the two straight.
+
+## `virtual_key` — the config target identifier
+
+Every entry in `targets[]` carries a `virtual_key` (`Target.VirtualKey` in
+`config.go`). It is the unique identifier the gateway uses to pick **which
+provider, with which credentials, handles a request**.
+
+Resolution happens **before routing and plugin execution**: the gateway looks up
+`g.providers[virtual_key]` to find the provider instance that was built for that
+target. Each provider instance is constructed from a `ProviderEntry`
+(`providers/providers_list.go`) and loads its credentials either from environment
+variables (OSS self-hosted) or from an injected credential map (managed
+deployments). So the `virtual_key` is the *name* of a credential set — the actual
+secret (for example `OPENAI_API_KEY`) lives in the environment, never in the
+`virtual_key` itself.
+
+```yaml
+strategy:
+  mode: fallback
+
+targets:
+  - virtual_key: openai          # selects the OpenAI provider + OPENAI_API_KEY
+    retry:
+      attempts: 3
+      on_status_codes: [429, 502, 503]
+  - virtual_key: anthropic       # selects the Anthropic provider + ANTHROPIC_API_KEY
+    circuit_breaker:
+      failure_threshold: 5
+      timeout: 30s
+```
+
+The same identifier is what routing strategies reference as `target_key`. For
+example, conditional, content-based, and A/B-test strategies all route to a
+`target_key` that must match a `virtual_key` declared in `targets[]`:
+
+```yaml
+strategy:
+  mode: conditional
+  conditions:
+    - key: model
+      value: gpt-4o
+      target_key: openai      # must match a targets[].virtual_key
+    - key: model
+      value: claude-3-5-sonnet-20241022
+      target_key: anthropic
+```
+
+:::note
+A `virtual_key` is plaintext configuration. It carries no authentication weight
+and is safe to commit. The provider's real API key is resolved separately from
+the environment at request time.
+:::
+
+## Admin API keys (`fgw_...`) — client credentials
+
+Admin API keys are the credentials **clients use to authenticate to the
+gateway**. They are minted via `POST /admin/keys` and returned as a string with
+an `fgw_` prefix (32 random bytes, hex-encoded — see `internal/admin/keys.go`).
+
+A client then presents the key as a Bearer token on inference routes:
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer fgw_8f3c...." \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"Hello"}]}'
+```
+
+Each key is a record with a lifecycle:
+
+- **Scopes** — capabilities granted to the key. When none are supplied at
+  creation, the key defaults to the admin scope.
+- **Expiry** — an optional `expires_at`. `ValidateKey` rejects a key once the
+  expiry has passed.
+- **Rotation** — `RotateKey` swaps the key string in place (stamping
+  `rotated_at`) while keeping the same ID, scopes, and usage history.
+- **Revocation** — `Revoke` marks a key inactive so it stops validating, without
+  deleting its record.
+- **Usage** — every successful validation bumps `usage_count` and `last_used_at`.
+
+When listed, the stored key string is masked to its first 8 characters
+(`fgw_...`) so the full secret is never echoed back by the admin API.
+
+## Side-by-side
+
+| | `virtual_key` (config) | Admin API key (`fgw_...`) |
+|---|---|---|
+| **Defined in** | `targets[].virtual_key` in config | Issued at runtime via `POST /admin/keys` |
+| **Purpose** | Names a provider + credential set | Authenticates a client to the gateway |
+| **Is it a secret?** | No — plaintext, safe to commit | Yes — a Bearer credential |
+| **Who uses it** | The gateway, internally, before routing | Clients, in the `Authorization` header |
+| **Resolved to** | A provider instance (`g.providers[...]`) | A validated `APIKey` record + scopes |
+| **Lifecycle ops** | Edit config and reload | Create, rotate, revoke, expire, delete |
+| **Example value** | `openai`, `anthropic`, `vertex-ai` | `fgw_8f3c...` |
+
+## Related
+
+- [Authentication](/guides/auth) — master key, client request auth, and issuing
+  admin API keys.
+- [Configuration](/getting-started/configuration) — full `targets[]` and
+  strategy reference.
+- [Providers configuration](/guides/providers-config) — which env var each
+  provider's `virtual_key` resolves to.

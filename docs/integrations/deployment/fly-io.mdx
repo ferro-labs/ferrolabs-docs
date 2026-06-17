@@ -41,7 +41,8 @@ primary_region = "iad"
   image = "ghcr.io/ferro-labs/ai-gateway:latest"
 
 [env]
-  CONFIG_PATH = "/etc/ferro/config.yaml"
+  GATEWAY_CONFIG = "/etc/ferro/config.yaml"
+  PORT = "8080"
   LOG_LEVEL = "info"
 
 [http_service]
@@ -71,44 +72,32 @@ Change the `app` value to something unique. Fly app names are global, so `ferro-
 Next, create a minimal gateway configuration file:
 
 ```yaml title="config.yaml"
-listeners:
-  - address: 0.0.0.0
-    port: 8080
+strategy:
+  mode: fallback
 
-providers:
-  - name: openai
-    type: openai
-    api_key: ${OPENAI_API_KEY}
-    models:
-      - gpt-4o
-      - gpt-4o-mini
+targets:
+  - virtual_key: openai
+    retry:
+      attempts: 3
+      on_status_codes: [429, 502, 503]
+  - virtual_key: anthropic
 
-  - name: anthropic
-    type: anthropic
-    api_key: ${ANTHROPIC_API_KEY}
-    models:
-      - claude-sonnet-4-20250514
-      - claude-haiku-4-20250414
+# Map friendly names to actual model IDs.
+aliases:
+  fast: gpt-4o-mini
+  smart: claude-sonnet-4-20250514
 
 plugins:
   - name: rate-limit
-    type: rate-limit
-    requests_per_minute: 60
-    burst: 10
-
-routes:
-  - path: /v1/chat/completions
-    provider: openai
-    model: gpt-4o
-    plugins:
-      - rate-limit
-
-  - path: /v1/messages
-    provider: anthropic
-    model: claude-sonnet-4-20250514
-    plugins:
-      - rate-limit
+    type: guardrail
+    stage: before_request
+    enabled: true
+    config:
+      requests_per_second: 60
+      burst: 10
 ```
+
+Provider credentials are **not** stored in `config.yaml`. They are supplied as environment variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.), which you set as Fly secrets in the next step.
 
 Create a `Dockerfile` that copies your config into the image:
 
@@ -155,18 +144,27 @@ This sets the `DATABASE_URL` secret automatically. Update your `config.yaml` to 
 ```yaml title="config.yaml (add to plugins section)"
 plugins:
   - name: request-logger
-    type: postgres-logger
-    connection_string: ${DATABASE_URL}
-    log_request_body: true
-    log_response_body: false
+    type: logging
+    stage: before_request
+    enabled: true
+    config:
+      level: info
+      # Persist request metadata to Postgres (metadata only — the
+      # request-logger never stores prompt or response bodies).
+      persist: true
+      backend: postgres
+      dsn: ${DATABASE_URL}
 
   - name: rate-limit
-    type: rate-limit
-    requests_per_minute: 60
-    burst: 10
+    type: guardrail
+    stage: before_request
+    enabled: true
+    config:
+      requests_per_second: 60
+      burst: 10
 ```
 
-Then add `request-logger` to your routes' `plugins` list.
+The gateway interpolates `${DATABASE_URL}` from the secret Fly sets when you attach Postgres.
 
 ## Step 4: Deploy
 
@@ -241,6 +239,6 @@ fly scale vm shared-cpu-2x --memory 512
 
 ## Related pages
 
-- [Deploy with Docker Compose](/integrations/deployment/docker-compose) — Full local stack with Postgres, Redis, and Prometheus.
+- [Deploy with Docker Compose](/integrations/deployment/docker-compose) — Full local stack with Postgres and Prometheus.
 - [Deploy to Kubernetes](/integrations/deployment/kubernetes) — Helm chart and manifests for Kubernetes clusters.
 - [Quickstart](/getting-started/quickstart) — Get running with a single binary in 60 seconds.

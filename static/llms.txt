@@ -1,12 +1,15 @@
 # Ferro Labs AI Gateway
 
-> High-performance open-source AI gateway written in Go. Routes LLM requests across 29 providers via a single OpenAI-compatible API.
+> High-performance open-source AI gateway written in Go. Routes LLM requests across 30 providers and 2,500+ models via a single OpenAI-compatible API.
+
+Full machine-readable corpus: https://docs.ferrolabs.ai/llms-full.txt
 
 ## Documentation
 
 - [Introduction](https://docs.ferrolabs.ai/): Overview, key capabilities, and docs map
-- [Quickstart](https://docs.ferrolabs.ai/getting-started/quickstart/): Get running in 30 seconds
+- [Quickstart](https://docs.ferrolabs.ai/getting-started/quickstart/): Get running in 30 seconds (curl/Python/Node tabs)
 - [Architecture](https://docs.ferrolabs.ai/getting-started/architecture/): Component diagrams and data flow
+- [Request Lifecycle](https://docs.ferrolabs.ai/getting-started/request-lifecycle/): Real middleware, plugin, and routing order
 - [Configuration](https://docs.ferrolabs.ai/getting-started/configuration/): Full config reference
 
 ## Integrations
@@ -16,6 +19,7 @@
 - [Python SDK Reference](https://docs.ferrolabs.ai/integrations/sdk/python/reference/): Full API reference
 - [Python SDK Async](https://docs.ferrolabs.ai/integrations/sdk/python/async/): AsyncFerroClient usage
 - [Python SDK Error Handling](https://docs.ferrolabs.ai/integrations/sdk/python/error-handling/): Exception hierarchy
+- [TypeScript SDK](https://docs.ferrolabs.ai/integrations/sdk/typescript/): @ferro-labs-ai/sdk reference
 - [Go SDK](https://docs.ferrolabs.ai/integrations/sdk/go/): Go integration and custom plugins
 - [OpenAI-Compatible SDKs](https://docs.ferrolabs.ai/integrations/sdk/openai-compatible/): Use any OpenAI SDK
 - [Deploy to Railway](https://docs.ferrolabs.ai/integrations/deployment/railway/): One-click Railway deploy
@@ -26,25 +30,32 @@
 
 ## Guides
 
-- [Providers](https://docs.ferrolabs.ai/guides/providers/): All 29 AI providers
+- [Providers](https://docs.ferrolabs.ai/guides/providers/): All 30 AI providers
 - [Provider Configuration](https://docs.ferrolabs.ai/guides/providers-config/): Environment variables per provider
+- [Provider Capability Matrix](https://docs.ferrolabs.ai/guides/provider-capabilities/): Which providers support chat/embeddings/images/discovery
 - [Routing Policies](https://docs.ferrolabs.ai/guides/routing-policies/): 8 routing strategies
-- [Plugins](https://docs.ferrolabs.ai/guides/plugins/): 11 built-in plugins
+- [Plugins](https://docs.ferrolabs.ai/guides/plugins/): 6 built-in plugins (+ 5 managed guardrails)
 - [MCP Integration](https://docs.ferrolabs.ai/guides/mcp/): Model Context Protocol tool servers
-- [Authentication](https://docs.ferrolabs.ai/guides/auth/): API key management
-- [Rate Limiting](https://docs.ferrolabs.ai/guides/rate-limiting/): Token bucket and IP rate limiting
-- [Observability](https://docs.ferrolabs.ai/guides/observability/): Prometheus metrics and logging
+- [Virtual Keys](https://docs.ferrolabs.ai/guides/virtual-keys/): config virtual_key vs admin API keys
+- [Cost Tracking](https://docs.ferrolabs.ai/guides/cost-tracking/): See and cap spend
+- [Authentication](https://docs.ferrolabs.ai/guides/auth/): MASTER_KEY and API key management
+- [Rate Limiting](https://docs.ferrolabs.ai/guides/rate-limiting/): Per-IP, per-key, and per-user limits
+- [Observability](https://docs.ferrolabs.ai/guides/observability/): Prometheus metrics and OpenTelemetry
 
 ## API Reference
 
+- [API Overview](https://docs.ferrolabs.ai/api-reference/overview/): Surface and conventions
 - [API Endpoints](https://docs.ferrolabs.ai/api-reference/endpoints/): Full endpoint reference
-- [Admin API](https://docs.ferrolabs.ai/api-reference/admin/): Admin API reference
+- [Streaming](https://docs.ferrolabs.ai/api-reference/streaming/): SSE contract and error framing
+- [Admin API](https://docs.ferrolabs.ai/api-reference/admin/): Keys, config, logs, usage
+- [Errors](https://docs.ferrolabs.ai/api-reference/errors/): Status codes with gateway-vs-provider source
 
 ## Operations
 
 - [Monitoring](https://docs.ferrolabs.ai/operations/monitoring/): Prometheus queries and alerting
 - [Request Logging](https://docs.ferrolabs.ai/operations/request-logging/): SQLite and PostgreSQL backends
 - [Server Settings](https://docs.ferrolabs.ai/operations/server-settings/): All environment variables
+- [CLI Reference](https://docs.ferrolabs.ai/operations/cli-reference/): ferrogw subcommands and flags
 
 ## Performance
 
@@ -52,6 +63,9 @@
 
 ## Other
 
+- [Migrate from LiteLLM](https://docs.ferrolabs.ai/guides/migration-litellm/): Move from LiteLLM
+- [Migrate from Portkey](https://docs.ferrolabs.ai/guides/migration-portkey/): Move from Portkey
+- [Migrate from OpenRouter](https://docs.ferrolabs.ai/guides/migration-openrouter/): Move from OpenRouter
 - [FAQ](https://docs.ferrolabs.ai/faq/): Frequently asked questions
 - [Troubleshooting](https://docs.ferrolabs.ai/guides/troubleshooting/): Common issues and fixes
 - [Why Ferro Labs](https://docs.ferrolabs.ai/guides/why-ferro/): Comparison with alternatives
@@ -63,3 +77,4 @@
 - GitHub: https://github.com/ferro-labs/ai-gateway
 - License: Apache 2.0
 - Python SDK: https://pypi.org/project/ferrolabsai/
+- TypeScript SDK: https://www.npmjs.com/package/@ferro-labs-ai/sdk

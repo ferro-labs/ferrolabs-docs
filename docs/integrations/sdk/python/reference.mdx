@@ -315,8 +315,8 @@ class ModelInfo:
     provider: str
     context_window: int
     max_output_tokens: int
-    input_cost_per_token: float
-    output_cost_per_token: float
+    input_per_m_tokens: float
+    output_per_m_tokens: float
     capabilities: list[str]
     status: str
 ```
@@ -644,20 +644,21 @@ async for chunk in stream:
 
 ## Error Handling
 
-The SDK raises typed exceptions for common failure modes.
+The SDK raises typed exceptions for common failure modes. Every HTTP error inherits from `FerroAPIError`, which inherits from the base `FerroError`. `FerroAPIError` exposes `message`, `status_code`, `code`, and `request_id` attributes.
 
 | Exception | HTTP Status | Description |
 |-----------|-------------|-------------|
-| `AuthenticationError` | 401 | Invalid or missing API key |
-| `PermissionDeniedError` | 403 | Insufficient scopes |
-| `NotFoundError` | 404 | Resource not found |
-| `RateLimitError` | 429 | Rate limit exceeded |
-| `APIError` | 5xx | Server-side error |
-| `APIConnectionError` | -- | Network connectivity failure |
-| `APITimeoutError` | -- | Request exceeded timeout |
+| `FerroAuthError` | 401 | Invalid or missing API key |
+| `FerroNotFoundError` | 404 | Resource not found |
+| `FerroRateLimitError` | 429 | Rate limit or quota exceeded |
+| `FerroServerError` | 5xx | Gateway or upstream provider error |
+| `FerroAPIError` | non-2xx | Base class for all HTTP errors |
+| `FerroConnectionError` | -- | Cannot connect to the gateway (network error, timeout) |
+| `FerroStreamError` | -- | Error while consuming a streaming response |
+| `FerroError` | -- | Base class for all SDK errors |
 
 ```python
-from ferrolabsai import FerroClient, RateLimitError
+from ferrolabsai import FerroClient, FerroRateLimitError, FerroAPIError
 
 client = FerroClient()
 
@@ -666,6 +667,8 @@ try:
         model="gpt-4o",
         messages=[{"role": "user", "content": "Hello"}],
     )
-except RateLimitError as e:
-    print(f"Rate limited. Retry after {e.retry_after}s")
+except FerroRateLimitError as e:
+    print(f"Rate limited (HTTP {e.status_code}, request {e.request_id})")
+except FerroAPIError as e:
+    print(f"Gateway error {e.status_code}: {e.message}")
 ```

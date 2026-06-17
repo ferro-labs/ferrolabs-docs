@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: "Complete v1.0.0 configuration reference for the Ferro Labs AI Gateway — routes, targets, 8 routing strategies, model aliases, all 11 plugins, MCP servers, and budget controls."
+description: "Complete v1.0.0 configuration reference for the Ferro Labs AI Gateway — routes, targets, 8 routing strategies, model aliases, all 6 built-in plugins, MCP servers, and budget controls."
 keywords: [AI gateway configuration, config.yaml, LLM routing config, model aliases, YAML configuration, gateway config reference, content-based routing config, ab-test config]
 ---
 
@@ -31,7 +31,7 @@ strategy:
 | `single` | Route every request to the first target. |
 | `fallback` | Try targets in order; retry on failure with exponential backoff. |
 | `loadbalance` | Weighted random distribution across targets. |
-| `conditional` | Rule-based: match model name or model prefix to a target. |
+| `conditional` | Rule-based: match a request field (e.g. model name) to a target. |
 | `least-latency` | Route to the target with the lowest P50 latency (rolling tracker). |
 | `cost-optimized` | Use the built-in model catalog to estimate prompt cost and pick the cheapest compatible target. |
 | `content-based` | Route based on user message content using substring or regex matching. |
@@ -46,15 +46,15 @@ strategy:
     - key: model
       value: gpt-4o-mini
       target_key: openai
-    - key: model_prefix
-      value: claude
+    - key: model
+      value: claude-3-5-sonnet-20241022
       target_key: anthropic
     - key: model
       value: gemini-1.5-flash
       target_key: gemini
 ```
 
-Rules are evaluated in order. `model` matches the exact model ID; `model_prefix` matches any model whose name starts with the given string.
+Rules are evaluated in order. `key` names the request field to inspect (e.g. `model`), `value` is the exact value it must match, and `target_key` is the target to route to.
 
 ### Content-based routing
 
@@ -89,7 +89,7 @@ strategy:
       label: challenger
 ```
 
-Weights are relative. Each request is tagged with the `label` field in structured logs (the `ab_variant` field in `gateway.request.completed` events), so you can aggregate quality or cost metrics per variant.
+Weights are relative. Each variant carries a `label` field, which is currently emitted only to the gateway's DEBUG logs (not to events or a queryable log column).
 
 ## Targets
 
@@ -101,7 +101,8 @@ targets:
     weight: 70           # used by loadbalance strategy
     retry:
       attempts: 3
-      retry_on_status: [429, 502, 503, 504]
+      on_status_codes: [429, 502, 503]
+      initial_backoff_ms: 100
     circuit_breaker:
       failure_threshold: 5   # failures before opening
       success_threshold: 2   # successes before closing
@@ -271,7 +272,7 @@ plugins:
 The 5 enterprise plugins (pii-redact, secret-scan, prompt-shield, schema-guard, regex-guard) require a Ferro Labs Managed account. [Join the waitlist →](https://www.ferrolabs.ai/)
 :::
 
-See [Plugins](/guides/plugins) for all 11 plugins and their full config options.
+See [Plugins](/guides/plugins) for all 6 built-in plugins and their full config options.
 
 ## MCP servers
 
@@ -299,7 +300,7 @@ When `mcp_servers` is present, the gateway initialises MCP connections in the ba
 
 ## Complete example
 
-Copy [`config.example.yaml`](https://github.com/ferro-labs/ai-gateway/blob/main/config.example.yaml) from the repository for a full example covering all 30 providers, aliases, and all 11 plugins.
+Copy [`config.example.yaml`](https://github.com/ferro-labs/ai-gateway/blob/main/config.example.yaml) from the repository for a full example covering all 30 providers, aliases, and all 6 built-in plugins.
 
 ## Related pages
 

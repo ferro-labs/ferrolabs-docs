@@ -39,7 +39,7 @@ v1.0.0 is the first stable release of the Ferro Labs AI Gateway. Starting with t
 ### What's new in v1.0.0
 
 - **MCP streaming support** — clients can send `stream: true` when MCP servers are configured. The gateway resolves all tool calls internally and returns the final answer as SSE. Added in v1.0.0-rc.1.
-- **29 providers** — 10 providers added since v0.6.5: Cerebras, NVIDIA NIM, Cloudflare Workers AI, Databricks, Novita AI, Qwen (Alibaba), Moonshot AI, SambaNova, DeepInfra, OpenRouter.
+- **29 providers** — 10 providers added since v0.6.5: Cerebras, NVIDIA NIM, Cloudflare Workers AI, Databricks, Novita AI, Qwen (Alibaba), Moonshot AI, SambaNova, DeepInfra, OpenRouter. <!-- drift-ok: historical release count for this version -->
 - **8 routing strategies** — content-based and A/B test routing (from v0.8.5) are now stable.
 - **Per-key and per-user rate limiting** — `key_rpm` and `user_rpm` fields in the rate-limit plugin (from v0.8.5).
 - **Budget plugin** — per-key spend tracking and enforcement (from v0.8.5).
@@ -144,7 +144,7 @@ v1.0.0 is the first stable release of the Ferro Labs AI Gateway. Starting with t
 - **Streaming cost tracking** — token usage counted during streamed responses
 - **Least-latency strategy** — P50 rolling latency tracker, routes to fastest provider
 - **Cost-optimized strategy** — model catalog cost estimation, routes to cheapest provider
-- Per-target `retry_on_status` codes list (customise which HTTP status codes trigger retry)
+- Per-target `on_status_codes` codes list (customise which HTTP status codes trigger retry)
 - CLI overhaul using Cobra — `ferrogw-cli` with `admin`, `models`, and `keys` subcommands
 
 ## v0.4.5 — 2026-02-28

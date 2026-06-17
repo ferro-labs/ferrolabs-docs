@@ -11,6 +11,47 @@ keywords: [AI gateway endpoints, LLM proxy endpoints, OpenAI compatible endpoint
 - `GET /dashboard` - minimal admin UI
 - `GET /v1/models` - aggregated model list
 
+## Model listing — `GET /v1/models`
+
+Returns the standard OpenAI envelope `{ "object": "list", "data": [...] }`. Each
+entry starts from the minimal OpenAI model shape (`id`, `object`, `owned_by`) and
+is enriched from the gateway model catalog. The extra fields are `omitempty`, so
+models without a catalog entry return only the base three and clients that read
+just `id`/`object`/`owned_by` keep working.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `mode` | string | Model class, e.g. `chat`, `embedding`, `image` |
+| `context_window` | integer | Maximum input context in tokens |
+| `max_output_tokens` | integer | Maximum tokens the model can emit |
+| `capabilities` | string array | Enabled features (see below) |
+| `status` | string | Lifecycle status from the catalog |
+| `deprecated` | boolean | `true` when the model is past deprecation |
+
+`capabilities` is a flat list built from the catalog and may include: `vision`,
+`function_calling`, `parallel_tool_calls`, `json_mode`, `response_schema`,
+`streaming`, `prompt_caching`, `reasoning`, `audio_input`, `audio_output`,
+`finetuneable`.
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "gpt-4o",
+      "object": "model",
+      "owned_by": "openai",
+      "mode": "chat",
+      "context_window": 128000,
+      "max_output_tokens": 16384,
+      "capabilities": ["vision", "function_calling", "streaming", "json_mode"],
+      "status": "stable",
+      "deprecated": false
+    }
+  ]
+}
+```
+
 ## OpenAI compatible endpoints
 
 - `POST /v1/chat/completions`
@@ -20,7 +61,11 @@ keywords: [AI gateway endpoints, LLM proxy endpoints, OpenAI compatible endpoint
 
 ## Proxy pass-through
 
-All other `/v1/*` requests are proxied to the selected provider, including:
+Any `/v1/*` request that the gateway does not handle natively is transparently
+reverse-proxied to the selected provider. These paths work **only** for
+providers that implement the proxiable-provider contract (they expose an upstream
+base URL and auth headers); for non-proxiable providers the request returns
+`501`. Commonly proxied paths include:
 
 - `/v1/files`
 - `/v1/batches`
@@ -35,4 +80,24 @@ All other `/v1/*` requests are proxied to the selected provider, including:
 For proxy routes, the gateway resolves the provider in this order:
 
 1. `X-Provider` header (for example: `openai` or `anthropic`)
-2. `model` field in the JSON body
+2. top-level `model` field in the JSON body (peeked without consuming the body)
+
+If neither resolves a provider, the gateway returns **`400`**
+(`provider_not_resolved`). If a provider resolves but does not support
+pass-through, it returns **`501`** (`proxy_not_supported`).
+
+## Proxy request and response contract
+
+When a request is proxied, the gateway rewrites it before forwarding:
+
+- The inbound client `Authorization` header is **stripped** and replaced with the
+  resolved provider's own authentication headers (the gateway injects upstream
+  credentials — clients never send the provider key directly).
+- The `X-Provider` header is removed before the request leaves the gateway.
+- Standard `X-Forwarded-*` headers are set.
+
+On the response, the gateway adds:
+
+- `X-Gateway-Provider` — the name of the provider that served the request.
+
+An upstream connection failure surfaces as **`502`** (`proxy error: ...`).

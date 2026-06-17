@@ -71,6 +71,15 @@ groups:
           severity: critical
         annotations:
           summary: "Gateway has no healthy providers"
+
+      # Model catalog falling back to the embedded backup
+      - alert: GatewayCatalogFallback
+        expr: increase(gateway_catalog_loads_total{source="fallback"}[15m]) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Model catalog using embedded fallback (remote source unreachable)"
 ```
 
 ## Grafana dashboard
@@ -87,6 +96,7 @@ Key panels to build manually if you prefer:
 | Token usage / min | `(rate(gateway_tokens_input_total[1m]) + rate(gateway_tokens_output_total[1m])) * 60` |
 | Estimated spend / hour | `sum by (model) (rate(gateway_request_cost_usd_total[5m])) * 3600` |
 | Provider breakdown | `sum by (provider) (rate(gateway_requests_total[5m]))` |
+| Catalog loads by source | `sum by (source, result) (rate(gateway_catalog_loads_total[15m]))` |
 
 ## Logging pipeline
 
@@ -105,6 +115,6 @@ Filter gateway logs by `trace_id` in your aggregator to correlate all events for
 ## Resiliency controls
 
 - **Circuit breakers** — automatically exclude failing providers; see the `gateway_circuit_breaker_state` metric
-- **Retries** — configurable per target with status-code filtering (`retry_on_status`)
+- **Retries** — configurable per target with status-code filtering (`on_status_codes`)
 - **Fallback strategy** — automatically promotes to the next target when primary fails
 - **Health endpoint** — integrate into your load balancer's health check for automatic traffic shifting

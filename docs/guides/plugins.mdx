@@ -262,4 +262,4 @@ When the accumulated spend for an API key reaches `spend_limit_usd`, subsequent 
 
 ## Plugin execution order
 
-Plugins are executed in the order they appear in `config.yaml`. Within a stage, if any plugin sets `reject: true`, execution stops and an error is returned to the client. The `skip` flag causes only the current plugin to be bypassed.
+Plugins are executed in the order they appear in `config.yaml`. Within a stage, if any plugin sets `reject: true`, execution stops and an error is returned to the client. Setting `skip: true` short-circuits the **entire remaining stage loop** — the current plugin finishes, then all subsequent plugins in that stage are skipped (it does not merely bypass the current plugin). This is how the `response-cache` plugin short-circuits the rest of the `before_request` stage and the provider call on a cache hit.
