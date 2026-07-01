@@ -2798,6 +2798,16 @@ See [Observability](/guides/observability) and [Monitoring](/operations/monitori
 Source: https://docs.ferrolabs.ai/getting-started/configuration/
 ================================================================================
 
+<Head>
+  <script type="application/ld+json">{JSON.stringify({
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "Ferro Labs AI Gateway Configuration Reference",
+    "description": "Complete v1.0.0 configuration reference for the Ferro Labs AI Gateway — routes, targets, 8 routing strategies, model aliases, all 6 built-in plugins, MCP servers, and budget controls.",
+    "url": "https://docs.ferrolabs.ai/getting-started/configuration/"
+  })}</script>
+</Head>
+
 :::info v1.0.0 reference
 This configuration reference covers Ferro Labs AI Gateway v1.0.0 — the first stable release with semver guarantees. All configuration keys documented here are part of the stable API.
 :::
@@ -5843,6 +5853,16 @@ The circuit breaker opens after `failure_threshold` consecutive failures, stays 
 Source: https://docs.ferrolabs.ai/guides/troubleshooting/
 ================================================================================
 
+<Head>
+  <script type="application/ld+json">{JSON.stringify({
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "Ferro Labs AI Gateway Troubleshooting Guide",
+    "description": "Solutions for common Ferro Labs AI Gateway issues — provider keys, circuit breakers, streaming, MCP timeouts, rate limiting, config reload, Docker health checks, and Prometheus scraping.",
+    "url": "https://docs.ferrolabs.ai/guides/troubleshooting/"
+  })}</script>
+</Head>
+
 This page covers the most common issues encountered when running the Ferro Labs AI Gateway and how to resolve them.
 
 ## Provider key not picked up at startup
@@ -7198,6 +7218,22 @@ docker compose down -v
 # Deploy to Fly.io
 Source: https://docs.ferrolabs.ai/integrations/deployment/fly-io/
 ================================================================================
+
+<Head>
+  <script type="application/ld+json">{JSON.stringify({
+    "@context": "https://schema.org",
+    "@type": "HowTo",
+    "name": "Deploy the Ferro Labs AI Gateway to Fly.io",
+    "description": "Deploy the Ferro Labs AI Gateway on Fly.io with secrets, Postgres, and health checks.",
+    "step": [
+      {"@type": "HowToStep", "name": "Initialize the app", "url": "https://docs.ferrolabs.ai/integrations/deployment/fly-io/#step-1-initialize-the-app"},
+      {"@type": "HowToStep", "name": "Set secrets", "url": "https://docs.ferrolabs.ai/integrations/deployment/fly-io/#step-2-set-secrets"},
+      {"@type": "HowToStep", "name": "Attach Fly Postgres", "url": "https://docs.ferrolabs.ai/integrations/deployment/fly-io/#step-3-attach-fly-postgres-optional"},
+      {"@type": "HowToStep", "name": "Deploy", "url": "https://docs.ferrolabs.ai/integrations/deployment/fly-io/#step-4-deploy"},
+      {"@type": "HowToStep", "name": "Verify", "url": "https://docs.ferrolabs.ai/integrations/deployment/fly-io/#step-5-verify"}
+    ]
+  })}</script>
+</Head>
 
 # Deploy to Fly.io
 

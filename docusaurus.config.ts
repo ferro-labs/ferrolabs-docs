@@ -147,6 +147,31 @@ const config: Config = {
         },
       },
     ],
+    [
+      '@docusaurus/plugin-client-redirects',
+      {
+        // 301s for docs pages moved from /guides/ to /integrations/deployment/.
+        // Old URLs are still indexed by Google; these preserve SEO value and clear 404s.
+        // trailingSlash: true means the plugin emits a single trailing-slash
+        // redirect page per entry; the host normalizes the no-slash variant to
+        // it, so listing both forms would collide (EEXIST) at build time.
+        redirects: [
+          {
+            to: '/integrations/deployment/docker-compose/',
+            from: '/guides/deployment/docker-compose/',
+          },
+          {
+            to: '/integrations/deployment/kubernetes/',
+            from: '/guides/kubernetes/',
+          },
+          {
+            // Go SDK guide moved out of /guides/ in v1.1.0; old URL still indexed.
+            to: '/integrations/sdk/go/',
+            from: '/guides/go-sdk/',
+          },
+        ],
+      },
+    ],
   ],
 
   presets: [
