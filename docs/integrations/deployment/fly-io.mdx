@@ -8,6 +8,24 @@ keywords:
   - Fly.io LLM gateway
 ---
 
+import Head from '@docusaurus/Head';
+
+<Head>
+  <script type="application/ld+json">{JSON.stringify({
+    "@context": "https://schema.org",
+    "@type": "HowTo",
+    "name": "Deploy the Ferro Labs AI Gateway to Fly.io",
+    "description": "Deploy the Ferro Labs AI Gateway on Fly.io with secrets, Postgres, and health checks.",
+    "step": [
+      {"@type": "HowToStep", "name": "Initialize the app", "url": "https://docs.ferrolabs.ai/integrations/deployment/fly-io/#step-1-initialize-the-app"},
+      {"@type": "HowToStep", "name": "Set secrets", "url": "https://docs.ferrolabs.ai/integrations/deployment/fly-io/#step-2-set-secrets"},
+      {"@type": "HowToStep", "name": "Attach Fly Postgres", "url": "https://docs.ferrolabs.ai/integrations/deployment/fly-io/#step-3-attach-fly-postgres-optional"},
+      {"@type": "HowToStep", "name": "Deploy", "url": "https://docs.ferrolabs.ai/integrations/deployment/fly-io/#step-4-deploy"},
+      {"@type": "HowToStep", "name": "Verify", "url": "https://docs.ferrolabs.ai/integrations/deployment/fly-io/#step-5-verify"}
+    ]
+  })}</script>
+</Head>
+
 # Deploy to Fly.io
 
 Fly.io runs Docker containers on bare-metal servers worldwide with sub-second boot times. It is one of the fastest ways to get a self-hosted AI Gateway into production without managing infrastructure.
