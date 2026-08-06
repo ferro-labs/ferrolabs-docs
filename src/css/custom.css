@@ -182,6 +182,21 @@ body {
   margin-bottom: 1rem;
 }
 
+/* Infima scopes LARGER sizes directly onto the markdown page title and section
+   headings (.markdown h1:first-child = 3rem, .markdown > h2 = 2rem, > h3 = 1.5rem).
+   Those live in a stylesheet loaded AFTER this file at equal specificity, so a
+   plain override loses the cascade (and gets dropped as dead code). !important on
+   the custom property forces our compact scale to win at every breakpoint. */
+.markdown h1:first-child {
+  --ifm-h1-font-size: 1.875rem !important;
+}
+.markdown > h2 {
+  --ifm-h2-font-size: 1.375rem !important;
+}
+.markdown > h3 {
+  --ifm-h3-font-size: 1.15rem !important;
+}
+
 .theme-doc-markdown h2,
 .theme-doc-markdown h3 {
   letter-spacing: -0.015em;
