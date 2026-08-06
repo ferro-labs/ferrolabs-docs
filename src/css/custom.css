@@ -339,19 +339,59 @@ body {
   padding-right: 0;
 }
 
+/* ── Sidebar link hierarchy ──────────────────────────────────────────
+   Three tiers so the nav doesn't read flat: section labels (uppercase,
+   muted — styled elsewhere) > parent/collapsible rows (heavier, full ink)
+   > leaf links (softer slate) > the active page (teal, semibold, tinted). */
+
+/* Leaf links: softer slate ink and a hair lighter weight, so they recede
+   and let the active item + section labels lead the eye. */
 .theme-doc-sidebar-menu .menu__link {
   display: flex;
   align-items: center;
-  color: var(--ifm-font-color-base);
-  font-size: 0.96rem;
-  line-height: 1.34;
-  padding-top: 0.36rem;
-  padding-bottom: 0.36rem;
+  color: #4a5567;
+  font-size: 0.9rem;
+  font-weight: 450;
+  line-height: 1.3;
+  padding: 0.34rem 0.6rem;
+  border-radius: 7px;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+[data-theme='dark'] .theme-doc-sidebar-menu .menu__link {
+  color: #98a4b6;
 }
 
-.theme-doc-sidebar-menu .menu__link:hover,
-.theme-doc-sidebar-menu .menu__link--active {
+/* Hover: subtle teal-tinted pill + darker text. */
+.theme-doc-sidebar-menu .menu__link:hover {
+  color: var(--ifm-heading-color);
+  background-color: rgba(15, 118, 110, 0.06);
+}
+[data-theme='dark'] .theme-doc-sidebar-menu .menu__link:hover {
+  color: #e5e7eb;
+  background-color: rgba(45, 212, 191, 0.09);
+}
+
+/* Parent / collapsible rows (categories with sub-pages): full ink + heavier,
+   so structural parents read differently from the leaves under them. */
+.theme-doc-sidebar-menu .menu__list-item-collapsible > .menu__link {
+  color: var(--ifm-heading-color);
+  font-weight: 600;
+}
+[data-theme='dark'] .theme-doc-sidebar-menu .menu__list-item-collapsible > .menu__link {
+  color: #e8edf4;
+}
+
+/* Active page: the strongest signal — teal text, semibold, a tinted pill. */
+.theme-doc-sidebar-menu .menu__link--active,
+.theme-doc-sidebar-menu .menu__link--active:hover {
   color: var(--ifm-color-primary);
+  font-weight: 650;
+  background-color: rgba(15, 118, 110, 0.1);
+}
+[data-theme='dark'] .theme-doc-sidebar-menu .menu__link--active,
+[data-theme='dark'] .theme-doc-sidebar-menu .menu__link--active:hover {
+  color: var(--ifm-color-primary);
+  background-color: rgba(45, 212, 191, 0.13);
 }
 
 /* ── Per-item line icons ───────────────────────────────────────────
