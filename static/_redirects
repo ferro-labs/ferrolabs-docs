@@ -1,2 +1,22 @@
-# Redirect Cloudflare Pages subdomain to canonical domain
+# Server-side 301s (Cloudflare Pages). First match wins.
+# These mirror the @docusaurus/plugin-client-redirects entries in
+# docusaurus.config.ts, but as real 301s they pass full link equity — the
+# client-side stubs are only a fallback for anything that reaches them first.
+
+# ── v1.4 docs overhaul: intro moved to the site root; guides promoted to
+#    dedicated sections. Never delete a URL that ever ranked without a 301. ──
+/intro/                          /                              301
+/guides/plugins/                 /plugins/                      301
+/guides/routing-policies/        /routing/                      301
+/guides/providers/               /providers/                    301
+/guides/provider-capabilities/   /providers/                    301
+/guides/providers-config/        /providers/configuration/      301
+/guides/admin-auth/              /guides/auth/                  301
+
+# ── Earlier moves (were client-side only; promoted to real 301s) ──
+/guides/deployment/docker-compose/  /integrations/deployment/docker-compose/  301
+/guides/kubernetes/                 /integrations/deployment/kubernetes/      301
+/guides/go-sdk/                     /integrations/sdk/go/                      301
+
+# ── Block the .pages.dev preview subdomain: send it to the canonical domain ──
 https://ferrodocs.pages.dev/* https://docs.ferrolabs.ai/:splat 301

@@ -1,10 +1,128 @@
 ---
 title: Changelog
-description: "Release history for Ferro Labs AI Gateway — v1.1.0 adds opt-in OpenTelemetry tracing on top of the stable v1.0.0 release with 30 providers, 8 routing strategies, MCP streaming, content-based routing, A/B testing, and budget controls."
-keywords: [AI gateway changelog, LLM proxy releases, AI gateway version history, AI gateway v1.1.0, OpenTelemetry tracing, gateway updates, MCP integration release]
+description: "Release history for Ferro Labs AI Gateway v0.4.5 through v1.4.1: the v1.4.0 breaking routing pipeline, embedded dashboard, and native rerank/audio endpoints."
+keywords: [AI gateway changelog, LLM proxy releases, AI gateway version history, AI gateway v1.4.1, AI gateway v1.4.0 breaking changes, embedded dashboard, unified routing pipeline, MCP stdio transport, OpenTelemetry tracing, gateway updates]
 ---
 
-Full release notes are also on [GitHub Releases](https://github.com/ferro-labs/ai-gateway/releases).
+Full release notes are also on [GitHub Releases](https://github.com/ferro-labs/ai-gateway/releases). **v1.4.1 is the latest tag.**
+
+## v1.4.1 — 2026-08-07 — Dependency security patch
+
+A dependency-security patch for the web toolchain and embedded dashboard — no gateway code changes. Clears all 12 open Dependabot alerts (PR #392).
+
+### What's new in v1.4.1
+
+- **react-router 8.3.0** — absorbs `react-router-dom`, whose 7.x line was flagged by scanners. The client routing API is unchanged and browser test suites pass unmodified.
+- **React 19.2.8**.
+- **Seven build/tooling-time packages patched** — `undici`, `ip-address`, `fast-uri`, `postcss`, `@hono/node-server`, `brace-expansion`, `hono`. None of these ship inside the embedded dashboard bundle; `npm audit` reports zero vulnerabilities.
+
+No behavior changes, no breaking changes.
+
+---
+
+## v1.4.0 — 2026-08-07 — One routing pipeline, endpoint parity, and the embedded dashboard
+
+A breaking release (PR #365; merged 2026-08-06, tag and signed release published 2026-08-07). Chat, streaming, embeddings, and image generation had each grown their own copy of retry, circuit breaking, and error classification; this release puts all four on one routing pipeline, so a behavior is either true of every surface or of none. It also widens the native API surface and ships the operations dashboard embedded in the OSS binary — not as a standalone artifact.
+
+### What's new in v1.4.0
+
+- **One routing pipeline** — chat, streaming, embeddings and images now share `routeTargets`; retry, circuit breaking, concurrency limits, error classification, metrics, and request logging are wired once. See [Routing](/routing).
+- **Embedded dashboard** — the operations dashboard is a React SPA built into the binary and served at the gateway's own root, on the same port. One artifact, one origin, no separate container.
+- **Native endpoint parity** — `POST /v1/rerank` (Cohere v2 contract), `POST /v1/moderations`, and `POST /v1/audio/{transcriptions,translations,speech}` become routed surfaces carrying the full gateway lifecycle (targets, strategy, plugins, circuit breaker, concurrency, metrics, request logging) instead of depending on the generic pass-through.
+- **Files and Batches** — `/v1/files*` and `/v1/batches*` forward to one configured `batch_target` (`501` when unset). **Responses API** — `/v1/responses` is now governed and priced, with usage teed from the response body or the terminal SSE event; its stateful sub-routes pin to `responses_target`.
+- **`targets[].models`** — operators can declare models a target serves that neither the catalog nor live discovery see; additive only, wildcards rejected at load.
+- **Admin sessions** — `POST`/`DELETE /admin/session`, session listing, and per-session revocation. The admin key is no longer kept in the browser (24h absolute / 1h idle).
+- **New admin surface** — `GET /admin/audit` (durable audit trail), `GET /admin/plugins/catalog`, `GET /admin/logs/stats` (p50/p95/p99 latency + TTFT, token split, spend per provider/model). Request-log rows gain `duration_ms`, `ttft_ms`, `cost_usd`, `api_key_id`.
+- **Agentic MCP loops now bill and guard every turn** — a budget can stop an overspending loop mid-request, and a loop that fails part-way is still billed for what it spent. See [MCP](/guides/mcp).
+- **More surfaces per provider** — image generation on gemini, deepinfra, and together; embeddings on azure-foundry; 17 streaming providers get a 120s response-header timeout.
+- Dashboard Tracing page and a fullstack observability demo compose stack under `deploy/`; license notices ship in every release artifact; container images publish as one multi-platform manifest with an SPDX SBOM attestation.
+
+### Breaking changes in v1.4.0
+
+- **`targets[].retry` is now honored under every routing mode**, not only `fallback` — set `attempts: 1` on a target to keep the old single-attempt behavior. This is the change most deployments will notice.
+- **`targets` is an allowlist on every surface** — a provider that's registered but not listed under `targets` serves nothing; an unowned model returns `404 model_not_found`. Pool modes (fallback, loadbalance, least-latency, cost-optimized, ab-test) advance past a failed target; named modes (single, conditional, content-based) still stop and report. Every mode now skips an open circuit — all targets open returns `503`, not `404`.
+- **Exhausted budget returns `402 insufficient_quota`**, not `429` — the OpenAI SDKs don't retry `402`; `429` stays reserved for rate limiting and concurrency backpressure.
+- **Ollama's models variable is renamed `FERRO_OLLAMA_MODELS`** <!-- accuracy-ok --> — the old `OLLAMA_MODELS` <!-- accuracy-ok --> name warns this release and is removed next.
+- **`ADMIN_BOOTSTRAP_KEY`** <!-- accuracy-ok --> **and its companions are removed** — set `MASTER_KEY` instead; `ferrogw init` generates one.
+- **`/metrics` requires the `read_only` or `admin` scope; `/debug/*` requires `admin`** — a valid bearer credential is no longer enough on its own.
+- **`<PROVIDER>_BASE_URL` is the API root used verbatim on every provider** (eight providers changed meaning) — a value with a path must include the version segment.
+- **Plugin API: `Context.Skip`** <!-- accuracy-ok --> **is removed** — `SkipProvider` replaces it and skips only the provider call. Every remaining plugin, including `after_request`, still runs, so a cache hit can no longer disable a guardrail behind it. Pre-1.4.0 third-party plugins do not compile.
+- **Container images publish as one multi-platform manifest** — the `-amd64`/`-arm64` tags are gone.
+- **`/dashboard`** <!-- accuracy-ok -->**, `/dashboard/*`, and `/logo.png` are removed** — the embedded SPA at the site root serves unmatched paths (no `410`).
+
+See [Plugins](/plugins), [Routing](/routing), and [Provider configuration](/providers/configuration) for the updated contracts.
+
+---
+
+## v1.3.2 — 2026-07-21 — Disclosure and durability patch
+
+Folds in disclosure and durability fixes originally scoped as a separate patch — zero breaking changes.
+
+### What's new in v1.3.2
+
+- **Provider error text is filtered before it leaves the process** — a credential echoed by an upstream can no longer reach clients, logs, SSE frames, or exporters. Best-effort pattern matching reduces exposure; it does not eliminate it.
+- **A crashed MCP stdio subprocess is detected** and its tools withdrawn from the model (stdio only — a dead HTTP MCP server after handshake is not detected).
+- **Admin config changes and their audit/history entries are applied and recorded as one serialized operation**, so a rollback can no longer target the wrong version.
+- **`mcp_servers[].required`** (opt-in, default `false`) gates `/readyz` on a server's availability; the `/readyz` body gains per-server MCP state (the failure reason is deliberately omitted from the unauthenticated endpoint).
+- **New MCP observability** — `gateway_mcp_server_up` gauge, `gateway_mcp_server_init_failures_total` counter, and tracing spans for MCP startup.
+- MCP tools that return an error result are now recorded as errors (metrics/audit/spans), not successes.
+
+## v1.3.1 — 2026-07-21 — Seven post-1.3.0 fixes
+
+Seven defects from v1.3.0 fixed, zero breaking changes — much of it configuration that was quietly not being applied.
+
+### What's new in v1.3.1
+
+- **Streaming now honors retry and fallback** (start-of-stream only — a begun stream is never replayed); retry backoff is unified across every surface (previously zero outside chat).
+- **Embeddings and image generation now follow the configured routing strategy** — previously first-capable-provider with no fallback, retry, or timeout — and now emit metrics, cost, tracing spans, and lifecycle events.
+- `/v1/completions` accepts its documented request shapes (array/token-id prompt, string `stop`).
+- Circuit breaker made panic-safe — a panicking provider call no longer disables its target until restart; provider lookup order is now stable.
+- `stream_options.include_usage` is honored; API-key updates no longer apply changes they rejected.
+- **Model catalog is now actually downloaded** — fetch budget raised from 1s to 10s — plus `FERRO_MODEL_CATALOG_TIMEOUT` (`0` skips the fetch for air-gapped deployments).
+
+No breaking API changes, but two operationally visible effects: which provider serves embeddings/images can shift under non-single strategies (worth a cost/latency/data-residency review), and reported costs move to pricing from the live model catalog rather than the embedded snapshot.
+
+## v1.3.0 — 2026-07-20 — MCP stdio transport
+
+Adds a second MCP transport and closes an environment-leak risk in the first one.
+
+### What's new in v1.3.0
+
+- **MCP stdio transport** — `mcp_servers` entries may set `command` (+ `args`) instead of `url`, running any npx/uvx/binary MCP server as a gateway-launched subprocess. Contributed by @gr3enarr0w (PR #121). See [MCP](/guides/mcp).
+- **Subprocess environment isolation** — an MCP subprocess inherits no gateway environment; only `PATH`/`HOME`/`LANG`/`TMPDIR` plus that server's own `env` block reach it.
+- `${VAR}` references resolve in a stdio server's `env` at client construction; `GET /admin/config` redacts `env` alongside `headers`.
+- stderr is drained into the gateway log at debug level, so a startup failure is readable instead of an opaque timeout.
+- Fixed: a misconfigured MCP server no longer disables streaming gateway-wide — activation now keys off discovered tools, not registered servers.
+- Fixed: caller-supplied tool calls are no longer intercepted — client-side OpenAI function calling works with MCP enabled.
+- Fixed: tool calls are capped per turn, npx grandchild processes are reaped via process groups, and heavy stderr writers no longer deadlock.
+
+No breaking changes are formally declared, but one behavior changed: MCP tools are advertised only when the request carries no tools of its own — a request sending its own `tools` array passes through untouched, unaffected by MCP entirely.
+
+---
+
+## v1.2.0 — 2026-07-14 — Provider capability matrix and plugin failure policy
+
+Formalizes provider capability declarations and fixes a dangerous plugin-error contract: a broken plugin no longer masquerades as a clean deny.
+
+### What's new in v1.2.0
+
+- **`GET /v1/capabilities` + provider capability matrix** — a declarative source of which OpenAI chat parameters each provider forwards, translates, or cannot express, enforced rather than merely advertised.
+- **`compatibility.on_unsupported_param`**: `warn` (default) | `drop` | `reject` — unsupported parameters are no longer silently discarded.
+- **`request_timeout`** bounds a non-streaming request end-to-end (plugins + provider call + every retry/fallback); streaming is exempt except on the MCP agentic path.
+- **`targets[].concurrency`** — per-target in-flight limits with a bounded queue; saturation sheds `429 provider_saturated`. <!-- drift-ok: error code, not a provider count -->
+- **`/livez` and `/readyz`** split from `/health` for orchestrator gating.
+- **Cross-provider conformance suite** (`test/conformance/`) — native-payload fixtures, no network; new providers must add a fixture or a declared exemption.
+- A hung provider now trips its circuit breaker (the gateway attributes the deadline to the provider).
+
+### Breaking changes in v1.2.0
+
+- **Plugin authors: deny by verdict, not error** — a returned error now means the plugin broke and yields `500 plugin_error`; `Context.Reject` is the only way to deny a request. A down rate-limit backend no longer returns `429` and triggers SDK retry storms.
+- `Context.Reject` is now honored for every plugin type (previously silently discarded for logging/metrics/transform plugins).
+- Transform plugins fail closed on error (previously fail-open).
+- **Retries limited to the default retryable set** (408/429/5xx) with exponential backoff and full jitter, honoring `Retry-After` capped at 30s, stopping at the deadline — `400`/`401` are no longer retried.
+- **`${VAR}` substitution**: only the braced form is a reference; a bare `$` is literal data (`$100`, `pa$$w0rd` survive); an undefined variable is now a startup error; resolution moved from config load to component construction so secrets never enter config history/rollback.
+
+---
 
 ## v1.1.0 — 2026-05-24 — OpenTelemetry tracing
 

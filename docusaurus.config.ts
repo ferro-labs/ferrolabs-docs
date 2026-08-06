@@ -40,8 +40,9 @@ const structuredData = {
       name: 'Ferro Labs AI Gateway',
       applicationCategory: 'DeveloperApplication',
       operatingSystem: 'Linux, macOS, Windows, Docker, Kubernetes',
+      softwareVersion: '1.4.1',
       description:
-        'Open-source, high-performance AI gateway written in Go. Routes LLM requests across 30 providers and 2,500+ models through a single OpenAI-compatible API, with 6 built-in plugins and 8 routing strategies.',
+        'Open-source, high-performance AI gateway written in Go. Routes LLM requests across 30 providers and 2,500+ models through a single OpenAI-compatible API, with 6 built-in plugins, 8 routing strategies, MCP tool-calling, and an embedded dashboard.',
       url: SITE_URL,
       offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
       publisher: { '@id': `${SITE_URL}/#organization` },
@@ -101,16 +102,37 @@ const config: Config = {
   },
 
   headTags: [
-    // Preload the variable font so it paints with the first frame — removes the
-    // flash-of-unstyled-text and the layout shift it caused (better LCP/CLS).
+    // Preload the two variable fonts so they paint with the first frame —
+    // removes the flash-of-unstyled-text and the layout shift it caused
+    // (better LCP/CLS). Inter for prose/UI, JetBrains Mono for code.
     {
       tagName: 'link',
       attributes: {
         rel: 'preload',
-        href: '/fonts/roobert-proportional-vf.woff2',
+        href: '/fonts/inter-variable-latin.woff2',
         as: 'font',
         type: 'font/woff2',
         crossorigin: 'anonymous',
+      },
+    },
+    {
+      tagName: 'link',
+      attributes: {
+        rel: 'preload',
+        href: '/fonts/jetbrains-mono-variable-latin.woff2',
+        as: 'font',
+        type: 'font/woff2',
+        crossorigin: 'anonymous',
+      },
+    },
+    // Discoverable machine-readable corpus for AI answer engines.
+    {
+      tagName: 'link',
+      attributes: {
+        rel: 'alternate',
+        type: 'text/plain',
+        href: '/llms.txt',
+        title: 'llms.txt',
       },
     },
     // Site-wide JSON-LD structured data.
@@ -169,6 +191,15 @@ const config: Config = {
             to: '/integrations/sdk/go/',
             from: '/guides/go-sdk/',
           },
+          // ── v1.4 docs overhaul: intro is now served at the site root; the
+          // guides that became dedicated sections keep their link equity. Every
+          // entry is mirrored as a server-side 301 in static/_redirects.
+          { to: '/', from: '/intro/' },
+          { to: '/plugins/', from: '/guides/plugins/' },
+          { to: '/routing/', from: '/guides/routing-policies/' },
+          { to: '/providers/', from: ['/guides/providers/', '/guides/provider-capabilities/'] },
+          { to: '/providers/configuration/', from: '/guides/providers-config/' },
+          { to: '/guides/auth/', from: '/guides/admin-auth/' },
         ],
       },
     ],
@@ -190,6 +221,13 @@ const config: Config = {
         theme: {
           customCss: './src/css/custom.css',
         },
+        sitemap: {
+          // Google ignores changefreq/priority; lastmod (from git) is the only
+          // field worth emitting. Keep the search page and redirect stubs out.
+          lastmod: 'date',
+          ignorePatterns: ['/search/**'],
+          filename: 'sitemap.xml',
+        },
         gtag: {
           trackingID: 'G-0EV4MZ2KKT',
           anonymizeIP: true,
@@ -209,9 +247,10 @@ const config: Config = {
       { name: 'twitter:site', content: '@ferroLabsAI' },
     ],
     announcementBar: {
-      id: 'ferrocloud-coming-soon',
+      // New id so it re-shows to anyone who dismissed the previous bar.
+      id: 'v141-released',
       content:
-        '🚀 <strong>Ferro Labs Managed</strong> — the managed version of Ferro Labs AI Gateway — is now accepting early access signups. Multi-tenant, dashboard, semantic caching, enterprise plugins. <a href="https://www.ferrolabs.ai/" target="_blank" rel="noopener noreferrer">Join the waitlist →</a>',
+        '🚀 <strong>v1.4.1 is out</strong> — embedded dashboard, one unified routing pipeline across all surfaces, and native rerank / moderations / audio / responses endpoints. <a href="/changelog/">See what changed →</a>',
       backgroundColor: '#ecfdf5',
       textColor: '#065f46',
       isCloseable: true,

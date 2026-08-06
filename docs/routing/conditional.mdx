@@ -1,0 +1,62 @@
+---
+title: Conditional routing strategy
+description: "Configure strategy.mode: conditional in Ferro Labs AI Gateway to pin models to targets by exact-name or prefix match, first match wins, targets[0] as fallback."
+keywords: [conditional routing, model routing, strategy.mode conditional, model_prefix, ai-gateway routing, deterministic model routing, named mode routing]
+---
+
+Conditional routes each request by matching its declared `model` field against rules you write, not by weight, latency, or cost. It optimizes for **deterministic model-to-provider pinning** — "this model always goes to this backend, no exceptions" — the shape a compliance or contractual requirement needs, where a pool mode's willingness to substitute a different provider is the wrong behavior, not a convenience. Set `strategy.mode: conditional` to use it.
+
+## Behaviour
+
+`conditional` is a **named mode**: the pipeline commits to the target the first matching rule names and reports that target's failure, rather than trying the remaining targets (contrast with `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, and `ab-test`, which are pool modes that advance past a failure). `Conditional.SelectTargets` (`internal/strategies/conditional.go`) evaluates `strategy.conditions[]` in declared order; the first rule whose `key`/`value` matches the request wins, and when none matches, the configured fallback target is used instead. The matched (or fallback) target leads the returned list, followed by every configured target de-duplicated — that tail is substitution-before-commit only (an open circuit or a surface-incapable target is swapped for a healthy one before the pipeline commits), never a failover path.
+
+The matcher key is a **closed set**: `model` (`req.Model == value`, exact) and `model_prefix` (`strings.HasPrefix(req.Model, value)`). There is no dynamic arm in the switch, so a `key` outside those two is rejected by `config.ValidateConfig` at load — a typo fails startup, not a live request. In the gateway's own wiring the no-match fallback is `targets[0]`, but that's a property of how `buildStrategy` constructs the strategy, not something `Conditional` itself enforces — it always asks `matchTarget`, never assumes the head of a list.
+
+## Config keys
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `strategy.mode` | string | — | Set to `conditional`. |
+| `strategy.conditions[].key` | string | — | `model` (exact match) \| `model_prefix` (prefix match via `strings.HasPrefix`). Closed set — an unrecognized value is a `ferrogw validate` / startup error, not a request-time failure. |
+| `strategy.conditions[].value` | string | — | The exact model name (`key: model`) or prefix (`key: model_prefix`) to match against the request's `model` field. |
+| `strategy.conditions[].target_key` | string | — | Must name a configured `targets[].virtual_key`; validated at load. |
+
+## Minimal working YAML
+
+```yaml
+strategy:
+  mode: conditional
+  conditions:
+    - key: model
+      value: gpt-4o
+      target_key: openai
+    - key: model_prefix
+      value: claude-
+      target_key: anthropic
+
+targets:
+  - virtual_key: openai   # targets[0] doubles as the no-match fallback
+  - virtual_key: anthropic
+```
+
+## When to use
+
+- Deterministic model-to-provider pinning: a specific model must always be served by a specific backend, for compliance, contractual, or data-residency reasons — not "prefer this provider," but "only this provider."
+- Routing whole model families by prefix (`claude-`, `gpt-`, `gemini-`) to their native provider without listing every model name individually.
+- Any setup where `fallback`'s or `loadbalance`'s willingness to substitute a different provider on failure is the behavior you need to prevent, not add.
+
+## Gotchas
+
+- **A model the matched target doesn't serve is `404 model_not_found`, even when another configured target serves it.** This is a named mode: the rule is a decision about which target handles this model, not a preference among several. Reaching the other target means writing another rule that names it — the tail of `targets[]` is never tried as a fallback for this.
+- **`GET /v1/models` mirrors the same restriction.** A model missing from that listing under this mode is the signal that a rule is needed for it, before a request ever hits the 404.
+- **The no-match fallback is `targets[0]`.** `NewConditional`'s constructor argument is a `fallback` value passed explicitly by `buildStrategy`, and in the gateway's wiring that argument is `targets[0]` — so put the target you want unmatched models to land on first.
+- **The condition-key set is closed on purpose.** `model` and `model_prefix` are the only two matcher arms; anything else — a typo, a field name from another mode — is rejected at load by `config.ValidateConfig`, not silently ignored or routed to the fallback.
+- **Circuit state is the one thing that still moves the choice.** If the matched (or fallback) target's circuit is open, the pipeline substitutes a healthy target from the tail before committing, and traffic returns to the matched target once its circuit closes. This is unrelated to, and doesn't reintroduce, failover on an ordinary request failure.
+
+## Related
+
+- [Routing overview](/routing)
+- [Content-based](/routing/content-based)
+- [Fallback](/routing/fallback)
+- [Single](/routing/single)
+- [Configuration reference](/getting-started/configuration)

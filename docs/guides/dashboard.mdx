@@ -1,0 +1,72 @@
+---
+title: The embedded dashboard
+description: "Tour the embedded Ferro Labs AI Gateway dashboard: a React console served at the gateway root with overview, analytics, request logs, config and playground."
+keywords: [ferro labs dashboard, ai gateway dashboard, operations console, embedded spa, admin session, request logs, analytics, playground]
+---
+
+Every Ferro Labs AI Gateway binary serves a built-in operations console. As of **v1.4.0** it is a React single-page app compiled into the binary with `go:embed` (`web/` builds the bundle, `internal/webui` serves it) and mounted at the **site root on the gateway's own port** — the same origin as the API. There is no second container, no separate web image, no `/dashboard` path, and no `GATEWAY_BASE_URL`: the SPA answers every path the API router does not, so an unmatched route lands on the console.
+
+Sign in and it reads the live gateway — traffic, spend, providers, routing, plugins, request logs, and the audit trail — over the same `/admin/*` endpoints the CLI uses.
+
+## Accessing the dashboard
+
+Start the gateway and open its root in a browser:
+
+```bash
+ferrogw                 # starts the server on :8080 by default
+# then open
+open http://localhost:8080/
+```
+
+For a self-hosted deployment, that is `http://your-gateway/` on whatever host and port you run it on — the console lives wherever the API does.
+
+### Sign in with a key, browse with a session
+
+The gateway has no user accounts; a key *is* the identity. The login screen takes your `MASTER_KEY` or any admin / `read_only` API key and exchanges it for a short-lived session via `POST /admin/session`. The credential is sent exactly once and **never stored in the browser** — only the returned session token reaches storage. That is the whole point of the exchange: a master key sitting in browser storage cannot be revoked or expired, but a session can.
+
+Sessions are **24h absolute / 1h idle**. They are listable and revocable from the **API Keys** page (backed by `GET /admin/sessions`, `DELETE /admin/sessions/{id}`), so a single lost device can be signed out without disturbing every operator, and `DELETE /admin/sessions` signs everyone out at once. `POST /admin/session` is throttled per source address to blunt credential guessing.
+
+:::tip
+Give each operator their own admin-scoped key from the **API Keys** page and keep `MASTER_KEY` for bootstrap and break-glass. Sign-ins and key changes are recorded in the audit trail against the acting credential — a shared key names itself and answers nothing.
+:::
+
+## The pages
+
+The left navigation maps one-to-one onto the gateway's admin surface:
+
+| Page | What it shows |
+|------|---------------|
+| **Overview** | At-a-glance health: routable targets, recent traffic, and spend, read from the live gateway. |
+| **Analytics** | Traffic and failure series, token split (prompt vs completion), **p50 / p95 / p99** request latency and **TTFT**, and spend ranked per provider and per model — all from `GET /admin/logs/stats`. |
+| **Providers** | The registered providers, their configured surfaces, and per-target **circuit state** (polled from `/health`). |
+| **Routing Strategy** | The active routing mode and its targets. |
+| **Plugins** | The plugins this instance has configured, described against the catalog the build ships (`GET /admin/plugins/catalog`) so a card can never name a setting that does not exist. |
+| **Request Logs** | One row per request, filterable by model, provider, and credential. It resolves each row's `api_key_id` back to the key **name** (via `GET /admin/keys`), marks a key revoked or expired since it served, and shows `duration_ms`, `ttft_ms`, and `cost_usd`. The credential itself is never displayed. |
+| **Audit** | The durable audit trail from `GET /admin/audit` — credential changes, sign-ins (accepted and denied), and log purges — filterable by action, actor, and outcome. |
+| **Configuration** | The live config with **version history and rollback**. When a config store is configured the history is durable; changes and their audit entries are applied as one serialized operation, so a rollback cannot target the wrong version. |
+| **API Keys** | Create, scope, and revoke API keys, and manage active dashboard sessions. |
+| **Playground** | Send chat completions through the **real routing path** — the same targets, plugins, and strategy a production request takes. |
+| **Tracing** | The request-trace view added in v1.4.0, pairing with the fullstack observability demo stack. |
+
+To see the console filled the way the marketing recording shows it, bring up the self-contained demo stack, which drives traffic through the gateway:
+
+```bash
+make up-fullstack   # gateway + Postgres + Jaeger + Prometheus + Grafana + mock upstream + load generator
+# then open http://localhost:8080/
+```
+
+## What it is not yet
+
+The dashboard is an honest read of the gateway, not a versioned control plane. Three limits are worth knowing before you lean on it:
+
+:::warning
+- **It rides the unversioned `/admin/*` API.** A stable, versioned `/admin/v1` contract (Admin API v1) is future scope (targeted for v1.6.x), so treat these endpoints as internal — they can change between releases.
+- **Provider status means *registration*, not *health*.** The Providers page tells you a provider is configured and whether its circuit is open, not that a live probe reached the upstream.
+- **A `read_only` session can still invoke inference through the Playground.** A dedicated `inference:invoke` permission does not exist yet; a read-only key can send Playground requests, and each is billed by the upstream provider like any other completion.
+:::
+
+## Related
+
+- [Authentication and API keys](/guides/auth) — scopes, `MASTER_KEY`, and the session model in depth
+- [Request logging](/operations/request-logging) — the `duration_ms` / `ttft_ms` / `cost_usd` columns and `api_key_id` filtering the Logs page reads
+- [Admin API reference](/api-reference/admin) — every `/admin/*` endpoint the console calls

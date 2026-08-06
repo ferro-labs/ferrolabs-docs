@@ -1,33 +1,86 @@
 ---
 title: Quickstart
-description: Get the Ferro Labs AI Gateway running in under 30 seconds with Docker. Send your first OpenAI-compatible request and start routing across multiple LLM providers instantly.
-keywords: [AI gateway quickstart, Docker LLM proxy, self-hosted LLM gateway setup, OpenAI proxy install, LLM gateway Docker, AI gateway getting started, Go AI gateway]
+description: Install the Ferro Labs AI Gateway, generate a MASTER_KEY with ferrogw init, and send an authenticated OpenAI-compatible chat request to your first provider.
+keywords: [AI gateway quickstart, Docker LLM proxy, self-hosted LLM gateway setup, OpenAI proxy install, ferrogw init, LLM gateway Docker, AI gateway getting started, Go AI gateway]
 ---
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-## Run with Docker
+Get the gateway running locally, generate an admin credential, and send an authenticated OpenAI-compatible request in a few minutes.
+
+## Run the gateway
+
+<Tabs>
+<TabItem value="docker" label="Docker" default>
 
 ```bash
 docker run --rm -p 8080:8080 \
   -e OPENAI_API_KEY=sk-your-key \
+  -e MASTER_KEY=fgw_your-master-key \
   ghcr.io/ferro-labs/ai-gateway:latest
 ```
 
-## Build from source
+`MASTER_KEY` is the bootstrap admin credential every `/v1/*` and `/admin/*` request authenticates with — pick your own value, or generate one the same way `ferrogw init` does:
+
+```bash
+export MASTER_KEY=fgw_$(openssl rand -hex 16)
+```
+
+With no `config.yaml` mounted, the gateway builds a default `fallback` config with one target per provider it finds credentials for — enough to route the request below. Mount a real config for retries, aliases, and plugins; see [Configuration](/getting-started/configuration).
+
+</TabItem>
+<TabItem value="binary" label="Downloaded binary">
+
+```bash
+VER=$(curl -fsSL https://api.github.com/repos/ferro-labs/ai-gateway/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
+curl -fsSL "https://github.com/ferro-labs/ai-gateway/releases/download/${VER}/ferrogw_${VER#v}_linux_amd64.tar.gz" | tar xz
+chmod +x ferrogw
+
+export OPENAI_API_KEY=sk-your-key     # providers register at startup — export before init/serve
+./ferrogw init                        # scaffolds config.yaml from detected provider keys, prints a MASTER_KEY
+export GATEWAY_CONFIG=./config.yaml   # a config file is only loaded when this points at it
+export MASTER_KEY=fgw_the-key-init-printed
+./ferrogw
+```
+
+`ferrogw init` writes a minimal `config.yaml` naming every provider it found credentials for in the environment (a placeholder target if it found none), and generates the `MASTER_KEY` — printed once, never written to disk.
+
+</TabItem>
+<TabItem value="source" label="From source">
 
 ```bash
 git clone https://github.com/ferro-labs/ai-gateway.git
 cd ai-gateway
+make build
 
 export OPENAI_API_KEY=sk-your-key
+./bin/ferrogw init
+export GATEWAY_CONFIG=./config.yaml
+export MASTER_KEY=fgw_the-key-init-printed
 make run
 ```
 
+</TabItem>
+</Tabs>
+
+## Check it's up
+
+```bash
+curl http://localhost:8080/readyz
+```
+
+```json
+{"status": "ready", "targets": [...]}
+```
+
+A `503` with `"reason": "no routable targets"` means no provider is both credentialed and named in `targets` — recheck the environment variables above and see [targets is an allowlist](/getting-started/concepts).
+
+Then open [http://localhost:8080/](http://localhost:8080/) — the operations dashboard is compiled into the binary and served from the same port, no separate container. Sign in with `MASTER_KEY` to browse providers, routing, plugins, and live request logs.
+
 ## Send a request
 
-Replace `model` with a model you have access to. The gateway serves an OpenAI-compatible API at `/v1`, so any OpenAI SDK works by pointing `base_url` at `http://localhost:8080/v1`.
+Replace `model` with a model you have access to. Every `/v1/*` request needs a bearer token — `MASTER_KEY`, or an API key created from it — since the gateway requires auth by default.
 
 <Tabs>
 <TabItem value="curl" label="curl" default>
@@ -35,6 +88,7 @@ Replace `model` with a model you have access to. The gateway serves an OpenAI-co
 ```bash
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $MASTER_KEY" \
   -d '{
     "model": "gpt-4o-mini",
     "messages": [
@@ -51,7 +105,7 @@ Using the OpenAI SDK (`pip install openai`):
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://localhost:8080/v1", api_key="sk-your-key")
+client = OpenAI(base_url="http://localhost:8080/v1", api_key="fgw_your-master-key")
 
 response = client.chat.completions.create(
     model="gpt-4o-mini",
@@ -65,7 +119,7 @@ Or the Ferro Labs SDK (`pip install ferrolabsai`):
 ```python
 from ferrolabsai import FerroClient
 
-client = FerroClient(base_url="http://localhost:8080/v1", api_key="sk-your-key")
+client = FerroClient(base_url="http://localhost:8080/v1", api_key="fgw_your-master-key")
 
 response = client.chat.completions.create(
     model="gpt-4o-mini",
@@ -84,7 +138,7 @@ import OpenAI from "openai";
 
 const client = new OpenAI({
   baseURL: "http://localhost:8080/v1",
-  apiKey: "sk-your-key",
+  apiKey: "fgw_your-master-key",
 });
 
 const response = await client.chat.completions.create({
@@ -101,7 +155,7 @@ import { FerroClient } from "@ferro-labs-ai/sdk";
 
 const client = new FerroClient({
   baseUrl: "http://localhost:8080/v1",
-  apiKey: "sk-your-key",
+  apiKey: "fgw_your-master-key",
 });
 
 const response = await client.chat.completions.create({
@@ -114,4 +168,52 @@ console.log(response.choices[0]?.message.content);
 </TabItem>
 </Tabs>
 
-If you are using any OpenAI-compatible SDK, set the base URL to `http://localhost:8080/v1` and keep the rest of your code unchanged.
+If you are using any OpenAI-compatible SDK, set the base URL to `http://localhost:8080/v1`, the API key to `MASTER_KEY` (or an issued `fgw_...` key), and keep the rest of your code unchanged.
+
+A successful call returns:
+
+```json
+{
+  "id": "chatcmpl-...",
+  "object": "chat.completion",
+  "model": "gpt-4o-mini",
+  "choices": [
+    {"index": 0, "message": {"role": "assistant", "content": "..."}, "finish_reason": "stop"}
+  ],
+  "usage": {"prompt_tokens": 12, "completion_tokens": 9, "total_tokens": 21}
+}
+```
+
+## Stream a response
+
+Set `stream: true` for Server-Sent Events, same as the OpenAI API — every OpenAI SDK's streaming helper works unchanged against the gateway:
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $MASTER_KEY" \
+  -d '{
+    "model": "gpt-4o-mini",
+    "stream": true,
+    "messages": [{"role": "user", "content": "Count to 5"}]
+  }'
+```
+
+```text
+data: {"id":"chatcmpl-...","choices":[{"index":0,"delta":{"content":"1"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-...","choices":[{"index":0,"delta":{"content":"2"},"finish_reason":null}]}
+
+...
+
+data: [DONE]
+```
+
+## What's next
+
+- [Configuration](/getting-started/configuration) — write a real `config.yaml`: targets, retry, aliases, plugins
+- [Providers](/providers) — register more of the 30 supported providers and see the endpoint matrix
+- [Routing](/routing) — fallback, load balance, cost-optimized, and 5 more strategies
+- [Plugins](/plugins) — budgets, rate limiting, response caching, and request logging
+- [Dashboard guide](/guides/dashboard) — tour the embedded operations console
+- [CLI reference](/operations/cli-reference) — `ferrogw validate`, `doctor`, `status`, `admin keys`

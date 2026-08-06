@@ -1,0 +1,254 @@
+---
+title: Provider configuration
+description: "Configure all 30 AI Gateway providers via environment variables: API keys, base-URL overrides, and special config for Azure, Bedrock, Vertex AI, and Ollama."
+keywords: [provider configuration, API key environment variables, provider base URL, Azure OpenAI setup, AWS Bedrock credentials, Vertex AI auth, Ollama configuration, Cloudflare Workers AI, Databricks, Replicate]
+---
+
+Provider credentials are supplied through **environment variables** and never live in `config.yaml`. A config target only *names* a provider by its `virtual_key`; the credential that activates that provider comes from the environment:
+
+```yaml
+targets:
+  - virtual_key: openai   # names the provider — credentials come from OPENAI_API_KEY
+```
+
+A provider is **auto-registered when its required environment variables are present** at startup. No provider entry needs editing in code and no key is ever written to disk in the config.
+
+:::info Registration is not routing
+Setting a provider's env vars registers it, but it only serves traffic if a `targets[]` entry names its `virtual_key`. A request for a model no configured target owns returns **404 `model_not_found`** even when the provider is registered and healthy.
+:::
+
+:::info Credentials are enforced at construction (v1.4.0)
+The required-key gate runs whenever a provider is built — whether credentials come from environment variables or from a programmatic config map. A provider is never constructed without its credential: on the environment path a missing required var **skips** the provider silently; on the programmatic path it is an **error**.
+:::
+
+Provider credentials are read directly from their own variables. Elsewhere in config — `plugins[].config`, `mcp_servers[].headers` / `env`, and `observability.exporters[].config` — you can reference an environment variable with `${VAR}`. Only the braced form `${NAME}` is a reference (a bare `$` is literal data, so `pa$$w0rd` survives byte-for-byte). References resolve **when the component is constructed**, not at config load, so a secret never reaches the config-history store or `GET /admin/config`; an undefined variable is a startup error that names every missing variable.
+
+## The base-URL rule {#base-url-rule}
+
+Since v1.4.0, `<PROVIDER>_BASE_URL` is the **API root, used verbatim** — version segment included. Each surface (chat, streaming, embeddings, images, model discovery, `/v1/*` pass-through) appends only its operation path to that root, and the root is resolved **once**, when the provider is constructed. Write it exactly as the vendor documents it:
+
+```bash
+# Reaches https://proxy.example.com/v1/chat/completions and .../v1/embeddings
+export OPENAI_BASE_URL=https://proxy.example.com/v1
+```
+
+- **Include the version segment.** Write `https://api.groq.com/openai/v1`, not `.../openai`.
+- A base with **no path at all** is the one case with a safety net: it resolves to the provider's own default version segment (`/v1` for OpenAI-wire providers, `/v1beta` for Gemini). So `http://host:9901` and `http://host:9901/v1` are equivalent. A base that carries *any* path is taken as written.
+- Userinfo travels with the host: `https://user:pass@proxy.example.com` reaches the proxy authenticated.
+- A query string or fragment is **refused at startup** — an operation path is appended to the root, so a query would bury the operation.
+
+**Host-root exceptions.** Three providers are configured with a host rather than an API root, because the value genuinely is not one:
+
+| Provider | Variable | Write it as |
+|---|---|---|
+| Cohere | `COHERE_BASE_URL` | the host — `https://api.cohere.com` (chat is `/v2/chat`, embeddings `/v1/embed`, so no single API root exists) |
+| Ollama | `OLLAMA_HOST` | the server root — `http://localhost:11434` (OpenAI surface at `/v1`, native API at `/api`) |
+| Azure AI Foundry | `AZURE_FOUNDRY_ENDPOINT` | the resource host — `https://<resource>.services.ai.azure.com` (the gateway appends Azure's fixed `/openai/v1`) |
+
+`DATABRICKS_HOST`, `AZURE_OPENAI_ENDPOINT`, and `HUGGING_FACE_ENDPOINT` are resource hosts too — not `_BASE_URL` overrides. The provider builds the vendor's fixed surface path beneath them.
+
+## OpenAI-compatible providers {#openai-compatible}
+
+These providers register with a single API key and accept an optional `<PROVIDER>_BASE_URL` override (see [the base-URL rule](#base-url-rule) above):
+
+```bash
+export OPENAI_API_KEY=sk-...
+export GROQ_API_KEY=gsk_...
+export DEEPSEEK_API_KEY=...
+# ...and so on for any provider below
+```
+
+| Provider | API key env var | Base-URL override | Default API root |
+|---|---|---|---|
+| <span id="ai21">AI21 Labs</span> | `AI21_API_KEY` | `AI21_BASE_URL` | `https://api.ai21.com/studio/v1` |
+| <span id="cerebras">Cerebras</span> | `CEREBRAS_API_KEY` | `CEREBRAS_BASE_URL` | `https://api.cerebras.ai/v1` |
+| <span id="deepinfra">DeepInfra</span> | `DEEPINFRA_API_KEY` | `DEEPINFRA_BASE_URL` | `https://api.deepinfra.com/v1/openai` |
+| <span id="deepseek">DeepSeek</span> | `DEEPSEEK_API_KEY` | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com/v1` |
+| <span id="fireworks">Fireworks AI</span> | `FIREWORKS_API_KEY` | `FIREWORKS_BASE_URL` | `https://api.fireworks.ai/inference/v1` |
+| <span id="groq">Groq</span> | `GROQ_API_KEY` | `GROQ_BASE_URL` | `https://api.groq.com/openai/v1` |
+| <span id="mistral">Mistral AI</span> | `MISTRAL_API_KEY` | `MISTRAL_BASE_URL` | `https://api.mistral.ai/v1` |
+| <span id="moonshot">Moonshot AI</span> | `MOONSHOT_API_KEY` | `MOONSHOT_BASE_URL` | `https://api.moonshot.ai/v1` |
+| <span id="novita">Novita</span> | `NOVITA_API_KEY` | `NOVITA_BASE_URL` | `https://api.novita.ai/openai/v1` |
+| <span id="nvidia-nim">NVIDIA NIM</span> | `NVIDIA_NIM_API_KEY` | `NVIDIA_NIM_BASE_URL` | `https://integrate.api.nvidia.com/v1` |
+| <span id="openai">OpenAI</span> | `OPENAI_API_KEY` | `OPENAI_BASE_URL` | `https://api.openai.com/v1` |
+| <span id="openrouter">OpenRouter</span> | `OPENROUTER_API_KEY` | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` |
+| <span id="perplexity">Perplexity</span> | `PERPLEXITY_API_KEY` | `PERPLEXITY_BASE_URL` | `https://api.perplexity.ai` |
+| <span id="qwen">Qwen (DashScope)</span> | `QWEN_API_KEY` | `QWEN_BASE_URL` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` |
+| <span id="sambanova">SambaNova</span> | `SAMBANOVA_API_KEY` | `SAMBANOVA_BASE_URL` | `https://api.sambanova.ai/v1` |
+| <span id="together">Together AI</span> | `TOGETHER_API_KEY` | `TOGETHER_BASE_URL` | `https://api.together.ai/v1` |
+| <span id="xai">xAI (Grok)</span> | `XAI_API_KEY` | `XAI_BASE_URL` | `https://api.x.ai/v1` |
+
+## Anthropic {#anthropic}
+
+A single API key. `ANTHROPIC_BASE_URL` is an optional verbatim API-root override (default `https://api.anthropic.com/v1`). Anthropic uses its native Messages wire, so `/v1/*` pass-through proxying returns **501** by design.
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+```
+
+## Google Gemini {#gemini}
+
+A single API key. `GEMINI_BASE_URL` is an optional verbatim override; a path-less base resolves to `/v1beta` (the provider's default). Gemini uses its native `generateContent` wire, so `/v1/*` pass-through returns **501**.
+
+```bash
+export GEMINI_API_KEY=...
+```
+
+## Cohere {#cohere}
+
+A single API key. `COHERE_BASE_URL` is a **host-root** override — write only the host (see [host-root exceptions](#base-url-rule)). Cohere uses its native v2 wire; the gateway's `/v1/rerank` endpoint follows the Cohere-v2 contract, and `/v1/*` pass-through returns **501**.
+
+```bash
+export COHERE_API_KEY=...
+export COHERE_BASE_URL=https://api.cohere.com   # optional; host only
+```
+
+## Hugging Face {#hugging-face}
+
+A single API key. The override variable is `HUGGING_FACE_ENDPOINT` (config key `base_url`), **not** `HUGGING_FACE_BASE_URL` — it points at a dedicated Inference Endpoint, a resource host. Default root: `https://router.huggingface.co/v1`.
+
+```bash
+export HUGGING_FACE_API_KEY=hf_...
+export HUGGING_FACE_ENDPOINT=https://router.huggingface.co/v1   # optional
+```
+
+## Azure OpenAI {#azure-openai}
+
+Requires the resource endpoint and a deployment name in addition to the key. The API key is sent as the `api-key` header. The deployment name **is** the model set — this is the only provider with a required `deployment` config key.
+
+```bash
+export AZURE_OPENAI_API_KEY=...
+export AZURE_OPENAI_ENDPOINT=https://<resource>.openai.azure.com   # resource host
+export AZURE_OPENAI_DEPLOYMENT=gpt-4o                              # required
+export AZURE_OPENAI_API_VERSION=2024-10-21                         # optional; default 2024-10-21
+```
+
+Request URLs are built as `{endpoint}/openai/deployments/{deployment}/{op}?api-version=...`; the batch surface uses the resource's `/openai/v1` root. Pass-through proxying returns **501** (native wire).
+
+## Azure AI Foundry {#azure-foundry}
+
+Requires the resource host. The endpoint is a **host**, not an API root — the gateway appends Azure's fixed GA `/openai/v1` route.
+
+```bash
+export AZURE_FOUNDRY_API_KEY=...
+export AZURE_FOUNDRY_ENDPOINT=https://<resource>.services.ai.azure.com   # resource host
+export AZURE_FOUNDRY_API_VERSION=...                                     # optional
+```
+
+## AWS Bedrock {#bedrock}
+
+Bedrock is built on `aws-sdk-go-v2`, so it has no HTTP base URL. It is considered configured when **any** of `AWS_REGION`, `AWS_ACCESS_KEY_ID`, or `AWS_BEARER_TOKEN_BEDROCK` is set — three alternative credential modes. Region defaults to `us-east-1`.
+
+```bash
+# 1. API-key (bearer) auth
+export AWS_BEARER_TOKEN_BEDROCK=...
+export AWS_REGION=us-east-1          # optional; defaults to us-east-1
+
+# 2. Static credentials (SigV4)
+export AWS_ACCESS_KEY_ID=AKIA...
+export AWS_SECRET_ACCESS_KEY=...
+export AWS_SESSION_TOKEN=...          # optional
+export AWS_REGION=us-east-1
+
+# 3. Instance role / credential chain
+export AWS_REGION=us-east-1
+```
+
+Bedrock uses its native `InvokeModel` API; pass-through proxying returns **501**.
+
+## Google Vertex AI {#vertex-ai}
+
+Requires the project ID (the activation gate) and region — `VERTEX_AI_REGION` is required once `VERTEX_AI_PROJECT_ID` is set, or construction errors. Authentication resolves through one of three paths:
+
+```bash
+export VERTEX_AI_PROJECT_ID=my-gcp-project
+export VERTEX_AI_REGION=us-central1
+
+# then one of:
+export VERTEX_AI_API_KEY=...
+# or a service-account JSON string or path (JWT exchanged for the cloud-platform scope):
+export VERTEX_AI_SERVICE_ACCOUNT_JSON='{"type":"service_account",...}'
+# or leave both unset to use Application Default Credentials / workload identity
+```
+
+The base URL is built from config as `https://{region}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{region}/endpoints/openapi`. Native wire; pass-through returns **501**.
+
+## Cloudflare Workers AI {#cloudflare}
+
+The only provider that requires an account ID. `CLOUDFLARE_BASE_URL` is an optional override; the default root interpolates the account ID.
+
+```bash
+export CLOUDFLARE_API_KEY=...
+export CLOUDFLARE_ACCOUNT_ID=...
+```
+
+Default API root: `https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1`.
+
+## Databricks {#databricks}
+
+Requires the workspace host and a token. `DATABRICKS_TOKEN` maps to config key `api_key`; `DATABRICKS_HOST` is a resource host (config key `base_url`) from which the gateway builds the vendor's fixed surface path.
+
+```bash
+export DATABRICKS_TOKEN=dapi...
+export DATABRICKS_HOST=https://<workspace>.cloud.databricks.com   # workspace host
+```
+
+## Replicate {#replicate}
+
+The model set comes from config, so declare the models you intend to serve. Optional `REPLICATE_TEXT_MODELS` / `REPLICATE_IMAGE_MODELS` are comma-separated lists (config keys `text_models` / `image_models`).
+
+```bash
+export REPLICATE_API_TOKEN=r8_...
+export REPLICATE_TEXT_MODELS=meta/llama-3-8b-instruct,mistralai/mistral-7b-instruct-v0.2
+export REPLICATE_IMAGE_MODELS=black-forest-labs/flux-schnell
+```
+
+:::note
+Replicate authenticates with `REPLICATE_API_TOKEN` (not `_API_KEY`); its config key is `api_token`, not `api_key`. Native wire — pass-through returns **501**.
+:::
+
+## Ollama {#ollama}
+
+Local Ollama has **no API key**. `OLLAMA_HOST` (config key `host`) is both the activation gate and a **server root**, not an API root (see [host-root exceptions](#base-url-rule)). Ollama serves any model it has pulled, so `FERRO_OLLAMA_MODELS` only narrows what `/v1/models` advertises.
+
+```bash
+export OLLAMA_HOST=http://localhost:11434
+export FERRO_OLLAMA_MODELS=llama3.2,gpt-oss:20b,mistral   # optional; narrows /v1/models
+```
+
+:::warning Set the Ollama model list with `FERRO_OLLAMA_MODELS`
+`OLLAMA_MODELS` is Ollama's **own** variable for its models *directory* (`$HOME/.ollama/models`), so it must not be used to list models here — it is deprecated in this gateway and read for one more release with a startup `WARN`, and a path-shaped value (no comma) is dropped with a `WARN`. When both are set, `FERRO_OLLAMA_MODELS` wins. <!-- accuracy-ok -->
+:::
+
+## Ollama Cloud {#ollama-cloud}
+
+The hosted Ollama service, which does require an API key. `OLLAMA_CLOUD_BASE_URL` (default `https://ollama.com/v1`) and `OLLAMA_CLOUD_MODELS` are optional.
+
+```bash
+export OLLAMA_API_KEY=...
+export OLLAMA_CLOUD_MODELS=gpt-oss:20b   # optional; comma-separated
+```
+
+Ollama Cloud is the only provider with no `/v1/*` pass-through surface.
+
+## Verify configured providers {#verify}
+
+After starting the gateway, confirm which providers registered:
+
+```bash
+# Unauthenticated: per-provider status, model counts, and circuit state
+curl http://localhost:8080/health
+
+# Registered models grouped by provider (needs a bearer token — an API key or MASTER_KEY)
+curl -H "Authorization: Bearer $MASTER_KEY" http://localhost:8080/v1/models
+```
+
+`/health` stays unauthenticated and reports provider names, model counts, and circuit state. `/v1/models` and the rest of `/v1/*` require a bearer token unless `ALLOW_UNAUTHENTICATED_PROXY=true`.
+
+## Related
+
+- [Providers overview](/providers) — endpoint matrix and supported surfaces per provider
+- [Configuration reference](/getting-started/configuration) — the full config schema
+- [Server settings](/operations/server-settings) — env vars, timeouts, and limits
+- [Authentication](/guides/auth) — bearer tokens, scopes, and `MASTER_KEY`
+- [Routing](/routing) — targets, strategies, and failover

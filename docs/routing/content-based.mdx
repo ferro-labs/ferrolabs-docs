@@ -1,0 +1,64 @@
+---
+title: Content-based routing strategy
+description: "Configure strategy.mode: content-based in Ferro Labs AI Gateway to route on user-prompt text via prompt_contains, prompt_not_contains, and Go-regex rules."
+keywords: [content-based routing, prompt-based routing, prompt_contains, prompt_regex, prompt_not_contains, ai-gateway strategy.mode, LLM prompt routing]
+---
+
+Content-based routes each request by inspecting the text of its **user-role** prompt messages, not its declared `model` field. It optimizes for **prompt-aware model selection** — code-shaped prompts to a coding model, prompts mentioning "translate" to a translation-tuned model, everything else to a general default — a decision `conditional` routing can't make because it only ever sees the model name. Set `strategy.mode: content-based` to use it.
+
+## Behaviour
+
+`content-based` is a **named mode**: the pipeline commits to the target the first matching rule names and reports that target's failure, rather than trying the remaining targets (contrast with `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, and `ab-test`, which are pool modes that advance past a failure). `ContentBased.SelectTargets` (`internal/strategies/contentbased.go`) evaluates `strategy.content_conditions[]` in declared order over **user-role messages only** — system and assistant content is never inspected — and the first rule that matches wins. The matched rule's target leads the returned list, followed by every configured target de-duplicated; the rest of the list is substitution-before-commit only (an open circuit or a surface-incapable target is swapped for a healthy one before the pipeline commits), never a failover path. With no rule matching, `SelectTargets` returns `targets[]` in declared order, so `targets[0]` is the no-match fallback.
+
+Because the match happens against request content, `GET /v1/models` under this mode is **representative, not exact**: it advertises what a request carrying no content would get — the no-match fallback target's models — so a model only a matched rule reaches is not listed there.
+
+## Config keys
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `strategy.mode` | string | — | Set to `content-based`. |
+| `strategy.content_conditions[].type` | string | — | `prompt_contains` \| `prompt_not_contains` \| `prompt_regex`. Closed set — an unrecognized value is a `ferrogw validate` / startup error, not a request-time failure. |
+| `strategy.content_conditions[].value` | string | — | The substring (matched case-insensitively) for `prompt_contains`/`prompt_not_contains`, or the Go (RE2) regular expression for `prompt_regex`. |
+| `strategy.content_conditions[].target_key` | string | — | Must name a configured `targets[].virtual_key`; validated at load. |
+
+## Minimal working YAML
+
+```yaml
+strategy:
+  mode: content-based
+  content_conditions:
+    - type: prompt_regex
+      value: "(?i)\\b(code|function|class|implement)\\b"
+      target_key: deepseek
+    - type: prompt_contains
+      value: translate
+      target_key: gemini
+
+targets:
+  - virtual_key: openai   # no-match fallback (targets[0])
+  - virtual_key: deepseek
+  - virtual_key: gemini
+```
+
+## When to use
+
+- Prompt-aware model selection: route coding questions to a code-specialized model, translation requests to a cheaper or translation-tuned model, and everything else to a general default — decided by what the user actually asked, not by which model name the client requested.
+- Keeping content that mentions a sensitive topic on a specific, contractually-approved backend, using `prompt_contains` (or excluding everything that mentions it from a cheaper backend with `prompt_not_contains`).
+- Any routing decision `conditional` can't express, because `conditional` matches only `model`/`model_prefix` and never looks at message content.
+
+## Gotchas
+
+- **Only user-role messages are inspected.** System prompts and prior assistant turns never match, by any of the three rule types.
+- **`prompt_not_contains` matches broadly, so rule order matters a lot.** It's true for *any* prompt that lacks the value — an early, broad `prompt_not_contains` rule can shadow every more-specific rule declared after it. Put narrow rules first.
+- **A model the matched target doesn't serve is `404 model_not_found`, even when another configured target serves it.** This is a named mode: the rule is a decision about which target handles this content, not a preference among several. If a matched target needs to serve more models, add them there (or `targets[].models`) rather than expecting the tail of the list to cover it.
+- **`GET /v1/models` is representative, not exact, under this mode.** It shows only what the no-match fallback (`targets[0]`) serves, since there's no request content to evaluate rules against at listing time — a model reachable only through a matched rule won't appear.
+- **Regex is Go RE2 syntax.** No backreferences, no lookahead/lookbehind. An invalid pattern is caught at config load (`config.ValidateConfig` compiles every `prompt_regex` pattern the same way `NewContentBased` does), so a bad pattern fails startup rather than misrouting silently.
+- **Circuit state is the one thing that still moves the choice.** If the matched target's circuit is open, the pipeline substitutes a healthy target from the tail before committing — traffic returns to the matched target once its circuit closes. This is unrelated to, and doesn't reintroduce, failover on ordinary request failure.
+
+## Related
+
+- [Routing overview](/routing)
+- [Conditional](/routing/conditional)
+- [Fallback](/routing/fallback)
+- [Cost-optimized](/routing/cost-optimized)
+- [Configuration reference](/getting-started/configuration)

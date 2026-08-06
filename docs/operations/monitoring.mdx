@@ -1,35 +1,54 @@
 ---
 title: Monitoring and operations
-description: Monitor the Ferro Labs AI Gateway in production with Prometheus metrics, health checks, alerting rules, and operational runbooks to keep your LLM proxy healthy and performant.
+description: Monitor Ferro AI Gateway with authenticated Prometheus scraping, split /livez /readyz /health probes, and alert rules validated against the v1.4 metric surface.
 keywords: [AI gateway monitoring, LLM metrics, Prometheus AI gateway, production AI gateway, LLM proxy monitoring, gateway health checks]
 ---
 
 ## Metrics and health at a glance
 
-| Signal | Endpoint | Format |
-|---|---|---|
-| Prometheus metrics | `GET /metrics` | Prometheus text |
-| Deep health check | `GET /health` | JSON |
-| Provider list | `GET /admin/providers` | JSON |
+| Signal | Endpoint | Auth | Format |
+|---|---|---|---|
+| Prometheus metrics | `GET /metrics` | Bearer token, `read_only` or `admin` scope | Prometheus text |
+| Liveness probe | `GET /livez` | None | JSON — process alive, no dependency checks |
+| Readiness probe | `GET /readyz` | None | JSON — 200 when routable, 503 with a reason otherwise |
+| Deep health check | `GET /health` | None | JSON — per-provider circuit state and model counts |
+| Provider list | `GET /admin/providers` | Bearer token, `read_only` or `admin` scope | JSON |
 
-See [Observability](/guides/observability) for the full metrics reference and log field docs.
+`/metrics` sits behind the same scope check as every other read-only admin route — an unauthenticated scrape gets `401`. See [Observability](/guides/observability) for the full metrics reference and [Authentication](/guides/auth) for issuing keys.
 
 ## Prometheus scrape setup
+
+`/metrics` requires a bearer token, so the scrape config needs credentials. Mint a dedicated `read_only` key rather than reusing `MASTER_KEY` — a scraping token that leaks in a Prometheus config file should never carry write access:
+
+```bash
+curl -X POST http://gateway-host:8080/admin/keys \
+  -H "Authorization: Bearer $MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "prometheus-scraper", "scopes": ["read_only"]}'
+# -> {"id": "...", "key": "fgw_...", "scopes": ["read_only"], ...}
+```
 
 ```yaml
 # prometheus.yml
 scrape_configs:
-  - job_name: ferrogw
+  - job_name: ferro-ai-gateway
+    metrics_path: /metrics
+    scheme: http
+    authorization:
+      type: Bearer
+      credentials: fgw_the_key_returned_above
     static_configs:
       - targets: ["gateway-host:8080"]
     scrape_interval: 15s
 ```
 
+Without the `authorization` block every scrape 401s and the target shows `up == 0` in Prometheus with no other symptom — the most common first-deploy break.
+
 ## Recommended alert rules
 
 ```yaml
 groups:
-  - name: ferrogw
+  - name: ferro-ai-gateway
     rules:
       # High error rate
       - alert: GatewayHighErrorRate
@@ -54,7 +73,14 @@ groups:
         annotations:
           summary: "P99 request latency > 10s"
 
-      # Circuit breaker open
+      # Circuit breaker open. gateway_circuit_breaker_state is resolved from
+      # the live breakers at every scrape (0=closed 1=open 2=half_open) — it
+      # is never pushed, so this alert clears itself the moment the breaker
+      # leaves Open. A series exists only for a provider with circuit_breaker
+      # configured on at least one of its targets; a provider with no breaker
+      # emits no series at all, so this alert cannot fire for it (silent, not
+      # a false negative — check gateway_provider_errors_total instead for
+      # providers running without a breaker).
       - alert: GatewayCircuitBreakerOpen
         expr: gateway_circuit_breaker_state == 1
         for: 1m
@@ -63,14 +89,44 @@ groups:
         annotations:
           summary: "Circuit breaker open on {{ $labels.provider }}"
 
-      # All providers unhealthy
-      - alert: GatewayNoHealthyProviders
-        expr: up{job="ferrogw"} == 0
+      # Provider errors feeding a breaker toward open. Only provider_error and
+      # timeout indicate an unhealthy upstream — circuit_open, client_canceled,
+      # backpressure, and plugin_error are the gateway declining or shedding,
+      # or the caller leaving, and alerting on those pages someone for traffic
+      # shape, not an outage.
+      - alert: GatewayProviderErrors
+        expr: |
+          sum by (provider) (
+            rate(gateway_provider_errors_total{error_type=~"provider_error|timeout"}[5m])
+          ) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.provider }} returning errors or timing out"
+
+      # No routable targets. Prometheus scraping /metrics can't reach a
+      # gateway with zero routable targets any differently than a healthy one
+      # (both answer up == 1), so this pairs with an external readyz probe —
+      # see "Load balancer and orchestrator health checks" below — rather
+      # than being derivable from metrics alone.
+      - alert: GatewayScrapeDown
+        expr: up{job="ferro-ai-gateway"} == 0
         for: 1m
         labels:
           severity: critical
         annotations:
-          summary: "Gateway has no healthy providers"
+          summary: "Gateway not scrapeable"
+
+      # MCP server down. 1->0 with no config change means the transport died
+      # (e.g. a stdio subprocess exited); alert on required servers first.
+      - alert: GatewayMCPServerDown
+        expr: gateway_mcp_server_up == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MCP server {{ $labels.server_name }} not ready"
 
       # Model catalog falling back to the embedded backup
       - alert: GatewayCatalogFallback
@@ -82,9 +138,13 @@ groups:
           summary: "Model catalog using embedded fallback (remote source unreachable)"
 ```
 
+:::note
+`gateway_circuit_breaker_state` and `gateway_mcp_server_up` are both gauges resolved fresh on every scrape — there's nothing to reset after an incident, and an absent series is informative (no breaker configured / no MCP servers registered), not a gap in data.
+:::
+
 ## Grafana dashboard
 
-A community Grafana dashboard JSON is available in the repository at [`docs/grafana-dashboard.json`](https://github.com/ferro-labs/ai-gateway/blob/main/docs/). Import it into your Grafana instance and point the data source to your Prometheus server.
+A ready-made Grafana dashboard ships in the repository at [`deploy/fullstack/grafana/dashboards/ferro-ai-gateway.json`](https://github.com/ferro-labs/ai-gateway/blob/main/deploy/fullstack/grafana/dashboards/ferro-ai-gateway.json). The fastest way to see it wired up end to end — gateway, Prometheus, Grafana, and Jaeger together — is `make up-fullstack` from the repo root ([`deploy/README.md`](https://github.com/ferro-labs/ai-gateway/blob/main/deploy/README.md)); import the JSON into an existing Grafana instance and point its data source at your Prometheus server otherwise.
 
 Key panels to build manually if you prefer:
 
@@ -96,6 +156,8 @@ Key panels to build manually if you prefer:
 | Token usage / min | `(rate(gateway_tokens_input_total[1m]) + rate(gateway_tokens_output_total[1m])) * 60` |
 | Estimated spend / hour | `sum by (model) (rate(gateway_request_cost_usd_total[5m])) * 3600` |
 | Provider breakdown | `sum by (provider) (rate(gateway_requests_total[5m]))` |
+| Provider error mix | `sum by (provider, error_type) (rate(gateway_provider_errors_total[5m]))` |
+| MCP server availability | `gateway_mcp_server_up` |
 | Catalog loads by source | `sum by (source, result) (rate(gateway_catalog_loads_total[15m]))` |
 
 ## Logging pipeline
@@ -104,17 +166,38 @@ Ship stdout JSON logs to your log aggregator:
 
 ```bash
 # Pipe to a log collector
-./ferrogw 2>&1 | your-log-shipper --format=json
+./ferrogw serve 2>&1 | your-log-shipper --format=json
 
 # Or use Docker logging drivers
 docker run ... --log-driver=awslogs ghcr.io/ferro-labs/ai-gateway:latest
 ```
 
-Filter gateway logs by `trace_id` in your aggregator to correlate all events for a single request across plugins and provider calls.
+Filter gateway logs by `trace_id` in your aggregator to correlate all events for a single request across plugins and provider calls. The same value is echoed on the `X-Request-ID` response header (32 lowercase hex characters, no dashes) and, when tracing is on, equals the OpenTelemetry trace ID — one identifier across logs, the response header, and spans. See [Request logging](/operations/request-logging) for the persisted-log query API and column reference.
 
 ## Resiliency controls
 
-- **Circuit breakers** — automatically exclude failing providers; see the `gateway_circuit_breaker_state` metric
-- **Retries** — configurable per target with status-code filtering (`on_status_codes`)
-- **Fallback strategy** — automatically promotes to the next target when primary fails
-- **Health endpoint** — integrate into your load balancer's health check for automatic traffic shifting
+- **Circuit breakers** — configured per target (`targets[].circuit_breaker`), one breaker per target shared across chat/streaming/embeddings/images; every routing strategy skips an open circuit. State is exposed on `gateway_circuit_breaker_state` and, with request context, on `GET /health`.
+- **Retries** — configurable per target with status-code filtering (`retry.on_status_codes`), honored under every strategy including `single` (set `attempts: 1` to keep single-attempt behavior).
+- **Fallback and pool strategies** — `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, and `ab-test` all advance past a failed or open-circuit target automatically; `single`, `conditional`, and `content-based` commit to one target and report its outcome. See [Routing](/routing).
+
+## Load balancer and orchestrator health checks
+
+Point your load balancer or orchestrator readiness probe at **`/readyz`**, not `/health`. `/readyz` is the cheap, unauthenticated signal designed for this: it answers `200` when at least one configured target is routable, or `503` with a fixed reason (`no routable targets`, `store unreachable`, or `required mcp server unavailable`) otherwise, and it's cached for one second so a burst of probes never fans out to backing-store pings. `/health` is a deep diagnostic — per-provider circuit state and catalog model counts — meant for humans and dashboards, not for gating traffic.
+
+Use `/livez` for the orchestrator's *restart* decision (process alive, no dependency checks, always `200`) and keep it separate from `/readyz`'s *remove from rotation* decision — collapsing the two means a struggling-but-alive instance either never gets pulled from the load balancer or gets killed for a condition a restart can't fix (e.g. every provider's circuit open).
+
+```yaml
+# Kubernetes example
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: 8080
+  periodSeconds: 10
+livenessProbe:
+  httpGet:
+    path: /livez
+    port: 8080
+  periodSeconds: 10
+```
+
+Alert on `gateway_mcp_server_up == 0` for any MCP server marked `required: true` in `mcp_servers[]` — that's the same signal gating `/readyz`, surfaced as a metric so it can page before an orchestrator starts cycling the instance.

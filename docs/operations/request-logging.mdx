@@ -1,55 +1,125 @@
 ---
 title: Request logging
-description: Persist LLM request and response logs from the Ferro Labs AI Gateway to SQLite or PostgreSQL using the request-logger plugin for auditability and debugging.
-keywords: [LLM request logging, AI gateway audit log, SQLite AI logs, Postgres LLM logs, AI observability logging, request logger plugin]
+description: Configure the multi-stage request-logger plugin, persist rows to SQLite or Postgres, and query duration, TTFT, cost, and API key via the admin API.
+keywords: [LLM request logging, AI gateway audit log, SQLite AI logs, Postgres LLM logs, AI observability logging, request logger plugin, admin logs api]
 ---
 
-## Plugin-based logging
+The `request-logger` plugin records every request the gateway handles — as structured stdout log lines always, and as rows in a shared request-log store when persistence is configured. The [admin API](#query-the-request-log) reads that same store, powering `GET /admin/logs`, `GET /admin/logs/stats`, and the dashboard's [Request Logs page](/guides/dashboard).
 
-Use the `request-logger` plugin to record request lifecycle events.
+## Enable the request-logger plugin
+
+`request-logger` is a **multi-stage** plugin: it needs one `plugins[]` entry per lifecycle stage it participates in, each carrying byte-identical config. Give it all three — `before_request`, `after_request`, and `on_error` — or logging is incomplete:
+
+- **Missing `after_request`**: the row written at `before_request` never gets its completion data. No `duration_ms`, `ttft_ms`, `cost_usd`, token counts, or provider — half the job.
+- **Missing `on_error`**: a failed request never reaches `after_request`, so it produces no terminal row at all and vanishes from the default `/admin/logs` listing.
+
+Listing the same multi-stage plugin at only one stage isn't a smaller version of logging — it silently drops the rows the other stages were responsible for.
 
 ```yaml
-- name: request-logger
-  type: logging
-  stage: before_request
-  enabled: true
-  config:
-    level: info
-    persist: true
-    backend: sqlite
-    dsn: ferrogw-requests.db
+plugins:
+  - name: request-logger
+    type: logging
+    stage: before_request
+    enabled: true
+    config:
+      level: info
+      persist: true
+  - name: request-logger
+    type: logging
+    stage: after_request
+    enabled: true
+    config:
+      level: info
+      persist: true
+  - name: request-logger
+    type: logging
+    stage: on_error
+    enabled: true
+    config:
+      level: info
+      persist: true
 ```
 
-## Log store backends
+The gateway compares each stage's `config` (name + JSON encoding) and refuses to start if any of the three disagree — that's what keeps the instances in sync rather than silently splitting state.
 
-You can also enable the request log store for the admin API.
+:::note
+`request-logger` is a `logging`-type plugin, so it **fails open**: if the log store is down, full, or unreachable, the request still completes. The write failure is logged as a warning rather than silently dropped, so an operator can tell the persisted trail went incomplete instead of trusting a log that quietly lost rows.
+:::
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `level` | string | `info` | stdout log level (`debug`\|`info`\|`warn`\|`error`) for the request/response lines. `on_error` always logs at `error` regardless of this setting. |
+| `persist` | bool | `false` | Write rows to the shared request-log store. Requires `REQUEST_LOG_STORE_BACKEND` / `REQUEST_LOG_STORE_DSN` to be set at the process level — without them, `persist: true` logs a startup warning and the plugin stays stdout-only. |
+
+`backend` and `dsn` keys inside the plugin's own `config` block are **obsolete** — they're ignored with a warning. Persistence targets and credentials are process-level configuration, set once via the environment variables below, not per plugin instance.
+
+A cache-served response is logged like any other request: it carries the real token usage but a real, measured `$0` cost (not `null` — see [nullable columns](#what-each-row-contains) below).
+
+## Configure the request-log store
 
 ```bash
 export REQUEST_LOG_STORE_BACKEND=sqlite
 export REQUEST_LOG_STORE_DSN=ferrogw-requests.db
 ```
 
-Supported backends are `sqlite` and `postgres`.
+Supported backends are `sqlite` and `postgres`. This is the same store the plugin writes to and the admin API reads from — one shared store, not a per-plugin database.
 
-When request log storage is not enabled, admin log endpoints return `501 not implemented`:
+When the store isn't configured, admin log endpoints return `501 not implemented`:
 
 - `GET /admin/logs`
 - `GET /admin/logs/stats`
 - `DELETE /admin/logs`
 
-## Admin log filters
+## What each row contains
+
+| Column | Type | Notes |
+|---|---|---|
+| `duration_ms` | float, nullable | End-to-end time the gateway spent on the request, excluding the `after_request` plugin stage. |
+| `ttft_ms` | float, nullable | Time to first token. Only measured for streaming requests — non-streaming rows carry `null`. |
+| `cost_usd` | float, nullable | Estimated cost from the model catalog. **`null` means "unpriced"** — the catalog has no rate for that model — which is different from a real `$0.0` (an unlisted/free model, or a cache hit). Treating `null` as zero silently understates spend. |
+| `api_key_id` | string | Opaque credential ID the request was served under (never the secret). Empty when the request carried no credential. |
+
+All timestamps are stored in UTC.
+
+## Query the request log
 
 `GET /admin/logs` supports:
 
-- `limit` (default `50`, max `200`)
-- `offset` (default `0`)
-- `stage`, `model`, `provider`
-- `since` (RFC3339)
+| Filter | Description |
+|---|---|
+| `limit` | Default `50`, max `200`. |
+| `offset` | Default `0`. |
+| `stage` | `before_request`, `after_request`, `on_error`, or `all` for the raw per-stage stream. See below. |
+| `model`, `provider` | Exact match. |
+| `api_key_id` | Exact match against the credential's opaque ID. `api_key_id=none` selects rows with no credential — both unauthenticated requests and rows written before the column existed. |
+| `since` | RFC3339 timestamp. |
+
+By default (no `stage` param), the endpoint returns **one row per request** — only terminal-stage rows (`after_request` for a completion, `on_error` for a failure). The plugin writes one row per stage it ran at, so without this default every request would appear listed twice: once from `before_request` with no completion data, once from its terminal stage. Pass `stage=all` to get the raw per-stage event stream instead, or `stage=<name>` to see one specific stage.
+
+`DELETE /admin/logs` requires `before` (RFC3339), with optional `stage`, `model`, and `provider` filters (no `api_key_id` — a purge is scoped by time and dimension, not credential).
+
+## Request log statistics
 
 `GET /admin/logs/stats` supports:
 
-- `limit` (top-N buckets, max `100`)
-- `stage`, `model`, `provider`
-- `since` (RFC3339)
+| Filter | Description |
+|---|---|
+| `limit` | Top-N entries per dimension breakdown, max `100`. |
+| `buckets` | Number of points in the time series, max `120`. Omit or `0` for no series. |
+| `stage`, `model`, `provider` | Exact match. |
+| `since` | RFC3339 timestamp. |
 
-`DELETE /admin/logs` requires `before` (RFC3339), with optional `stage`, `model`, and `provider` filters.
+The response includes:
+
+- **Summary**: total/error entry counts, `prompt_tokens` and `completion_tokens` split out separately, `cost_usd` total, and `unpriced_requests` — the count of requests the catalog couldn't price, so a `cost_usd` total isn't misread as the whole bill.
+- **Percentiles**: `latency_ms` and `ttft_ms` distributions (p50, p95, p99, max, mean, count), computed from the stored `duration_ms`/`ttft_ms` values. `null` when nothing was measured in the window, rather than a misleading zero.
+- **Dimension breakdowns**: `by_stage`, `by_provider`, `by_model` — each with count, errors, tokens, `cost_usd`, and `unpriced` per group, so you can see which model consumed the tokens, not just which was called most.
+- **`top_errors`**: the most frequent distinct failure messages (fixed at 8).
+- **`series`**: a time series with `buckets` points when requested, each carrying `requests`, `errors`, `prompt_tokens`, and `completion_tokens`; the response marks `truncated: true` if the series stopped short of the requested window.
+
+## Related
+
+- [request-logger plugin reference](/plugins/request-logger)
+- [Dashboard](/guides/dashboard) — the Request Logs page built on this API
+- [Server settings](/operations/server-settings) — `REQUEST_LOG_STORE_BACKEND` / `REQUEST_LOG_STORE_DSN` and other process configuration
+- [Monitoring](/operations/monitoring)

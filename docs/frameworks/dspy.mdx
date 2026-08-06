@@ -39,7 +39,7 @@ print(predict(question="What is a gateway?").answer)
 
 ## Optimizers across providers
 
-The interesting story for DSPy + Ferro: compile a program against one provider, then re-compile against another by changing only the model name. Pair with the gateway's [budget plugin](/guides/plugins) to cap optimizer cost while exploring.
+The interesting story for DSPy + Ferro: compile a program against one provider, then re-compile against another by changing only the model name. Pair with the gateway's [budget plugin](/plugins) to cap optimizer cost while exploring.
 
 ## Verify
 
@@ -57,4 +57,4 @@ curl http://localhost:8080/v1/chat/completions \
 ## See also
 
 - [LangChain (Python)](/frameworks/langchain-python)
-- [Use cases](/guides/routing-policies) — multi-provider patterns
+- [Use cases](/routing) — multi-provider patterns

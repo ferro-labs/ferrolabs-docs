@@ -1,0 +1,57 @@
+---
+title: Load balance routing strategy
+description: "Configure strategy.mode: loadbalance in Ferro Labs AI Gateway for weighted-random traffic across model-compatible targets, plus draining a target via weight: 0."
+keywords: [load balance routing, weighted random routing, AI gateway load balancing, weight 0 drain, ai-gateway strategy.mode, targets weight]
+---
+
+Load balance spreads traffic across two or more targets by weighted random selection. It optimizes for **distributing** load across interchangeable providers — not for failover order (`fallback`), latency (`least-latency`), or cost (`cost-optimized`). Set `strategy.mode: loadbalance` to use it.
+
+## Behaviour
+
+`loadbalance` is a **pool mode**: on a request failure, the pipeline advances to the next target in the rotated order rather than reporting the failure back to the caller. `targets[].retry` still governs how many times any one target is retried before the pipeline moves on.
+
+On each request, `LoadBalance.SelectTargets` (`internal/strategies/loadbalance.go`) filters `targets[]` down to those whose provider is registered and whose `SupportsModel(req.Model)` returns true, then picks a weight-biased starting index (`weightedStartIndex`, `internal/strategies/targetorder.go`) and returns the full compatible list **rotated** from that index. The first key in the returned order is the weighted pick the pipeline commits to first; the rest stay available as substitutes the pipeline may use before committing — for example when the picked target's circuit is open. `SelectTargets` returns `nil` (the caller reports 404 `model_not_found`) when no compatible target exists, or when every compatible target has been drained to weight `0`.
+
+## Config keys
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `strategy.mode` | string | — | Set to `loadbalance`. |
+| `targets[].weight` | float64 | `0` if omitted (YAML `omitempty`) | This target's relative share of traffic. Ignored by every other routing mode. `0` means the target receives zero traffic — it can never be the rotation's start index. |
+
+## Minimal working YAML
+
+```yaml
+strategy:
+  mode: loadbalance
+
+targets:
+  - virtual_key: openai
+    weight: 0.7
+  - virtual_key: anthropic
+    weight: 0.3
+```
+
+## When to use
+
+- Spreading load across two or more providers serving the same (or overlapping) models, for cost or capacity reasons.
+- Gradually shifting traffic during a migration by adjusting weights across deploys.
+- Draining a target to zero traffic before revoking its credential or removing it from `targets[]`.
+
+## Gotchas
+
+- **Weights are relative, not percentages.** `weight: 0.7` and `weight: 0.3` behave identically to `weight: 7` and `weight: 3` — only the ratio between targets matters.
+- **Omitting `weight` yields `0`, not an even split.** Because `weight` uses YAML `omitempty`, a target with no `weight` key defaults to `0.0` — silent zero traffic. This is an easy foot-gun: set `weight` explicitly on every target under `loadbalance`.
+- **An all-zero or negative weight set is rejected at load.** `ferrogw validate` (and gateway startup) reject a negative weight outright and reject a config where every target's weight sums to zero — but one *forgotten* weight on an otherwise-valid config passes validation and silently drains just that target.
+- **This is a pool mode.** The pipeline advances past a failed or open-circuit target to the next one in the rotated order; a `loadbalance` config gets failover "for free" as a side effect of the mode family, not because of anything weight-specific.
+- **Only model-compatible targets are eligible.** A target whose provider isn't registered, or that doesn't serve the requested model, is filtered out before weighting is applied — it never wins the draw regardless of its configured weight.
+- Selection uses `math/rand`, deliberately — this is a load-shaping decision, not a security-sensitive one.
+
+## Related
+
+- [Routing overview](/routing)
+- [Fallback](/routing/fallback)
+- [Least-latency](/routing/least-latency)
+- [Cost-optimized](/routing/cost-optimized)
+- [A/B test](/routing/ab-test)
+- [Configuration reference](/getting-started/configuration)

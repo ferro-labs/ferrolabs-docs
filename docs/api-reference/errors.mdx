@@ -1,10 +1,10 @@
 ---
 title: Error reference
-description: HTTP error reference for the Ferro Labs AI Gateway — OpenAI-style error envelope plus a status-code table marking each error as Gateway- or Provider-sourced.
-keywords: [AI gateway errors, error codes, OpenAI error format, proxy error source, rate_limit_exceeded, 429, 502 upstream, stream_error]
+description: HTTP status codes the Ferro Labs AI Gateway's OpenAI-style error envelope returns, 400 to 504, with Retry-After rules and gateway vs. provider error sources.
+keywords: [AI gateway errors, error codes, OpenAI error format, insufficient_quota, model_not_found, provider_saturated, upstream_unavailable, Retry-After, 402, 404, 429, 503, stream_error]
 ---
 
-The Ferro Labs AI Gateway returns errors in the same JSON shape as the OpenAI API, so existing OpenAI SDK error handling works unchanged. Because the gateway is a proxy in front of 30 upstream providers, every error has a **source**: it either originates in the gateway itself (bad request, auth, rate limit, plugin rejection) or is passed through from the upstream provider. The table below labels each row so you can tell the two apart — the column that pure proxy users need most.
+The Ferro Labs AI Gateway returns errors in the same JSON shape as the OpenAI API, so existing OpenAI SDK error handling works unchanged. Because the gateway is a proxy in front of 30 upstream providers, every error has a **source**: it either originates in the gateway itself (bad request, auth, budget, plugin rejection) or is passed through from the upstream provider. The table below labels each row so you can tell the two apart — the column that pure proxy users need most.
 
 ## Error envelope
 
@@ -13,9 +13,9 @@ Every gateway-generated error is a single JSON object with one `error` field. Th
 ```json
 {
   "error": {
-    "message": "rate limit exceeded",
+    "message": "the gateway is at capacity for this request; retry shortly",
     "type": "rate_limit_error",
-    "code": "rate_limit_exceeded"
+    "code": "provider_saturated"
   }
 }
 ```
@@ -23,42 +23,60 @@ Every gateway-generated error is a single JSON object with one `error` field. Th
 | Field | Description |
 | --- | --- |
 | `message` | Human-readable explanation of what went wrong. |
-| `type` | Broad error category (`invalid_request_error`, `authentication_error`, `permission_error`, `not_found_error`, `rate_limit_error`, `upstream_error`, `server_error`). |
-| `code` | Stable, machine-readable identifier you can branch on (e.g. `model_not_found`, `invalid_api_key`, `rate_limit_exceeded`). |
+| `type` | Broad error category (`invalid_request_error`, `authentication_error`, `permission_error`, `not_found_error`, `rate_limit_error`, `insufficient_quota`, `upstream_error`, `server_error`). |
+| `code` | Stable, machine-readable identifier you can branch on (e.g. `model_not_found`, `insufficient_quota`, `provider_saturated`). |
 
 :::note
-Errors the gateway generates carry `Content-Type: application/json` and this envelope. Two exceptions are **not** wrapped in the envelope: an upstream **connection failure** on a pass-through `/v1/*` route returns a plain-text `502 Bad Gateway` body (`proxy error: <reason>`), and any response forwarded verbatim by the pass-through proxy keeps the upstream provider's own status code and body.
+Errors the gateway generates — including a pass-through connection failure, now reported as `502 upstream_error` in this same envelope — carry `Content-Type: application/json`. Two things sit genuinely outside it: a response the pass-through proxy forwards **verbatim** keeps the upstream provider's own status code and body (whatever shape that provider uses), and a path this instance doesn't route at all falls through to the embedded dashboard, answering a plain-text `404 page not found` unless the request is a browser asking for HTML. See the notes under [Status codes](#status-codes).
 :::
 
 ## Status codes
 
 The **Source** column tells you where the error was decided:
 
-- **Gateway** — the gateway rejected or could not route the request; the upstream provider was never contacted (or the gateway shaped the failure itself).
-- **Provider** — the gateway forwarded the upstream provider's status and body unchanged (pass-through `/v1/*` routes return the provider's exact response).
+- **Gateway** — the gateway rejected, could not route, or refused the request itself; either no provider was contacted, or the gateway re-shaped a provider's status into its own error taxonomy.
+- **Provider** — the failure is the upstream provider's: forwarded verbatim by the pass-through proxy, or reported through the gateway's envelope after it re-attributed a provider status/failure to the caller.
+
+:::tip Retry-After
+`Retry-After` is set in exactly two cases, and it can win on a status other than `429`: whenever the underlying error carries an upstream wait hint (`Retry-After` or `X-RateLimit-Reset` from the provider's own response) it is forwarded **whatever the final status ends up being** — a `502 upstream_error` built from a throttled `503` still keeps that wait. Otherwise, if the final status is `429`, the gateway adds a constant `Retry-After: 1`. No other status gets the header — `402 insufficient_quota` in particular never does, so a client's first refusal is its last request rather than a retry loop against an answer that cannot change.
+:::
 
 | HTTP Status | `type` / `code` | Meaning | Source | What to do |
 | --- | --- | --- | --- | --- |
-| `400` | `invalid_request_error` / `invalid_request` | Malformed JSON body or failed request validation on `/v1/chat/completions`. | **Gateway** | Fix the request body; ensure required fields like `model` and `messages` are present and valid. |
-| `400` | `invalid_request_error` / `model_not_found` | No registered provider serves the requested `model`. | **Gateway** | Use a model offered by a configured provider; check `GET /v1/models`. |
-| `400` | `invalid_request_error` / `streaming_not_supported` | The resolved provider for the model cannot stream. | **Gateway** | Retry with `stream: false`, or route the model to a streaming-capable provider. |
-| `400` | `invalid_request_error` / `provider_not_resolved` | Pass-through `/v1/*` request with no provider resolvable. | **Gateway** | Set the `X-Provider` header (e.g. `X-Provider: openai`) or include a top-level `model` field in the body. |
-| `400` | `invalid_request_error` / `request_rejected` | A `before_request` plugin (e.g. word filter, max-token) rejected the request. | **Gateway** | Adjust the request to satisfy the guardrail, or change the plugin config. |
+| `400` | `invalid_request_error` / `invalid_request` | Malformed JSON body, or a required field failed validation (e.g. missing `model`). | **Gateway** | Fix the request body. |
+| `400` | `invalid_request_error` / `request_rejected` | A `before_request` plugin (word filter, max-token, a custom guardrail) rejected the request. | **Gateway** | Adjust the request to satisfy the guardrail, or change the plugin config. `message` carries the plugin's own reason. |
+| `400` | `invalid_request_error` / `unsupported_parameter` | The request used an OpenAI parameter the resolved provider can't express, and `compatibility.on_unsupported_param` is set to `reject`. | **Gateway** | Drop the named parameter, or route the model to a provider that supports it — check `GET /v1/capabilities`. |
+| `400` | `invalid_request_error` / `provider_not_resolved` | Pass-through `/v1/*` request named no provider and no target owns any `model` in the body. | **Gateway** | Set the `X-Provider` header (e.g. `X-Provider: openai`) or include a top-level `model` field in the body. |
+| `400` | `invalid_request_error` / `invalid_proxy_path` | The pass-through path contains a `..`-style traversal segment (checked before any provider credential is attached). | **Gateway** | Remove the traversal segment from the request path. |
+| `400` | `invalid_request_error` / `streaming_not_supported` | `POST /v1/completions` (the legacy endpoint) was called with `stream: true` — that endpoint never streams, regardless of provider. | **Gateway** | Use `/v1/chat/completions` for streaming, or drop `stream` on `/v1/completions`. |
 | `401` | `authentication_error` / `missing_api_key` | Missing or non-`Bearer` `Authorization` header on a protected route. | **Gateway** | Send `Authorization: Bearer <key>`. |
 | `401` | `authentication_error` / `invalid_api_key` | The bearer token is unknown or revoked. | **Gateway** | Issue or rotate a valid key. |
 | `401` | `authentication_error` / `authentication_required` | A scope-checked route had no authenticated key in context. | **Gateway** | Authenticate before calling the endpoint. |
-| `403` | `permission_error` / `insufficient_scope` | Authenticated key lacks the required scope (e.g. `read_only` calling an admin write). | **Gateway** | Use a key with the `admin` scope, or request the needed scope. |
-| `404` | `not_found_error` / `not_found_error` | Unknown route or missing resource. | **Gateway** | Check the path and HTTP method. |
-| `429` | `rate_limit_error` / `rate_limit_exceeded` | Per-IP token bucket exhausted, **or** a rate-limit plugin rejected, **or** the budget plugin's per-key USD limit was hit. | **Gateway** | Back off and retry. No `Retry-After` header is sent — use client-side exponential backoff. |
-| `500` | `server_error` / `routing_error` | Generic routing failure or an unclassified error from the routing layer (including circuit-open and upstream errors surfaced on native endpoints). | **Gateway** | Retry; if persistent, inspect gateway logs and provider health. |
-| `500` | `server_error` / `internal_error` | Internal configuration fault (e.g. a provider with an unparseable base URL on a proxy route). | **Gateway** | Fix the provider configuration. |
-| `501` | `invalid_request_error` / `proxy_not_supported` | The resolved provider does not implement proxy pass-through for this `/v1/*` endpoint. | **Gateway** | Use a provider that supports pass-through, or call a natively-handled endpoint. |
-| `502` | `upstream_error` / `response_rejected` | An `after_request` plugin rejected the upstream response. | **Gateway** | Loosen the guardrail or fix what the provider returned. |
-| `502` | *(plain text)* `proxy error: <reason>` | Upstream connection/transport failure while proxying a `/v1/*` request. | **Provider** | Transient — retry. If it persists, check provider availability and network egress. |
-| `503` | *(forwarded verbatim)* | Upstream provider returned `503 Service Unavailable`; the pass-through proxy forwards its status and body unchanged. | **Provider** | Retry with backoff; the provider is overloaded or in maintenance. |
+| `402` | `insufficient_quota` / `insufficient_quota` | The `budget` plugin's per-key USD cap is exhausted. | **Gateway** | Stop retrying — this status is deliberately outside every OpenAI SDK's retry set and carries no `Retry-After`. Wait for cost roll-off, or raise/reset the key's budget. |
+| `403` | `permission_error` / `insufficient_scope` | Authenticated key lacks the required scope (e.g. `read_only` calling an admin write, or a non-`admin` key hitting `/debug/*`). | **Gateway** | Use a key with the `admin` scope, or request the needed scope. |
+| `404` | `invalid_request_error` / `model_not_found` | No configured target serves the requested model. Two distinct causes share this exact status/type/code: no target names a provider for it at all (routing never called anyone), **or** the provider that owns it has since retired the model upstream (routing called the right target and it said no). | **Gateway** or **Provider** | Use a model a configured target serves — check `GET /v1/models`. This also covers a target that can't stream, embed, or generate images for the model; there is no separate status for a capability miss. |
+| `404` | `invalid_request_error` / `provider_not_found` | Pass-through `/v1/*` request set `X-Provider` to a name no configured target serves. | **Gateway** | Use a provider name from `GET /v1/models`, or omit `X-Provider` and let the body's `model` resolve it. |
+| `404` | `not_found_error` / `resource_not_found` | An admin resource named by id — an API key, a config history version — doesn't exist. | **Gateway** | Check the id; list the resource first (`GET /admin/keys`, `GET /admin/config/history`). |
+| `404` | *(plain text)* `404 page not found` | The path matches no route this instance serves (not `/v1/*`, `/admin/*`, a probe, or a dashboard asset), and the request either isn't `GET`/`HEAD` or didn't ask for `text/html`. | **Gateway** | Check the path and HTTP method — this is Go's default 404, not the JSON envelope. The same unmatched path answers a browser `GET` with the dashboard's `200` app shell instead. |
+| `405` | `invalid_request_error` / `method_not_supported` | Wrong HTTP method on a route the gateway itself handles. | **Gateway** | Use a method from the response's `Allow` header (every `GET` route also accepts `HEAD`). |
+| `429` | `rate_limit_error` / `rate_limit_exceeded` | The per-IP token bucket is exhausted, a `rate-limit` plugin rejected the request, **or** the resolved provider itself returned `429` on a routed surface (its status and code are kept as-is). | **Gateway** or **Provider** | Back off and retry — `Retry-After` is always set (see the tip above). |
+| `429` | `rate_limit_error` / `provider_saturated` | The target's `concurrency.max_concurrency` + `queue_size` are both full; this request would exceed both. | **Gateway** | Back off and retry (`Retry-After: 1`), or raise `targets[].concurrency`, or add another target. |
+| `500` | `server_error` / `plugin_error` | A plugin's `Execute` returned an error — it broke rather than denying the request with `Reject`. Guardrail, auth, ratelimit, and transform plugins fail **closed** on this; logging/metrics plugins fail open and never reach the client. | **Gateway** | Retry; if persistent, check the plugin's own logs/dependency (e.g. a rate-limit plugin's backend store being unreachable). |
+| `500` | `server_error` / `internal_error` | Internal configuration fault — e.g. an unparseable provider base URL discovered while building a pass-through request (`/v1/*`, `/v1/files*`, `/v1/batches*`). | **Gateway** | Fix the provider's `<PROVIDER>_BASE_URL` configuration. |
+| `500` | `server_error` / `routing_error` | Any routing or plugin failure not covered by a more specific status above. Rare — most failure modes now have their own classification. | **Gateway** | Retry; if persistent, inspect gateway logs. |
+| `501` | `invalid_request_error` / `proxy_not_supported` | The resolved provider can't serve this as an OpenAI-compatible pass-through — a native-wire-only provider (Anthropic, Gemini, Bedrock, Cohere, Vertex AI, Azure) or one with no proxy support at all. | **Gateway** | Use the provider's natively-handled endpoint (chat, embeddings, images) instead of an unhandled `/v1/*` path. |
+| `501` | `invalid_request_error` / `batch_not_configured` | `batch_target` is unset, or names a target whose provider isn't registered or isn't batch-capable. | **Gateway** | Set `batch_target` to a configured target on a batch-capable provider (`openai`, `azure-openai`, `groq`, `novita`, `qwen`). |
+| `501` | `invalid_request_error` / `responses_not_configured` | `responses_target` is unset, or its provider isn't registered — applies only to the stateful `/v1/responses/{id}` sub-routes (retrieve/cancel/delete/input\_items). `POST /v1/responses` (create) still routes by model and is unaffected. | **Gateway** | Set `responses_target` to a configured target. |
+| `502` | `upstream_error` / `response_rejected` | An `after_request` plugin rejected the upstream response. | **Gateway** | Loosen the guardrail, or fix what the provider returned. |
+| `502` | `upstream_error` / `upstream_auth_error` | The resolved provider rejected the gateway's own credential (upstream `401`/`403`). | **Provider** | This is an operator-side credential problem, not the caller's — rotate the provider API key in the gateway's environment. |
+| `502` | `upstream_error` / `upstream_error` | Either the provider returned an unclassified `5xx` on a routed surface, or the gateway couldn't reach or read the provider at all while proxying `/v1/*`, `/v1/files*`, `/v1/batches*`, or `/v1/responses*`. | **Provider** | Transient — retry with backoff. If persistent, check the provider's status page and the gateway's outbound network egress. |
+| `503` | `upstream_error` / `upstream_unavailable` | The target's circuit breaker is open, so the request was refused **without** an upstream call this time. | **Gateway** | Retry shortly. Check `gateway_circuit_breaker_state{provider="<target>"}` and `GET /admin/logs?provider=<target>` for what tripped it. |
+| `503` | *(forwarded verbatim)* | The provider returned `503 Service Unavailable` on the raw, unhandled `/v1/*` pass-through; its status and body are forwarded exactly as received. | **Provider** | Retry with backoff; the provider is overloaded or in maintenance. |
+| `504` | `upstream_error` / `upstream_timeout` | The resolved provider's own connection timed out. | **Provider** | Transient — retry with backoff. |
+| `504` | `upstream_error` / `gateway_timeout` | The gateway's own `request_timeout` elapsed, or the caller's own context deadline was exceeded, before any provider produced a usable response. | **Gateway** | Raise `request_timeout` if the model genuinely needs longer, or check whether the target is slow or unhealthy. |
 
-:::tip
-On pass-through `/v1/*` routes the gateway is transparent: any `4xx`/`5xx` the upstream returns (including `429`, `500`, `502`, `503`) is forwarded with the **provider's own** status code and body. Treat those as Provider-sourced even though they reach you through the gateway.
+:::tip Pass-through is transparent, connection failures are not
+On the raw `/v1/*` pass-through (any endpoint the gateway doesn't handle natively — `/v1/fine_tuning`, `/v1/realtime`, and similar) a response the upstream actually sent — any `2xx`–`5xx`, `429` and `503` included — is forwarded with the **provider's own** status code and body, credentials redacted. A failure to reach or read the upstream at all (DNS, TLS, connection refused, a truncated body) is different: nothing came back to forward, so the gateway reports it itself as `502 upstream_error` in the standard JSON envelope described above.
 :::
 
 ## Streaming errors
@@ -68,7 +86,7 @@ Once a streaming response has started, the HTTP status line is already `200 OK` 
 | Event `code` | `type` | Trigger | Source |
 | --- | --- | --- | --- |
 | `stream_error` | `stream_error` | The upstream provider emitted an error chunk mid-stream. | **Provider** |
-| `stream_timeout` | `timeout_error` | No chunk arrived within the idle window (2 minutes by default). | **Gateway** |
+| `stream_timeout` | `timeout_error` | No chunk arrived on the gateway's internal channel within the idle window (2 minutes by default). | **Gateway** |
 
 Example terminal error event:
 

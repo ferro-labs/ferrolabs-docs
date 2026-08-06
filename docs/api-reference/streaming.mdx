@@ -1,7 +1,7 @@
 ---
 title: Streaming (SSE) contract
-description: How the Ferro Labs AI Gateway streams chat completions over Server-Sent Events — stream mode, the [DONE] terminator, mid-stream error framing, and idle timeouts.
-keywords: [AI gateway streaming, server-sent events, SSE stream, stream_error event, stream_timeout, OpenAI compatible streaming]
+description: "How the Ferro Labs AI Gateway streams chat completions over SSE — chunk format, the usage frame, error events, timeouts, and MCP tool-loop streaming behavior."
+keywords: [AI gateway streaming, server-sent events, SSE stream, stream_error event, stream_timeout, OpenAI compatible streaming, MCP streaming]
 ---
 
 The gateway streams chat completions using [Server-Sent Events (SSE)](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events). The wire format is OpenAI-compatible: each event is a `data:` line carrying one JSON chunk, and a normal stream ends with a literal `data: [DONE]` sentinel.
@@ -42,14 +42,22 @@ data: {"id":"chatcmpl-abc","object":"chat.completion.chunk","created":1718600000
 
 data: {"id":"chatcmpl-abc","object":"chat.completion.chunk","created":1718600000,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
 
+data: {"id":"chatcmpl-abc","object":"chat.completion.chunk","created":1718600000,"model":"gpt-4o-mini","choices":[],"usage":{"prompt_tokens":12,"completion_tokens":4,"total_tokens":16}}
+
 data: [DONE]
 ```
 
 The blank line after each `data:` event is part of the SSE framing — do not strip it before your parser sees the event boundary.
 
+## Terminal usage frame
+
+The gateway asks the upstream provider for a usage-carrying terminal chunk on every OpenAI-compatible stream — it sets `stream_options.include_usage: true` unless the client's own request already configured `stream_options`. That final chunk carries `choices: []` (never `null`; a usage-only frame still serializes an empty array so a client that unconditionally indexes `choices[0]` does not break) and a populated `usage` object.
+
+The gateway needs real token counts for metering, cost accounting, and the budget plugin regardless of what the client asked for, so it always requests the frame from the provider. What reaches the client is separate: if the original request set `stream_options.include_usage: false`, the gateway still collects the real usage internally but strips the `usage` field from the copy of the chunk it forwards, so an explicit client opt-out is honored without losing gateway-side accounting.
+
 ## Mid-stream errors
 
-If the upstream provider fails *after* the stream has started, the gateway cannot reuse a normal HTTP status code (headers are already sent). Instead it emits a single error event as a `data:` line and then closes the stream. No `[DONE]` sentinel follows an error event.
+If the upstream provider fails *after* the stream has started, the gateway cannot reuse a normal HTTP status code (headers are already sent). Instead it emits a single error event as a `data:` line and then closes the stream. No `[DONE]` sentinel follows an error event. The failure is also recorded on the request's span, counted in Prometheus metrics, and written to the request log via the `on_error` plugin stage — a mid-stream failure is no longer a silent truncation on any of those surfaces.
 
 The error chunk has this exact JSON shape:
 
@@ -99,15 +107,23 @@ Every SSE event is a `data:` line. Clients should classify each event as follows
 1. If the payload is the literal `[DONE]`, the stream completed normally — stop reading.
 2. Otherwise parse the payload as JSON, then:
    - A **top-level `error` object** means a failure event. Read `error.code` (`stream_error` or `stream_timeout`) and `error.message`, surface it, and stop.
-   - A payload with `object: "chat.completion.chunk"` (and a `choices` array) is a **normal token chunk**. Append `choices[].delta.content`.
+   - A payload with `object: "chat.completion.chunk"` and a non-empty `choices` array is a **normal token chunk**. Append `choices[].delta.content`.
+   - A payload with `object: "chat.completion.chunk"` and an **empty** `choices` array is the terminal usage frame — read `usage` and otherwise ignore it; it carries no content to append.
 
-The presence of a top-level `error` key is the reliable discriminator: normal chunks never carry one, and error events never carry `choices`.
+The presence of a top-level `error` key is the reliable discriminator: normal and usage chunks never carry one, and error events never carry `choices`.
 
 ## MCP-augmented streaming
 
-When [MCP](https://modelcontextprotocol.io) tool servers are configured, a streaming request still accepts `stream: true`, but the gateway runs the full agentic tool-call loop to completion *before* sending anything to the client. Intermediate tool-loop turns are forced to non-streaming so each response can be inspected for `tool_calls`, so those intermediate tokens are never streamed.
+Whether [MCP](https://modelcontextprotocol.io) tool servers change the streaming behavior of a request depends on whether the *request itself* carries a `tools` array:
 
-The final assistant message is wrapped into a **single SSE chunk** followed by `data: [DONE]`. In other words, with MCP active the client receives one content chunk rather than an incremental token stream. (This is the current Phase 1 behavior; true final-response token streaming is planned.)
+- **The request sends its own `tools`.** MCP does not participate at all — the gateway never advertises its MCP tools alongside a caller-supplied set, because a model could then return a mix of gateway-owned and caller-owned tool calls that neither side alone can execute. Such a request passes straight through the ordinary streaming path described above, untouched, whatever MCP servers are configured.
+- **The request sends no `tools`, and the gateway has MCP tools ready to advertise.** The gateway injects its MCP tool definitions and the request is diverted: the full agentic tool-call loop (call the tool, feed the result back, re-ask the model) runs to completion **before anything is sent to the client**. Every intermediate turn is forced to non-streaming so its response can be inspected for `tool_calls`. Once the loop produces a final answer with no more pending tool calls, that answer is wrapped into a **single SSE chunk** followed by `data: [DONE]` — the client still receives `stream: true` semantics (SSE framing, one `[DONE]` terminator), but gets one content chunk rather than an incremental token stream.
+
+Gating is on tools *actually being advertised* (registered **and** past their MCP handshake), not merely on `mcp_servers` being configured — a server that failed to initialize does not silently collapse every tool-less stream on the gateway into a buffered response.
+
+**Every turn of the loop runs the request's guardrail, rate-limit, and budget plugins** — not only the turn the caller made. A tool result returned by an external MCP server is content the caller never wrote, so it is inspected exactly as the original prompt was before being sent to the model again. This means a loop can be rejected mid-way through, most commonly by the budget plugin once accumulated per-turn spend crosses its cap.
+
+A mid-loop rejection is **not** an SSE error event: because the loop runs entirely before any bytes reach the client, a rejection happens before the gateway ever opens the SSE response, so the caller gets an ordinary (non-streaming) JSON error — for a budget rejection, `402 insufficient_quota` — instead of a `stream_error` frame.
 
 ## Notes
 

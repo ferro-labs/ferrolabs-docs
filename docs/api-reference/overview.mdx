@@ -1,10 +1,10 @@
 ---
 title: API overview
-description: OpenAI-compatible REST API endpoints exposed by the Ferro Labs AI Gateway — chat completions, embeddings, image generation, model listing, and streaming responses.
+description: OpenAI-compatible REST API exposed by the Ferro Labs AI Gateway — chat, embeddings, images, audio, rerank, moderations, responses, and health endpoints.
 keywords: [AI gateway API, OpenAI compatible API, LLM REST API, chat completions API, gateway streaming API]
 ---
 
-The gateway exposes an OpenAI compatible API surface so you can reuse existing clients.
+The gateway exposes an OpenAI-compatible REST API surface so you can reuse existing OpenAI SDKs and tooling — point the client's `base_url` at the gateway and keep your code unchanged.
 
 ## Base URL
 
@@ -14,13 +14,73 @@ Use the gateway host as the base URL, for example:
 http://localhost:8080
 ```
 
-## Common endpoints
+## Authentication
 
-- `/v1/chat/completions`
-- `/v1/models`
-- `/v1/embeddings`
-- `/v1/images/generations`
-- `/health`
-- `/metrics`
+`/v1/*` requires a bearer token by default:
 
-Other `/v1/*` endpoints (for example `/v1/audio/*`, `/v1/files`, `/v1/realtime`) are proxied to the selected provider while preserving payloads.
+```
+Authorization: Bearer fgw_...
+```
+
+Set `ALLOW_UNAUTHENTICATED_PROXY=true` to disable this for local development — it is refused at startup under `GATEWAY_ENV=production`. See [Authentication](/guides/auth).
+
+## Inference endpoints
+
+These route through the gateway's targets, plugins, and circuit breakers like any other request:
+
+| Endpoint | Method | Notes |
+|---|---|---|
+| `/v1/chat/completions` | POST | Supports `stream: true` (SSE) |
+| `/v1/completions` | POST | Legacy text completions, served as a single-message chat |
+| `/v1/embeddings` | POST | |
+| `/v1/images/generations` | POST | |
+| `/v1/audio/speech` | POST | Text-to-speech — JSON in, binary audio out |
+| `/v1/audio/transcriptions`, `/v1/audio/translations` | POST | Speech-to-text — multipart upload, 25 MiB cap |
+| `/v1/rerank` | POST | Cohere-v2 contract |
+| `/v1/moderations` | POST | |
+| `/v1/responses` | POST | Governed and **priced** — routes by model like chat |
+
+`/v1/audio/*` is natively routed, not blindly proxied: it goes through targets, plugins, the circuit breaker, and request logging like the endpoints above.
+
+## Discovery
+
+| Endpoint | Method | Notes |
+|---|---|---|
+| `/v1/models` | GET | Union of catalog, live discovery, and operator-declared models |
+| `/v1/capabilities` | GET | Per-provider OpenAI parameter support, from the capability matrix |
+
+## Files, batches, and responses sub-routes
+
+| Endpoint | Method | Notes |
+|---|---|---|
+| `/v1/files`, `/v1/files/*` | GET, POST, DELETE | Pass-through to the single configured `batch_target` |
+| `/v1/batches`, `/v1/batches/*` | GET, POST, DELETE | Pass-through to the single configured `batch_target` |
+| `/v1/responses/*` | GET, POST, DELETE | Id sub-routes (retrieve/delete/cancel/input_items), pin to `responses_target` |
+
+These carry no model — a batch or response id is opaque and provider-scoped — so they pin to one configured target instead of being routed. Each returns `501` when its target (`batch_target` / `responses_target`) is unset.
+
+## Pass-through proxy
+
+Any other `/v1/*` path is forwarded transparently to the provider that owns the request's model, resolved through the same routing index every native endpoint uses — an unowned model is refused `404 model_not_found` rather than forwarded.
+
+## Health and observability
+
+| Endpoint | Method | Auth |
+|---|---|---|
+| `/livez` | GET | None — process is alive |
+| `/readyz` | GET | None — gateway can route traffic |
+| `/health` | GET | None — deep diagnostic (per-provider status, circuit state) |
+| `/metrics` | GET | Bearer token, `read_only` or `admin` scope |
+| `/debug/vars`, `/debug/pprof/*` | GET | Bearer token, `admin` scope (`/debug/pprof/*` also requires `ENABLE_PPROF=true`) |
+
+:::note
+`/metrics` and everything under `/debug` require a scoped bearer token — unlike `/v1/*`, an unauthenticated request always gets `401` here, even with `ALLOW_UNAUTHENTICATED_PROXY=true`.
+:::
+
+## Related
+
+- [Endpoints](/api-reference/endpoints) — full request/response reference
+- [Streaming](/api-reference/streaming) — SSE wire format
+- [Admin API](/api-reference/admin) — key management, config history, logs
+- [Errors](/api-reference/errors) — error envelope and status codes
+- [Interactive API reference](/api) — Scalar-rendered OpenAPI explorer

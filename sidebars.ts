@@ -14,6 +14,8 @@ const ICONS = {
   chart: svg('<path d="M3 3v18h18"/><path d="M7 14l3-3 3 3 5-6"/>'),
   brackets: svg('<path d="M8 3H6a2 2 0 0 0-2 2v4a2 2 0 0 1-2 2 2 2 0 0 1 2 2v4a2 2 0 0 0 2 2h2"/><path d="M16 3h2a2 2 0 0 1 2 2v4a2 2 0 0 0 2 2 2 2 0 0 0-2 2v4a2 2 0 0 1-2 2h-2"/>'),
   sparkle: svg('<path d="M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z"/>'),
+  route: svg('<circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="5" r="2.5"/><path d="M6 16.5V11a4 4 0 0 1 4-4h4"/><path d="m14 4-2 3 3 2"/>'),
+  puzzle: svg('<path d="M9 3a2 2 0 0 1 4 0v1h3a1 1 0 0 1 1 1v3h1a2 2 0 0 1 0 4h-1v3a1 1 0 0 1-1 1h-3v-1a2 2 0 0 0-4 0v1H6a1 1 0 0 1-1-1v-3H4a2 2 0 0 1 0-4h1V5a1 1 0 0 1 1-1h3z"/>'),
 } as const;
 
 const divider = (icon: string, label: string) => ({
@@ -90,13 +92,34 @@ const sidebars: SidebarsConfig = {
     'integrations/deployment/kubernetes',
     'integrations/deployment/fly-io',
 
+    divider(ICONS.plug, 'Providers'),
+    'providers/overview',
+    'providers/configuration',
+
+    divider(ICONS.route, 'Routing'),
+    'routing/overview',
+    'routing/single',
+    'routing/fallback',
+    'routing/loadbalance',
+    'routing/least-latency',
+    'routing/cost-optimized',
+    'routing/conditional',
+    'routing/content-based',
+    'routing/ab-test',
+
+    divider(ICONS.puzzle, 'Plugins'),
+    'plugins/overview',
+    'plugins/word-filter',
+    'plugins/max-token',
+    'plugins/rate-limit',
+    'plugins/budget',
+    'plugins/response-cache',
+    'plugins/request-logger',
+    'plugins/enterprise',
+
     divider(ICONS.book, 'Guides'),
-    'guides/providers',
-    'guides/providers-config',
-    'guides/provider-capabilities',
-    'guides/routing-policies',
     'guides/use-cases',
-    'guides/plugins',
+    'guides/dashboard',
     'guides/mcp',
     'guides/prompt-templates',
     'guides/rate-limiting',
@@ -105,7 +128,6 @@ const sidebars: SidebarsConfig = {
 
     divider(ICONS.shield, 'Auth & Security'),
     'guides/auth',
-    'guides/admin-auth',
     'security/data-handling',
 
     divider(ICONS.chart, 'Observability'),

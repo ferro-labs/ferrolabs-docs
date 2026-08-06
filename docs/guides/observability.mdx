@@ -1,41 +1,78 @@
 ---
 title: Observability
-description: Full observability for your LLM traffic — Prometheus metrics, structured JSON logs with trace IDs, and a deep per-provider health endpoint in the Ferro Labs AI Gateway.
-keywords: [LLM observability, AI gateway metrics, Prometheus LLM, AI gateway monitoring, structured logging AI, LLM tracing]
+description: Prometheus metrics behind a scoped bearer token, OpenTelemetry tracing over OTLP, trace-ID-unified structured logs, and /livez, /readyz, /health probes.
+keywords: [LLM observability, AI gateway metrics, Prometheus LLM, AI gateway monitoring, structured logging AI, LLM tracing, readyz livez health check]
 ---
 
-The gateway ships with four observability layers: Prometheus metrics, OpenTelemetry tracing, structured log output, and a deep health endpoint.
+The gateway ships four observability layers: Prometheus metrics, OpenTelemetry tracing, structured JSON logs, and a set of liveness/readiness/health probes.
 
 ## Prometheus metrics
 
-Metrics are exposed at `GET /metrics` in the standard Prometheus text format. Scrape this endpoint with your Prometheus server. All metric names use the `gateway_` prefix.
+Metrics are exposed at `GET /metrics` in the standard Prometheus text format, mounted via `promhttp` on the default registry. All metric names use the `gateway_` prefix (MCP tool-call metrics are the one exception — see below).
+
+:::danger /metrics requires a bearer token
+`/metrics` is **not** an open endpoint. It sits behind the same auth chain as the admin API and requires a bearer token — `MASTER_KEY`, an issued `fgw_` API key, or a dashboard session — carrying the `read_only` or `admin` scope. An unauthenticated scrape gets `401`. Every scrape config must supply the token.
+:::
+
+Issue a dedicated `read_only` key for your scraper (scopes default to `read_only` when omitted — see [Authentication](/guides/auth)):
+
+```bash
+curl -X POST http://localhost:8080/admin/keys \
+  -H "Authorization: Bearer $MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "monitoring-scraper"}'
+```
 
 ### Available metrics
 
 | Metric | Type | Labels | Description |
 |---|---|---|---|
-| `gateway_requests_total` | Counter | `provider`, `model`, `status` | Total requests processed (`status`: `success`\|`error`\|`rejected`) |
-| `gateway_request_duration_seconds` | Histogram | `provider`, `model` | End-to-end request latency |
+| `gateway_requests_total` | Counter | `provider`, `model`, `status` | Completed requests; `status` is `success`\|`error`\|`rejected`. `provider` is `none` when no provider was chosen and `cache` on a response-cache hit; `model` is `unknown` for a client-supplied model no target serves |
+| `gateway_request_duration_seconds` | Histogram | `provider`, `model` | End-to-end request latency (successes and failures alike); buckets .005s–30s |
 | `gateway_tokens_input_total` | Counter | `provider`, `model` | Prompt tokens sent to providers |
 | `gateway_tokens_output_total` | Counter | `provider`, `model` | Completion tokens received from providers |
-| `gateway_provider_errors_total` | Counter | `provider`, `error_type` | Provider errors by type (`provider_error`\|`circuit_open`\|`timeout`) |
-| `gateway_circuit_breaker_state` | Gauge | `provider` | Circuit breaker state (`0`=closed, `1`=open, `2`=half-open) |
-| `gateway_rate_limit_rejections_total` | Counter | `key_type` | Requests rejected by rate limiting (`key_type`: `ip`\|`api_key`\|`plugin`) |
-| `gateway_request_cost_usd_total` | Counter | `provider`, `model` | Estimated cumulative request cost in USD (public pricing tables) |
-| `gateway_server_connections_current` | Gauge | `state` | Current inbound HTTP connections by state |
+| `gateway_request_cost_usd_total` | Counter | `provider`, `model` | Estimated cumulative cost in USD from public pricing tables |
+| `gateway_provider_errors_total` | Counter | `provider`, `error_type` | Errors by type: `provider_error`, `circuit_open`, `timeout`, `client_canceled`, `backpressure`, `plugin_error`. Alert only on `provider_error` and `timeout` — the rest are the gateway declining or shedding load, or the caller leaving |
+| `gateway_provider_init_failures_total` | Counter | `provider` | Providers whose factory failed at startup (warned, then skipped) — the only machine-readable signal a configured provider never came up |
+| `gateway_circuit_breaker_state` | Gauge | `provider` | Circuit state per target, resolved from the live breaker at scrape time: `0`=closed, `1`=open, `2`=half-open. A series exists only for a target that has a breaker configured — absent means none is configured, not "never tripped" |
+| `gateway_mcp_server_up` | Gauge | `server_name` | MCP server availability: `0`=not ready, `1`=ready and advertising tools. A drop from `1` to `0` with no config change means the transport died (e.g. a stdio subprocess exited) |
+| `gateway_mcp_server_init_failures_total` | Counter | `server_name` | MCP servers whose initialize handshake or tool discovery failed |
+| `gateway_rate_limit_rejections_total` | Counter | `key_type` | Requests rejected by rate limiting (`key_type`: `ip` — per-IP middleware; `admin_session` — the sign-in route's own limiter; `plugin` — the rate-limit plugin's global/per-key/per-user buckets) |
+| `gateway_server_connections_current` | Gauge | `state` | Current inbound HTTP connections by state (`active`\|`idle`) |
 | `gateway_server_connection_transitions_total` | Counter | `state` | Inbound HTTP connection state transitions |
-| `gateway_hook_events_dropped_total` | Counter | `subject` | Hook dispatches dropped because the worker queue was full |
+| `gateway_hook_events_dropped_total` | Counter | `subject` | Hook dispatches dropped because the hook worker queue was full |
+| `gateway_observability_events_dropped_total` | Counter | `subject` | Observability events (`gateway.request.completed`/`failed`) dropped because the exporter dispatch queue was full — `RecordEvent` is non-blocking |
 | `gateway_catalog_loads_total` | Counter | `source`, `result` | Model-catalog load attempts (`source`: `remote`\|`fallback`; `result`: `success`\|`error`) |
 
+MCP **tool-call** metrics use the `ferrogw_mcp_` prefix instead of `gateway_` — they're registered separately in the MCP executor:
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `ferrogw_mcp_tool_calls_total` | Counter | `server_name`, `tool_name`, `status` | MCP tool calls made (`status`: `ok`\|`error`) |
+| `ferrogw_mcp_tool_call_duration_seconds` | Histogram | `server_name`, `tool_name` | Latency of individual MCP tool calls |
+| `ferrogw_mcp_unknown_tool_calls_total` | Counter | `tool_name` | Tool calls naming a tool no registered MCP server advertises (a hallucinated tool name) |
+
 ### Example Prometheus scrape config
+
+Prometheus's `authorization` block sends the bearer token on every scrape:
 
 ```yaml
 scrape_configs:
   - job_name: ferrogw
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials: "fgw_your_read_only_scrape_key"
+      # or: credentials_file: /etc/prometheus/secrets/ferrogw-metrics-token
     static_configs:
       - targets: ["localhost:8080"]
-    metrics_path: /metrics
     scrape_interval: 15s
+```
+
+A manual check:
+
+```bash
+curl -H "Authorization: Bearer $FERROGW_METRICS_TOKEN" http://localhost:8080/metrics
 ```
 
 ### Useful PromQL queries
@@ -47,7 +84,10 @@ rate(gateway_requests_total[5m])
 # P99 request latency
 histogram_quantile(0.99, rate(gateway_request_duration_seconds_bucket[5m]))
 
-# Error rate percentage (failed requests over all requests)
+# Error rate percentage — status="rejected" (denied by a guardrail/budget
+# plugin) is deliberately excluded from the numerator: it's a policy
+# decision, not a gateway or provider fault, and folding it in inflates the
+# "error" signal with traffic the gateway handled correctly.
 sum(rate(gateway_requests_total{status="error"}[5m]))
   / sum(rate(gateway_requests_total[5m])) * 100
 
@@ -59,6 +99,9 @@ rate(gateway_request_cost_usd_total[5m]) * 3600
 
 # Open circuit breakers
 gateway_circuit_breaker_state == 1
+
+# MCP servers that dropped out of rotation
+gateway_mcp_server_up == 0
 ```
 
 ## OpenTelemetry tracing
@@ -69,7 +112,9 @@ Each request opens a `gateway.request` root span stamped with `gen_ai.*` and `fe
 
 ### Unified trace ID
 
-The OTel `trace_id`, the structured-log `trace_id`, and the `X-Request-ID` response header are all the **same value**. Copy a trace ID from a log line and look it up directly in your tracing backend.
+The OTel `trace_id`, the structured-log `trace_id`, the `ferro.gateway.trace_id` span attribute, and the `X-Request-ID` response header are all the **same value**: a 32-character lowercase hex string (16 raw bytes), not a dashed UUID. Copy a trace ID from a log line and look it up directly in your tracing backend.
+
+An inbound `X-Request-ID` (or a W3C `traceparent`) is adopted only when it can *be* a trace ID — 32 hex characters, not all-zero. A client-supplied value that isn't (a UUID, a slug, an upstream proxy's opaque request ID) is replaced with a freshly generated one rather than echoed back, so the response header, the logs, and the OTel trace never disagree on the ID for one request.
 
 ### Configuration
 
@@ -79,7 +124,7 @@ Configure tracing under the `observability` block in your gateway config:
 observability:
   tracing:
     enabled: true
-    endpoint: ""             # host:port; blank falls back to OTEL_EXPORTER_OTLP_ENDPOINT
+    endpoint: ""             # host:port or URL; blank falls back to OTEL_EXPORTER_OTLP_* env
     protocol: grpc           # grpc | http/protobuf  (https:// endpoint ⇒ TLS, else insecure)
     service_name: ferrogw
     sample_ratio: 1.0        # head sampler, 0.0–1.0
@@ -91,19 +136,24 @@ observability:
       config: {}
 ```
 
-Standard OpenTelemetry environment variables take precedence over the config file:
+`tracing.enabled` is tri-state: omit it and the gateway infers tracing from whether an endpoint or exporter is configured; set it `false` to force tracing off even with an endpoint present; set it `true` to force it on.
+
+The gateway itself reads exactly **two** `OTEL_*` environment variables, and either one alone turns tracing on:
 
 | Variable | Purpose |
 |---|---|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector endpoint; enables tracing when set |
-| `OTEL_EXPORTER_OTLP_HEADERS` | Headers sent to the collector (e.g. auth tokens) |
-| `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` | Head-sampler overrides |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP base endpoint; outranks `observability.tracing.endpoint` |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Signal-specific traces endpoint, used verbatim; outranks the variable above |
 
-When both a config value and the matching `OTEL_*` variable are present, the environment variable wins.
+:::note OTEL_TRACES_SAMPLER has no effect
+The head sampler comes **only** from `observability.tracing.sample_ratio` and is wrapped in a `ParentBased` sampler, so an inbound sampled `traceparent` is always followed regardless of the ratio. `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` are standard OTel SDK variables the gateway never reads — setting them silently does nothing. Every other tracing setting (protocol, service name, privacy level, shutdown grace, headers) comes from config only; only the endpoint has an environment override.
+:::
+
+`OTEL_EXPORTER_OTLP_HEADERS` is honored too, but indirectly: it reaches the OTLP SDK's own transport, not gateway code, so it layers underneath whatever `observability.tracing.headers` resolves to.
 
 ### Export headers
 
-To attach static metadata or backend auth tokens to every OTLP export, set the in-config `observability.tracing.headers` map. Each value supports `${ENV_VAR}` (and `$ENV_VAR`) interpolation that is resolved at exporter-build time — so secrets live in the environment, never literally in the in-memory config. A header whose value resolves to empty (e.g. it references an unset variable) is dropped and a warning is logged.
+To attach static metadata or backend auth tokens to every OTLP export, set the in-config `observability.tracing.headers` map:
 
 ```yaml
 observability:
@@ -116,58 +166,61 @@ observability:
       x-ferro-env: production                  # literal value, passed through
 ```
 
-The standard `OTEL_EXPORTER_OTLP_HEADERS` environment variable is also honored and takes precedence.
+`${VAR}` is the **only** reference form — a bare `$` (`$100`, `pa$$w0rd`) is always literal data, never expanded. This differs from the general `${VAR}` rule used elsewhere in the config (plugin `config`, MCP `headers`/`env`, `observability.exporters[].config`), where an undefined variable is a hard construction-time error: for `tracing.headers` specifically, a header whose reference is undefined — or that resolves to an empty string — is instead **dropped with a logged warning**, and every other header still gets sent. Tracing is auxiliary; one mistyped trace header shouldn't take the rest of the export down with it.
 
 ### Span attributes
 
 Each span is stamped with two attribute groups. Group A follows the [OpenTelemetry GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/); Group B is the Ferro `ferro.*` extension namespace. Every build advertises its attribute schema version via `ferro.schema.version` (currently **`1.0.0-draft`**), so exporters can branch on schema migrations.
 
+Not every declared constant is wired into a live span yet — the **Status** column below tells you which ones are. A `Planned` name is stable (safe to reference in a dashboard you're building ahead of time) but won't appear on a span until a later release emits it.
+
 **Group A — `gen_ai.*` (OpenTelemetry GenAI conventions)**
 
-| Attribute | Meaning |
-|---|---|
-| `gen_ai.system` | Provider system (e.g. `openai`, `anthropic`) |
-| `gen_ai.operation.name` | Operation (e.g. `chat`) |
-| `gen_ai.request.model` | Requested model ID |
-| `gen_ai.response.model` | Model that actually served the response |
-| `gen_ai.request.max_tokens` | Requested max output tokens |
-| `gen_ai.request.temperature` | Sampling temperature |
-| `gen_ai.request.top_p` | Nucleus-sampling top-p |
-| `gen_ai.request.is_stream` | Whether streaming was requested |
-| `gen_ai.usage.input_tokens` | Prompt tokens |
-| `gen_ai.usage.output_tokens` | Completion tokens |
-| `gen_ai.usage.reasoning_tokens` | Reasoning tokens (reasoning models) |
-| `gen_ai.response.finish_reasons` | Finish reasons |
+| Attribute | Status | Meaning |
+|---|---|---|
+| `gen_ai.system` | Emitted | Provider system (e.g. `openai`, `anthropic`) |
+| `gen_ai.operation.name` | Emitted | Operation (e.g. `chat`) |
+| `gen_ai.request.model` | Emitted | Requested model ID |
+| `gen_ai.response.model` | Emitted | Model that actually served the response |
+| `gen_ai.request.is_stream` | Emitted | Whether streaming was requested |
+| `gen_ai.usage.input_tokens` | Emitted | Prompt tokens |
+| `gen_ai.usage.output_tokens` | Emitted | Completion tokens |
+| `gen_ai.usage.reasoning_tokens` | Emitted | Reasoning tokens (reasoning models) |
+| `gen_ai.request.max_tokens` | Planned | Requested max output tokens |
+| `gen_ai.request.temperature` | Planned | Sampling temperature |
+| `gen_ai.request.top_p` | Planned | Nucleus-sampling top-p |
+| `gen_ai.response.finish_reasons` | Planned | Finish reasons |
 
 **Group B — `ferro.*` (Ferro extension)**
 
-| Attribute | Meaning |
-|---|---|
-| `ferro.schema.version` | Attribute schema version (`1.0.0-draft`) |
-| `ferro.gateway.trace_id` | Unified trace ID (same value as the log `trace_id` / `X-Request-ID`) |
-| `ferro.gateway.version` | Gateway build version |
-| `ferro.routing.strategy` | Routing strategy used (`fallback`, `loadbalance`, …) |
-| `ferro.routing.target_key` | Selected target / virtual key |
-| `ferro.routing.attempt` | Attempt number within the strategy |
-| `ferro.routing.ab_variant_label` | A/B variant label, when applicable |
-| `ferro.cost.usd` | Estimated total request cost in USD |
-| `ferro.cost.input_usd` / `ferro.cost.output_usd` | Estimated input / output cost |
-| `ferro.cost.cache_read_usd` / `ferro.cost.cache_write_usd` | Estimated prompt-cache read / write cost |
-| `ferro.cost.reasoning_usd` | Estimated reasoning-token cost |
-| `ferro.cost.model_found` | Whether the model was found in the catalog for pricing |
-| `ferro.cache.hit` | Whether a response-cache hit served the request |
-| `ferro.cache.kind` | Cache kind |
-| `ferro.plugin.name` / `ferro.plugin.kind` | Plugin identity (child spans) |
-| `ferro.plugin.stage` | Plugin stage (`before_request`, `after_request`, `on_error`) |
-| `ferro.plugin.outcome` / `ferro.plugin.reason` | Plugin outcome and reason |
-| `ferro.mcp.server` / `ferro.mcp.tool` | MCP server and tool name (child spans) |
-| `ferro.mcp.depth` / `ferro.mcp.latency_ms` | MCP call depth and latency |
-| `ferro.stream.time_to_first_token_ms` | Streaming time-to-first-token |
-| `ferro.stream.time_to_last_token_ms` | Streaming time-to-last-token |
-| `ferro.circuit_breaker.state` / `ferro.circuit_breaker.opened` | Circuit-breaker state and whether it opened during the request |
-| `ferro.request.api_key_id` / `ferro.request.tenant_id` | Request API key ID and tenant ID |
-| `ferro.error.upstream_status` | Upstream HTTP status on failure |
-| `ferro.error.retry_count` | Number of retries performed |
+| Attribute | Status | Meaning |
+|---|---|---|
+| `ferro.schema.version` | Emitted | Attribute schema version (`1.0.0-draft`) |
+| `ferro.gateway.trace_id` | Emitted | Unified trace ID (same value as the log `trace_id` / `X-Request-ID`) |
+| `ferro.routing.strategy` | Emitted | Routing strategy used (`fallback`, `loadbalance`, …) |
+| `ferro.routing.target_key` | Emitted | Selected target / virtual key |
+| `ferro.cost.usd` | Emitted | Estimated total request cost in USD |
+| `ferro.cost.input_usd` / `ferro.cost.output_usd` | Emitted | Estimated input / output cost |
+| `ferro.cost.cache_read_usd` / `ferro.cost.cache_write_usd` | Emitted | Estimated prompt-cache read / write cost |
+| `ferro.cost.reasoning_usd` | Emitted | Estimated reasoning-token cost |
+| `ferro.cost.model_found` | Emitted | Whether the model was found in the catalog for pricing |
+| `ferro.plugin.name` / `ferro.plugin.kind` | Emitted | Plugin identity (child spans) |
+| `ferro.plugin.stage` | Emitted | Plugin stage (`before_request`, `after_request`, `on_error`) |
+| `ferro.plugin.outcome` / `ferro.plugin.reason` | Emitted | Plugin outcome (`ok`\|`rejected`\|`error`) and reason |
+| `ferro.mcp.server` / `ferro.mcp.tool` | Emitted | MCP server and tool name (child spans) |
+| `ferro.mcp.latency_ms` | Emitted | MCP call latency |
+| `ferro.stream.time_to_first_token_ms` | Emitted | Streaming time-to-first-token |
+| `ferro.stream.time_to_last_token_ms` | Emitted | Streaming time-to-last-token |
+| `ferro.gateway.version` | Planned | Gateway build version |
+| `ferro.routing.attempt` | Planned | Attempt number within the strategy |
+| `ferro.routing.ab_variant_label` | Planned | A/B variant label — not yet on the span; today the A/B variant only shows up in `DEBUG`-level logs |
+| `ferro.cache.hit` / `ferro.cache.kind` | Planned | Response-cache hit and cache kind |
+| `ferro.mcp.depth` | Planned | MCP call depth |
+| `ferro.circuit_breaker.state` / `ferro.circuit_breaker.opened` | Planned | Circuit-breaker state and whether it opened during the request |
+| `ferro.request.api_key_id` / `ferro.request.tenant_id` | Planned | Request API key ID and tenant ID |
+| `ferro.error.upstream_status` | Planned | Upstream HTTP status on failure |
+| `ferro.error.retry_count` | Planned | Number of retries performed |
+| `ferro.forwarded_params` | Planned | Sanitized names (never values) of parameters forwarded to the provider |
 
 ### Privacy levels
 
@@ -175,72 +228,146 @@ Each span is stamped with two attribute groups. Group A follows the [OpenTelemet
 
 | Level | Behavior |
 |---|---|
-| `none` | No prompt/response content; error messages omitted |
-| `metadata` | **Default.** Metadata only; error messages redacted (email, JWT, AWS keys) |
+| `none` | A static `"redacted"` string only — no error text |
+| `metadata` | **Default.** Error messages redacted (email, JWT, AWS keys tokenised) |
 | `full` | Raw error text included — use only in trusted environments |
+
+No prompt or response content is exported at any privacy level.
 
 ### Exporters
 
-Beyond raw OTLP, the gateway exposes an exporter event seam: registered exporters receive `gateway.request.completed` / `gateway.request.failed` events for bridging to backends like LangSmith, Langfuse, or Datadog. No exporters ship in the core gateway — they live in the separate [`ai-gateway-plugins`](https://github.com/ferro-labs/ai-gateway) repo. List enabled exporters under `observability.exporters`; unknown or failed exporters are logged and skipped (non-fatal).
+Beyond raw OTLP, the gateway exposes an exporter event seam: registered exporters receive `gateway.request.completed` / `gateway.request.failed` events for bridging to backends like LangSmith or Langfuse. No exporters ship in the core gateway — they live in the separate [`ai-gateway-plugins`](https://github.com/ferro-labs/ai-gateway-plugins) repo. List enabled exporters under `observability.exporters`; an unregistered `name`, or one whose `config` carries an undefined `${VAR}` reference, is logged and skipped without stopping the gateway (non-fatal) — the rest of the exporters and the OTLP pipeline keep running.
+
+To see traces end to end without wiring your own collector, run the bundled demo stack — gateway, Prometheus, Grafana, Jaeger, and a traffic generator — with `make up-fullstack`, then open the dashboard's **Tracing** page. See [The embedded dashboard](/guides/dashboard).
 
 ## Structured JSON logs
 
-The gateway writes structured JSON to stdout. Each log line includes:
-
-| Field | Description |
-|---|---|
-| `time` | ISO 8601 timestamp |
-| `level` | `debug`, `info`, `warn`, `error` |
-| `trace_id` | Per-request UUID for log correlation |
-| `msg` | Log message |
-| `provider` | Provider name (on request/response lines) |
-| `model` | Model ID |
-| `latency_ms` | Provider round-trip latency in milliseconds |
-| `status` | HTTP status code |
-| `tokens_prompt` | Prompt token count |
-| `tokens_completion` | Completion token count |
-
-Example log line:
-
-```json
-{
-  "time": "2026-03-11T10:23:45Z",
-  "level": "info",
-  "trace_id": "a3f9b1c2-d4e5-4678-8901-abcdef012345",
-  "msg": "request complete",
-  "provider": "anthropic",
-  "model": "claude-3-5-sonnet-20241022",
-  "latency_ms": 412,
-  "status": 200,
-  "tokens_prompt": 312,
-  "tokens_completion": 87
-}
-```
-
-### Log level
-
-Set the log level with `LOG_LEVEL` (default: `info`). Use `LOG_FORMAT=text` for human-readable output during development.
+The gateway writes structured JSON to stdout (`log/slog`'s JSON handler) — there's no plain-text mode. `LOG_LEVEL` (`debug`\|`info`\|`warn`\|`error`, default `info`) is the only knob:
 
 ```bash
 export LOG_LEVEL=debug
-export LOG_FORMAT=text
 ```
 
-## Health endpoint
+Every request produces an **access log line** — `msg: "http request"` — regardless of level, once the response finishes:
 
-`GET /health` returns a deep health check with per-provider availability and latency:
+```json
+{
+  "time": "2026-08-06T10:23:45.128Z",
+  "level": "INFO",
+  "msg": "http request",
+  "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "method": "POST",
+  "path": "/v1/chat/completions",
+  "status": 200,
+  "bytes": 842,
+  "duration_ms": 412,
+  "remote": "10.0.4.12:51322"
+}
+```
+
+A `4xx` status logs the line at `warn`, a `5xx` at `error`; every field is HTTP-level (method, path, status, byte count, duration, client address) and complements the request-logger **plugin**, which records LLM semantics (model, tokens, cost) — see [Request logging](/operations/request-logging).
+
+At `LOG_LEVEL=debug`, a successful route additionally logs a richer completion line carrying the resolved provider, token counts, and cost:
+
+```json
+{
+  "time": "2026-08-06T10:23:45.127Z",
+  "level": "DEBUG",
+  "msg": "request completed",
+  "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "model": "gpt-4o",
+  "provider": "openai",
+  "latency_ms": 412,
+  "tokens_in": 312,
+  "tokens_out": 87,
+  "cost_usd": 0.0041
+}
+```
+
+A failed route logs a `request failed` line at `error` level unconditionally (no `LOG_LEVEL=debug` required):
+
+```json
+{
+  "time": "2026-08-06T10:23:46.003Z",
+  "level": "ERROR",
+  "msg": "request failed",
+  "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "model": "gpt-4o",
+  "latency_ms": 875,
+  "error": "provider_error: upstream returned 503"
+}
+```
+
+Every string field and every logged error passes through a redaction filter before it reaches stdout, so a raw upstream error carrying a configured credential is scrubbed at the log sink itself, not just at the call sites that remember to redact.
+
+## Liveness, readiness, and health
+
+The gateway splits "is the process up" from "can it serve traffic" from "give me a diagnostic dump" across three unauthenticated endpoints:
+
+| Endpoint | Answers | On failure |
+|---|---|---|
+| `GET /livez` | Is the process alive? No dependency checks — always `200 {"status":"ok"}`. Orchestrators use it to decide whether to **restart**. | never fails |
+| `GET /readyz` | Can this instance serve traffic right now? Gates on config load, backing-store reachability, and **target routability**. Orchestrators use it to decide whether to **route** traffic here. | `503` |
+| `GET /health` | Deep diagnostic: every registered provider's status, circuit state, and model count. | `503` only when zero providers are registered at all |
+
+### `/readyz`: target routability
+
+A target is **routable** when a provider is registered under its `virtual_key` (the credential env var is set) and that provider's circuit isn't open. `/readyz` is ready when **at least one** configured target is routable — not all of them, since one dead target among several is a fallback/load-balance case, not an outage:
+
+```json title="200 — ready"
+{
+  "status": "ready",
+  "providers": [
+    { "name": "openai", "circuit": "closed" },
+    { "name": "anthropic", "circuit": "closed" }
+  ],
+  "targets": [
+    { "name": "openai", "routable": true },
+    { "name": "anthropic", "routable": true }
+  ],
+  "mcp_servers": [
+    { "name": "filesystem", "ready": true, "required": false }
+  ]
+}
+```
+
+`mcp_servers` is present only when `mcp_servers[]` is configured. Reason strings are fixed (the endpoint is unauthenticated, so nothing sensitive — a DSN, a host, a credential — ever appears in the body):
+
+```json title="503 — not ready"
+{ "status": "not_ready", "reason": "no routable targets" }
+```
+
+| Reason | Cause |
+|---|---|
+| `no routable targets` | Zero configured targets are routable — every credentialed provider is either unnamed by any target or has its circuit open |
+| `required mcp server unavailable` | An `mcp_servers[]` entry with `required: true` hasn't completed its initialize handshake — see [MCP integration](/guides/mcp) |
+| `store unreachable` | The key store or config manager failed a reachability ping |
+| `gateway not configured` | No gateway instance is wired to the server yet |
+
+Every server's state is reported under `mcp_servers` whether or not it's `required`, so MCP health is observable without gating readiness on an optional server. The failure detail behind a bad MCP server (a URL, an auth header, a subprocess command line) is deliberately not in this unauthenticated body — it's logged server-side.
+
+### `/health`: deep diagnostic
+
+`/health` lists every **registered** provider (not every configured target) with its circuit state and model count:
 
 ```json
 {
   "status": "ok",
-  "providers": {
-    "openai": { "healthy": true, "latency_ms": 245 },
-    "anthropic": { "healthy": true, "latency_ms": 312 },
-    "groq": { "healthy": false, "error": "connection refused" }
-  }
+  "providers": [
+    { "name": "openai", "status": "available", "circuit": "closed", "models": 42 },
+    { "name": "anthropic", "status": "available", "circuit": "open", "models": 18 }
+  ]
 }
 ```
 
-Returns `200 OK` if at least one provider is healthy, `503 Service Unavailable` if all providers are down.
+`status` is `"ok"` whenever at least one provider is registered, and `"no_providers"` (`503`) only when none are — it does not track whether any target is actually routable (that's what `/readyz` is for) and it performs no live upstream probe. `circuit` reports `"closed"` both for a genuinely closed breaker and for a provider with no breaker configured at all — use `gateway_circuit_breaker_state` to tell those apart, since a series exists only where a breaker is configured. The dashboard's Providers page polls this endpoint.
 
-For monitoring in production, see [Monitoring](/operations/monitoring).
+For orchestrator wiring (Kubernetes probes, load-balancer health checks) and the request-log stats behind the dashboard's Analytics page, see [Monitoring](/operations/monitoring) and [Request logging](/operations/request-logging).
+
+## Related
+
+- [The embedded dashboard](/guides/dashboard) — the built-in Tracing and Analytics pages, and `make up-fullstack` for a local Jaeger + Prometheus + Grafana stack
+- [Authentication](/guides/auth) — scopes, `MASTER_KEY`, and issuing a `read_only` scrape key
+- [Monitoring](/operations/monitoring) — orchestrator probe wiring for `/livez` and `/readyz`
+- [Request logging](/operations/request-logging) — the persisted `duration_ms` / `ttft_ms` / `cost_usd` request-log columns and `GET /admin/logs/stats`
+- [MCP integration](/guides/mcp) — `mcp_servers[].required` and readiness gating

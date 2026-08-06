@@ -4,13 +4,22 @@
  * work well for content-centric websites.
  */
 
-/* Roobert is a single variable font (one file, full weight axis). Declaring it
-   once with the real 100–900 range lets the browser reach true 400/500/600/700
-   instead of synthesizing fake bold from a 400-only face. */
+/* Inter + JetBrains Mono, self-hosted as single latin variable faces (one file
+   each, full weight axis). The real 100–900 range lets the browser reach true
+   400/500/600/700 rather than synthesizing bold from a single weight. This is
+   the standard enterprise devtools-docs pairing (Inter for prose/UI, JetBrains
+   Mono for code); both are OFL-1.1 licensed and vendored under /fonts/. */
 @font-face {
-  font-family: 'Roobert';
-  src: url('/fonts/roobert-proportional-vf.woff2') format('woff2-variations');
+  font-family: 'Inter Variable';
+  src: url('/fonts/inter-variable-latin.woff2') format('woff2-variations');
   font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono Variable';
+  src: url('/fonts/jetbrains-mono-variable-latin.woff2') format('woff2-variations');
+  font-weight: 100 800;
   font-style: normal;
   font-display: swap;
 }
@@ -24,8 +33,13 @@
   --ifm-color-primary-light: #118179;
   --ifm-color-primary-lighter: #128780;
   --ifm-color-primary-lightest: #16a394;
-  --ifm-font-family-base: Roobert, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  --ifm-font-family-heading: Roobert, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --ifm-font-family-base: 'Inter Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --ifm-font-family-heading: 'Inter Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --ifm-font-family-monospace: 'JetBrains Mono Variable', ui-monospace, 'SFMono-Regular', 'Cascadia Code', Menlo, monospace;
+  /* Inter reads best at docs sizes with a hair of negative tracking and its
+     disambiguated l/I/1 glyphs (cv05/cv08) turned on in code-heavy prose. */
+  font-feature-settings: 'cv05', 'cv08';
+  letter-spacing: -0.005em;
   --ifm-background-color: #ffffff;
   --ifm-background-surface-color: #ffffff;
   --ifm-font-color-base: #101828;
@@ -386,19 +400,26 @@ body {
 .menu__link[href*='/integrations/deployment/']          { --ferro-icon: url('/assets/icons/server.svg'); }
 
 /* Guides */
-.menu__link[href$='/guides/providers/']                 { --ferro-icon: url('/assets/icons/plug.svg'); }
-.menu__link[href$='/guides/providers-config/']          { --ferro-icon: url('/assets/icons/sliders.svg'); }
-.menu__link[href$='/guides/routing-policies/']          { --ferro-icon: url('/assets/icons/refresh.svg'); }
+.menu__link[href$='/providers/']                 { --ferro-icon: url('/assets/icons/plug.svg'); }
+.menu__link[href$='/providers/configuration/']          { --ferro-icon: url('/assets/icons/sliders.svg'); }
+.menu__link[href$='/routing/']          { --ferro-icon: url('/assets/icons/refresh.svg'); }
 .menu__link[href$='/guides/use-cases/']                 { --ferro-icon: url('/assets/icons/book.svg'); }
-.menu__link[href$='/guides/plugins/']                   { --ferro-icon: url('/assets/icons/sparkle.svg'); }
+.menu__link[href$='/plugins/']                   { --ferro-icon: url('/assets/icons/sparkle.svg'); }
 .menu__link[href$='/guides/mcp/']                       { --ferro-icon: url('/assets/icons/code.svg'); }
 .menu__link[href$='/guides/rate-limiting/']             { --ferro-icon: url('/assets/icons/gauge.svg'); }
 
 /* Auth & Security */
 .menu__link[href$='/guides/auth/']                      { --ferro-icon: url('/assets/icons/lock.svg'); }
-.menu__link[href$='/guides/admin-auth/']                { --ferro-icon: url('/assets/icons/lock.svg'); }
-.menu__link[href$='/guides/workspace-sign-in-domains/'] { --ferro-icon: url('/assets/icons/lock.svg'); }
 .menu__link[href$='/security/data-handling/']           { --ferro-icon: url('/assets/icons/shield.svg'); }
+
+/* New IA sections (v1.4 overhaul): plugins / routing / providers */
+.menu__link[href$='/plugins/']                          { --ferro-icon: url('/assets/icons/sparkle.svg'); }
+.menu__link[href*='/plugins/']                          { --ferro-icon: url('/assets/icons/sparkle.svg'); }
+.menu__link[href$='/routing/']                          { --ferro-icon: url('/assets/icons/refresh.svg'); }
+.menu__link[href*='/routing/']                          { --ferro-icon: url('/assets/icons/refresh.svg'); }
+.menu__link[href$='/providers/']                        { --ferro-icon: url('/assets/icons/plug.svg'); }
+.menu__link[href$='/providers/configuration/']          { --ferro-icon: url('/assets/icons/sliders.svg'); }
+.menu__link[href$='/guides/dashboard/']                 { --ferro-icon: url('/assets/icons/chart.svg'); }
 
 /* Observability */
 .menu__link[href$='/guides/observability/']             { --ferro-icon: url('/assets/icons/chart.svg'); }
@@ -422,7 +443,7 @@ body {
 
 /* Phase 2/3 pages */
 .menu__link[href$='/integrations/sdk/typescript/']      { --ferro-icon: url('/assets/icons/code.svg'); }
-.menu__link[href$='/guides/provider-capabilities/']     { --ferro-icon: url('/assets/icons/layers.svg'); }
+.menu__link[href$='/providers/']     { --ferro-icon: url('/assets/icons/layers.svg'); }
 .menu__link[href$='/guides/virtual-keys/']              { --ferro-icon: url('/assets/icons/lock.svg'); }
 .menu__link[href$='/guides/cost-tracking/']             { --ferro-icon: url('/assets/icons/chart.svg'); }
 .menu__link[href$='/operations/cli-reference/']         { --ferro-icon: url('/assets/icons/code.svg'); }
@@ -478,18 +499,6 @@ body {
   background: rgba(255, 255, 255, 0.03);
 }
 
-/* ── Landing page: make the main wrapper full-width ──────────── */
-.main-wrapper:has(.hero) {
-  padding-top: 0;
-  max-width: 100%;
-}
-/* Ensure landing page content sits flush under nav */
-main:has(.hero),
-main:has(.hero) > .container {
-  padding: 0;
-  max-width: 100%;
-}
-
 /* ── Admonition improvements ─────────────────────────────────── */
 .theme-admonition {
   border-radius: 10px;
@@ -513,6 +522,55 @@ main:has(.hero) > .container {
   font-size: 0.72rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+
+/* ── Provider logo grid (providers page) ─────────────────────────
+   Colored brand SVGs vendored under /img/providers/. The card keeps a neutral
+   surface so both color and monochrome marks read cleanly in either theme. */
+.providerGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.75rem;
+  margin: 1.5rem 0;
+}
+.providerCard {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--ifm-toc-border-color);
+  border-radius: 10px;
+  background: var(--ifm-background-surface-color);
+  color: var(--ifm-font-color-base);
+  text-decoration: none;
+  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+}
+.providerCard:hover {
+  border-color: var(--ifm-color-primary);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.07);
+  text-decoration: none;
+}
+.providerCard img {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  object-fit: contain;
+}
+/* Monochrome marks ship as currentColor fills — keep them legible on dark. */
+[data-theme='dark'] .providerCard img[src$='openai.svg'],
+[data-theme='dark'] .providerCard img[src$='anthropic.svg'],
+[data-theme='dark'] .providerCard img[src$='xai.svg'],
+[data-theme='dark'] .providerCard img[src$='groq.svg'],
+[data-theme='dark'] .providerCard img[src$='ollama.svg'],
+[data-theme='dark'] .providerCard img[src$='replicate.svg'],
+[data-theme='dark'] .providerCard img[src$='moonshot.svg'] {
+  filter: invert(1) brightness(1.6);
+}
+.providerCardName {
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.2;
 }
 
 /* ── Reduced motion ────────────────────────────────────────────── */

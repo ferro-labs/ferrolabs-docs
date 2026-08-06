@@ -1,28 +1,53 @@
 ---
 title: Overview
-description: Learn what the Ferro Labs AI Gateway does, when to use it, and how it fits into your AI infrastructure stack as a single OpenAI-compatible control plane for all LLM traffic.
-keywords: [AI gateway overview, LLM proxy introduction, OpenAI compatible gateway, AI routing layer, AI control plane, multi-provider LLM]
+description: "What the Ferro Labs AI Gateway does: a single OpenAI-compatible endpoint for 30 providers, with routing, plugins, an embedded dashboard, and an Admin API."
+keywords: [AI gateway overview, LLM proxy introduction, OpenAI compatible gateway, AI routing layer, AI control plane, multi-provider LLM, embedded dashboard]
 ---
 
-The AI Gateway sits between your applications and upstream model providers. It exposes a single OpenAI compatible API and handles routing, authentication, observability, and resiliency in one place.
+The AI Gateway is a single Go binary that sits between your applications and upstream model providers. It exposes one OpenAI-compatible API for chat, streaming, embeddings, and images, and handles routing, authentication, plugins, and observability in one place — including a built-in operations dashboard, so there's nothing else to deploy to see what it's doing.
 
-For a deeper technical view, start with [Architecture](/getting-started/architecture) and [Request lifecycle](/getting-started/request-lifecycle).
+For a deeper technical view, continue to [Architecture](/getting-started/architecture) and [Request lifecycle](/getting-started/request-lifecycle).
 
 ## When to use it
 
-- You need multiple providers with a consistent interface.
-- You want failover and load balancing without rewriting app code.
-- You want centralized logs, metrics, and request tracing.
+- You call more than one LLM provider and want a single OpenAI-compatible endpoint instead of a client integration per vendor.
+- You want failover, load balancing, or cost-aware routing configured in YAML — not rewritten into every service that calls a model.
+- You need centralized auth, per-key budgets, and rate limiting in front of every provider, with a scoped Admin API to issue and revoke keys.
+- You want one place to see what every request cost, how long it took, and which provider served it — the embedded dashboard, Prometheus metrics, or OpenTelemetry traces, without standing up a separate service.
+- You're wiring MCP tool servers into an agentic loop and want the same guardrails and budget checks enforced on every turn, not just the first.
+
+It matters less if you call exactly one provider directly and have no near-term plan for routing, guardrails, or centralized observability.
+
+## Core capabilities
+
+| Capability | What it gives you | Learn more |
+|:---|:---|:---|
+| Routing | 8 strategies (single, fallback, load balance, least latency, cost-optimized, content-based, A/B test, conditional). `targets` is an allowlist — a provider you've configured only routes traffic if it's listed there. | [Routing](/routing) |
+| Providers | 30 providers and 2,500+ models behind one API, with a capability matrix for which OpenAI parameters each one supports. | [Providers](/providers) |
+| Plugins & guardrails | 6 built-in plugins — word filter, max-token, response cache, rate limit, budget, request logger — running at `before_request`, `after_request`, and `on_error` stages. | [Plugins](/plugins) |
+| Admin API & key management | Scoped API keys (`read_only` / `admin`), dashboard sessions, an audit trail, and config history with rollback. | [Admin API](/api-reference/admin) |
+| Embedded dashboard | An operations console compiled into the binary and served from the gateway's own root — no separate image or origin to deploy. | [Dashboard guide](/guides/dashboard) |
+| Observability | OpenTelemetry tracing, Prometheus metrics, and request logs carrying `duration_ms`, `ttft_ms`, and `cost_usd`. | [Monitoring](/operations/monitoring) |
+| MCP | Connects to MCP tool servers over stdio or Streamable HTTP and drives the agentic `tool_calls` loop itself. | [MCP guide](/guides/mcp) |
 
 ## How it works
 
-1. Your app sends OpenAI format requests to the gateway.
-2. The gateway applies routing, auth, and policy checks.
-3. The gateway forwards traffic to the selected provider.
-4. Responses and metrics are recorded and returned to your app.
+1. Your app sends an OpenAI-format request to the gateway. `/v1/*` requires a bearer token unless you've explicitly disabled it.
+2. Guardrail, auth, and other `before_request` plugins run, then the routing strategy picks a target order.
+3. The gateway calls the selected provider, retrying and failing over to the next target per your configuration.
+4. `after_request` plugins run, the response is returned to your app, and the request is recorded to metrics, traces, and the request log.
+
+## Health and readiness
+
+The gateway exposes three endpoints for orchestrators and monitoring, each answering a different question:
+
+- **`/livez`** — is the process alive.
+- **`/readyz`** — can the gateway actually route traffic; it returns `503` with reason `no routable targets` when none of your configured targets can serve a request.
+- **`/health`** — a deeper diagnostic with per-provider status and circuit-breaker state.
 
 ## Learn by depth
 
-- **Architecture**: Understand components and system boundaries.
-- **Request lifecycle**: Follow each processing stage and fallback path.
-- **Guides**: Configure provider auth, routing policies, and controls.
+- **[Architecture](/getting-started/architecture)** — components, the embedded dashboard, and system boundaries.
+- **[Request lifecycle](/getting-started/request-lifecycle)** — each processing stage and the fallback path.
+- **[Providers](/providers)**, **[Routing](/routing)**, **[Plugins](/plugins)** — configure what the gateway routes to and how.
+- **[Guides](/guides/dashboard)** — the dashboard, MCP, auth, and other operational tasks.

@@ -1,9 +1,22 @@
-# Prevent Cloudflare Pages from redirecting canonical URLs
-# and ensure the Algolia crawler sees consistent URLs.
+# Cloudflare Pages headers.
 
+# ── Canonical domain: baseline security headers for an enterprise docs site ──
 https://docs.ferrolabs.ai/*
   X-Robots-Tag: index, follow
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: geolocation=(), microphone=(), camera=()
+  Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
 
-# Block the .pages.dev subdomain from being indexed (canonical is the custom domain)
+# ── Immutable, content-hashed build assets: cache hard ──
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Self-hosted variable fonts are byte-stable at a fixed filename — cache for a
+# year so repeat visits skip the request entirely.
+/fonts/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# ── Block the .pages.dev preview subdomain from being indexed ──
 https://ferrodocs.pages.dev/*
   X-Robots-Tag: noindex

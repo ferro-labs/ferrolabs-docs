@@ -1,0 +1,82 @@
+---
+title: Budget Plugin
+description: Reference for the budget built-in plugin — per-API-key USD spend caps, 402 insufficient_quota on exhaustion, operator-set token rates, and config keys.
+keywords: [budget plugin, AI gateway spend limit, insufficient_quota, 402, per-key budget, cost cap, LLM spend limit, token pricing]
+---
+
+The `budget` plugin enforces a per-API-key USD spend cap using in-memory accumulation. It runs at both `before_request` (check accumulated spend against the limit) and `after_request` (price the completed request from token usage and add it to the store).
+
+## Facts
+
+| | |
+|---|---|
+| Stages | `before_request` **and** `after_request` — multi-stage, byte-identical config required at both |
+| Reported type | `ratelimit` (`plugin.TypeRateLimit`) |
+| Failure policy | Fails **closed** (a plugin error returns `500`) |
+| Denial status | **402 `insufficient_quota`** — not 429. Decided by plugin name in `internal/apierror`, checked *before* the generic `ratelimit` → 429 branch, regardless of the reported type |
+| Cap type | **Soft** cap, no reservation — concurrent in-flight requests for the same key can collectively overshoot |
+| Agentic loops | Re-checked on every MCP tool-loop turn (`RunBeforeLoopTurn`) — can stop an overspending loop mid-request |
+| Pricing source | The plugin's **own configured rates** (`input_per_m_tokens` / `output_per_m_tokens` / cache rates) — **not** the model catalog. See [Gotchas](#gotchas) |
+| External dependencies | None — in-memory (`sync.Map` of per-store spend maps), per-process. Spend does not survive a restart |
+
+## Config keys
+
+| Key | Type | Default | Required | Description |
+|---|---|---|---|---|
+| `store_id` | string | `"default"` | No | Shared spend-store key. Instances with the same `store_id` share one set of counters — how the `before_request` and `after_request` entries stay in sync. |
+| `spend_limit_usd` | float `>= 0` | `0` (unlimited) | No | Max cumulative USD per API key. `0` disables the check. Setting it `> 0` while every rate below is `0` is a **load error** — cost would always compute to `0` and the cap could never be enforced. |
+| `input_per_m_tokens` | float | `0` | No | USD per 1M prompt tokens. |
+| `output_per_m_tokens` | float | `0` | No | USD per 1M completion tokens. `ReasoningTokens` are a subset of `CompletionTokens` — already covered, never billed again. |
+| `cache_read_per_m_tokens` | float `>= 0` (pointer — unset is distinct from `0`) | unset | No | USD per 1M cached prompt tokens. **Unset ≠ `0`**: unset bills the whole prompt (including the cached subset) at `input_per_m_tokens`; `0.0` makes cached tokens free. When set, the cached subset comes off the input-rate count so it is billed once, not twice. |
+| `cache_write_per_m_tokens` | float `>= 0` | unset (free) | No | USD per 1M cache-write tokens. `CacheWriteTokens` sit outside `PromptTokens` and bill only when this is set. |
+| `max_keys` | int `>= 0` | `10000` | No | Max API keys tracked in memory per store. `0` = unlimited. At the cap, the **lowest-spend** key is evicted to make room and restarts at `$0` — under churn above `max_keys` distinct keys, a key's cap can be silently reset. |
+
+## Minimal config
+
+Both stage entries must carry byte-identical `config` — the gateway resolves them to one shared spend store by `name` + JSON-encoded config, and refuses to start if the two disagree.
+
+```yaml
+plugins:
+  - name: budget
+    type: guardrail
+    stage: before_request
+    enabled: true
+    config:
+      store_id: default
+      spend_limit_usd: 10.0
+      input_per_m_tokens: 3.0
+      output_per_m_tokens: 15.0
+      max_keys: 10000
+
+  - name: budget
+    type: guardrail
+    stage: after_request
+    enabled: true
+    config:
+      store_id: default
+      spend_limit_usd: 10.0
+      input_per_m_tokens: 3.0
+      output_per_m_tokens: 15.0
+      max_keys: 10000
+```
+
+## Gotchas
+
+- **402, not 429, on exhaustion.** Waiting does not restore a spend cap — only cost roll-off (there is none, in-memory spend never decays) or an explicit reset clears it. A `429` is retryable in every OpenAI SDK's default policy and would send a client into a backoff schedule that re-asks the same unanswerable question, roughly once a second, forever. `402 insufficient_quota` carries no `Retry-After` and is outside every SDK's retry set, so the first refusal is the last request the SDK makes on its own.
+- **Soft cap — no reservation.** The `before_request` check is read-only: it reads already-committed spend, places no hold, and lets the request proceed. A bounded number of concurrent requests for the same key can all pass the check simultaneously and collectively push spend past the limit once each completes. The overshoot is bounded by in-flight-request-count × per-request cost, not unbounded. A hard cap (pre-authorization/reservation) is deliberately out of scope: a reservation that leaks on every error, cancellation, circuit-trip, or rejection would permanently pin a key at its cap.
+- **Prices from operator-set rates, not the model catalog.** Unlike the cost figures shown elsewhere in the gateway (the `ferro.cost.usd` trace attribute, catalog-based cost visibility — see [Cost tracking](/guides/cost-tracking)), the budget plugin has no catalog to read from: it multiplies token counts by whatever `input_per_m_tokens` / `output_per_m_tokens` / cache rates you configure. If those rates drift from your real per-model pricing, the spend this plugin tracks drifts from your real bill.
+- **Cache tokens: unset ≠ zero.** Leaving `cache_read_per_m_tokens` unset bills the *entire* prompt — cached subset included — at the input rate (a visible over-report beats a silent under-report of an unpriced dimension). Set it to `0.0` explicitly to make cached tokens free. When set to any value, `PromptTokens` (which is inclusive of `CacheReadTokens`) has the cached subset subtracted before the input rate applies, so cached tokens are never billed twice. `CacheWriteTokens` are outside `PromptTokens` entirely and cost nothing unless `cache_write_per_m_tokens` is set.
+- **Two rates only — other billing dimensions accrue $0.** Only prompt and completion (plus the two optional cache rates) are priced. Most image providers report no token usage at all, so image-only traffic never touches a budget (only token-billed models like the `gpt-image` family accrue anything). Audio input (per-minute) and audio output (per-character) are not represented either — the shortfall is always an under-report, never an over-report.
+- **Per-turn enforcement on agentic loops.** Inside an MCP tool loop, the gateway re-runs the `before_request` check on every turn and adds the request's own running spend (`pctx.Measurements.CostUSD`, when `HasCost` is set) to what the store already has on record. Without that term, a key sitting at 99% of its cap on turn one would get an entire loop regardless of how many turns it ran or how large the context grew, because the store itself is only written once, after the whole request completes. This is the one place a single request can close its own cap mid-flight.
+- **No API key, no tracking.** The key is read from `Metadata["api_key"]` (the opaque credential id). A request with no key in metadata — e.g. running with `ALLOW_UNAUTHENTICATED_PROXY=true` — skips budget tracking entirely: it is neither rejected nor recorded against any key.
+- **A cache hit records nothing.** `after_request` is skipped when `SkipProvider` is set (the response came from `response-cache`, not a provider) — there is no cost to record for a call that never left the process. This is also why the same prompt served from cache a hundred times does not consume a hundred times its cost from the budget.
+- **In-memory only.** Spend does not survive a process restart, and a store is per-process — a multi-replica deployment gets independent counters per instance, not one shared budget. `ResetStore` / `ResetStoreKey` (Go API, not an admin endpoint) exist for housekeeping, e.g. clearing spend on key rotation.
+- **`ferrogw validate` catches the same errors `Init` would.** `spend_limit_usd` set with every rate at `0`, or a negative `spend_limit_usd`/cache rate/`max_keys`, fails validation and startup — it is not a silently-inert config.
+
+## Related
+
+- [Cost tracking](/guides/cost-tracking)
+- [Plugins overview](/plugins)
+- [Response cache plugin](/plugins/response-cache)
+- [Rate limit plugin](/plugins/rate-limit)
+- [MCP](/guides/mcp)

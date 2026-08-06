@@ -1,10 +1,10 @@
 ---
 title: Common Use Cases
-description: "Recipe-style AI Gateway configurations for failover, cost optimization, A/B testing, content routing, rate-limited free tiers, and agentic MCP pipelines."
-keywords: [AI gateway use cases, LLM failover config, AI cost optimization, A/B test LLM, content-based routing AI, MCP agentic pipeline]
+description: "Copy-paste AI Gateway config recipes: failover, cost-optimized and A/B routing, budget caps, self-hosted models, batch jobs, native audio, and MCP agents."
+keywords: [AI gateway use cases, LLM failover config, AI cost optimization, A/B test LLM, content-based routing AI, self-hosted LLM routing, batch API gateway, MCP agentic pipeline]
 ---
 
-Complete, copy-pasteable configurations for the most common deployment patterns. Each recipe includes a full `config.yaml` and a `curl` command you can run immediately.
+Complete, copy-pasteable configurations for the most common deployment patterns. Each recipe includes a full `config.yaml` and a `curl` command you can run immediately. Auth is on by default, so every request below carries an `Authorization: Bearer` header — see [Authentication](/guides/auth) for issuing API keys.
 
 ## 1. Multi-provider failover for a production chatbot
 
@@ -55,19 +55,20 @@ curl -s http://localhost:8080/v1/chat/completions \
   }'
 ```
 
-If OpenAI returns a `429` or `5xx`, the gateway automatically retries up to 3 times with exponential backoff, then falls through to Anthropic (translating the request format on the fly), and finally to Gemini. The client sees a single response with no indication of the failover.
+If OpenAI returns a `429` or `5xx`, the gateway automatically retries up to 3 times with exponential backoff, then falls through to Anthropic (translating the request format on the fly), and finally to Gemini. `fallback` is the only mode where the pipeline advances to the next target on failure; `retry` on each target (honoured under every mode) is how many times that one target is re-asked first. The client sees a single response with no indication of the failover.
 
 ---
 
 ## 2. Cost optimization: route to the cheapest compatible model
 
-The `cost-optimized` strategy uses the built-in model catalog (2,500+ entries with pricing data) to estimate the input token cost for each target and routes to the cheapest one.
+The `cost-optimized` strategy prices `<virtual_key>/<model>` for every compatible target through the built-in model catalog (2,500+ entries with pricing data) and routes to the cheapest one.
 
 Register each provider by setting its API key environment variable (`TOGETHER_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`), then reference them by `virtual_key`.
 
 ```yaml title="config.yaml"
 strategy:
   mode: cost-optimized
+  unpriced_strategy: fallback
 
 targets:
   - virtual_key: together
@@ -88,13 +89,15 @@ curl -s http://localhost:8080/v1/chat/completions \
   }'
 ```
 
-The gateway estimates the input token cost across all targets with a compatible model, then routes the request to the cheapest provider. If cost data is unavailable for a target, it falls back to the first compatible target in the list. Check the `x-ferro-target` response header to see which provider was selected.
+The gateway estimates prompt cost at roughly 4 characters/token — a routing heuristic, not a billing figure — across every target that serves the requested model, then routes to the cheapest priced one. `unpriced_strategy` decides what happens when a compatible target isn't in the catalog: `fallback` (shown above, and the default) prefers priced candidates and falls back to the first compatible unpriced one; `skip` refuses to route to an unpriced target at all (erroring if none is priced); `allow` treats an unpriced target as free, so it wins every draw.
+
+There is no response header naming which provider answered. To see it, add the `request-logger` plugin with `persist: true` (see [Configuration](/getting-started/configuration) for the request-log store env vars) and check the `provider` column, either via `GET /admin/logs` or directly against the `request_logs` table.
 
 ---
 
 ## 3. A/B test: compare GPT-4o vs Claude on 20% of traffic
 
-Split live traffic between two providers. Every request is tagged with a variant label so you can aggregate quality metrics downstream.
+Split live traffic between two providers by weight. Every request draws one variant — this is a real split, not shadow traffic — so quality and cost differences show up directly in your request logs.
 
 Register `openai` and `anthropic` by setting `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`, then reference them by `virtual_key`.
 
@@ -121,12 +124,23 @@ plugins:
     config:
       level: info
       persist: true
-      backend: postgres
-      dsn: postgres://ferro:ferro_secret@postgres:5432/ferro_logs?sslmode=disable
+  - name: request-logger
+    type: logging
+    stage: after_request
+    enabled: true
+    config:
+      level: info
+      persist: true
+  - name: request-logger
+    type: logging
+    stage: on_error
+    enabled: true
+    config:
+      level: info
+      persist: true
 ```
 
 ```bash
-# Send a request and check which variant was selected
 curl -s http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_KEY" \
@@ -138,18 +152,22 @@ curl -s http://localhost:8080/v1/chat/completions \
   }'
 ```
 
-The variant `label` (`control` or `challenger`) is currently visible only in the gateway's DEBUG logs — it is not emitted to events or stored as a queryable log column. The request logger still persists latency and cost for every request, which you can aggregate in Postgres:
+The `label` field (`control`/`challenger`) is a config-time identifier — it's used in validation error messages and to line up `target_key` with a variant — but it is not currently written to logs, metrics, or trace spans. (`ferro.routing.ab_variant_label` exists as a planned tracing attribute but isn't wired into emitted spans as of v1.4.1.) Because each variant here maps to a distinct provider, group by the `provider` column that `request-logger` persists to recover the split:
 
 ```sql
 SELECT
-  COUNT(*)            AS requests,
-  AVG(latency_ms)     AS avg_latency,
-  AVG(total_cost_usd) AS avg_cost
+  provider,
+  COUNT(*)          AS requests,
+  AVG(duration_ms)  AS avg_duration_ms,
+  AVG(ttft_ms)      AS avg_ttft_ms,
+  AVG(cost_usd)     AS avg_cost_usd
 FROM request_logs
-WHERE created_at > NOW() - INTERVAL '24 hours';
+WHERE stage = 'after_request'
+  AND created_at > NOW() - INTERVAL '24 hours'
+GROUP BY provider;
 ```
 
-To attribute results per variant, read the variant `label` from the gateway's DEBUG logs.
+`cost_usd` is nullable — it's null when the catalog doesn't price the model, not zero — so `AVG(cost_usd)` silently drops those rows from the average rather than understating it. If your variants ever target the same provider (e.g. two models on the same backend), group by `model` instead, since `provider` alone won't distinguish them.
 
 ---
 
@@ -200,15 +218,19 @@ curl -s http://localhost:8080/v1/chat/completions \
   }'
 ```
 
-Content conditions are evaluated in order. The first match wins. If no condition matches, the request falls through to the first target in the `targets` list (OpenAI in this example). Regex patterns are compiled at startup; an invalid pattern causes a startup error.
+Only user-role messages are inspected — content conditions are evaluated in order, and the first match wins. If no condition matches, the request goes to the first target in the `targets` list (OpenAI in this example). This is a named mode: once a rule matches, the gateway commits to that target and reports its failure rather than trying another. Regex patterns are Go RE2 syntax, compiled at startup — an invalid pattern causes a startup error.
 
 ---
 
-## 5. Rate-limited free tier: 60 RPM per API key for your SaaS
+## 5. Rate-limited free tier: 60 RPM and a $5 spend cap per API key
 
-Expose the gateway as your SaaS AI endpoint. Each customer gets an API key with 60 requests per minute and a $5 spend cap.
+Expose the gateway as your SaaS AI endpoint. Each customer gets an API key with 60 requests per minute and a $5 cumulative spend cap.
 
 Register `openai` by setting `OPENAI_API_KEY`, then reference it by `virtual_key`.
+
+:::warning Multi-stage plugins need identical config
+`budget` (like `response-cache` and `request-logger`) runs at two stages, and the gateway resolves both entries to one shared instance by comparing their config as JSON. If the `before_request` and `after_request` blocks don't match byte-for-byte, **the gateway refuses to start**. Copy the block below verbatim and only change `stage`.
+:::
 
 ```yaml title="config.yaml"
 strategy:
@@ -228,7 +250,7 @@ plugins:
       key_rpm: 60
       burst: 10
 
-  # Spend cap: $5 per API key (check before request)
+  # Spend cap: $5 per API key (checked before every request)
   - name: budget
     type: guardrail
     stage: before_request
@@ -240,15 +262,17 @@ plugins:
       output_per_m_tokens: 0.60
       max_keys: 50000
 
-  # Spend cap: record cost after response
+  # Same config, after_request — records cost from the response's token usage
   - name: budget
     type: guardrail
     stage: after_request
     enabled: true
     config:
       store_id: "free-tier"
+      spend_limit_usd: 5.0
       input_per_m_tokens: 0.15
       output_per_m_tokens: 0.60
+      max_keys: 50000
 ```
 
 Normal request (succeeds):
@@ -265,37 +289,222 @@ curl -s http://localhost:8080/v1/chat/completions \
   }'
 ```
 
-When the rate limit is exceeded, the gateway returns a `429`:
+When the rate limit is exceeded, the gateway returns `429`:
 
 ```json
 {
   "error": {
-    "message": "Rate limit exceeded: per-key limit (60 rpm)",
+    "message": "request rejected by rate-limit (before_request): per-key rate limit exceeded",
     "type": "rate_limit_error",
     "code": "rate_limit_exceeded"
   }
 }
 ```
 
-When the spend cap is hit, the gateway returns a `429` with a budget-specific message:
+When the spend cap is hit, the gateway returns **`402 Payment Required`**, not `429` — a cumulative spend cap doesn't clear on a timer the way a rate limit does, so it uses a status no SDK's default retry policy touches:
 
 ```json
 {
   "error": {
-    "message": "Budget exceeded: spend limit of $5.00 USD reached for this API key",
-    "type": "budget_error",
-    "code": "budget_exceeded"
+    "message": "request rejected by budget (before_request): budget exceeded: spent $5.0000 of $5.00 limit",
+    "type": "insufficient_quota",
+    "code": "insufficient_quota"
   }
 }
 ```
 
-Rate checks execute in order: **global, then per-key, then per-user**. The budget plugin checks cumulative spend before forwarding the request and records the cost after the response.
+Checks run in order — global rate limit, then per-key, then per-user — and the first denial wins. `budget` is a soft cap: it has no reservation step, so concurrent in-flight requests on one key can all pass the check and collectively overshoot by up to the in-flight count times one request's cost. Spend is in-memory and does not survive a restart.
 
 ---
 
-## 6. Agentic pipeline with filesystem MCP + Anthropic
+## 6. Self-hosted or preview models with `targets[].models`
 
-Connect a Model Context Protocol (MCP) tool server to the gateway. The gateway runs the full agentic tool-calling loop so your client receives a final text answer without implementing tool-calling logic.
+Route to a model your build's catalog and live discovery don't know about yet: a fine-tune behind your own OpenAI-compatible server, a preview id a provider hasn't published, or a regional deployment name.
+
+Register `openai` normally, then point it at your internal endpoint with `OPENAI_BASE_URL` and declare the extra model id on the target.
+
+```yaml title="config.yaml"
+strategy:
+  mode: single
+
+targets:
+  - virtual_key: openai
+    models:
+      - my-org/llama-3.3-70b-ft-v2
+```
+
+```bash
+curl -s http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_KEY" \
+  -d '{
+    "model": "my-org/llama-3.3-70b-ft-v2",
+    "messages": [
+      {"role": "user", "content": "Draft a release note for v2.4.0."}
+    ]
+  }'
+```
+
+`targets[].models` is purely additive — it never hides what the catalog or provider's own `/models` endpoint already reports, and declaring a model the catalog already knows about is a harmless no-op. Entries must be exact model ids; wildcards are rejected at load, because the routing index is an exact-match map. Declared models are fully routable and appear in `GET /v1/models`. Reach for this whenever a target serves a model no automatic source knows about — including a provider that exposes no `/models` endpoint to enumerate at all.
+
+---
+
+## 7. Batch jobs and file uploads with `batch_target`
+
+`/v1/files*` and `/v1/batches*` carry no `model` field — they reference opaque, provider-scoped ids — so one `batch_target` serves the entire surface as a native pass-through with zero gateway routing state.
+
+```yaml title="config.yaml"
+strategy:
+  mode: single
+
+targets:
+  - virtual_key: openai
+
+batch_target: openai
+```
+
+```bash
+# Upload the batch input file
+curl -s http://localhost:8080/v1/files \
+  -H "Authorization: Bearer $API_KEY" \
+  -F purpose="batch" \
+  -F file="@requests.jsonl"
+
+# Create the batch job (input_file_id from the upload response above)
+curl -s http://localhost:8080/v1/batches \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_KEY" \
+  -d '{
+    "input_file_id": "file-abc123",
+    "endpoint": "/v1/chat/completions",
+    "completion_window": "24h"
+  }'
+```
+
+Omit `batch_target` and both surfaces answer `501` instead of silently guessing a target. The named target's provider must support batch pass-through — currently `openai`, `azure-openai`, `groq`, `novita`, or `qwen` — and `batch_target` must name a target already listed under `targets`.
+
+---
+
+## 8. Stateful conversations with `/v1/responses`
+
+`POST /v1/responses` routes by the body's `model` exactly like chat completions — full plugin pipeline, retry, circuit breaker — and is priced from the response's usage. The stateful id sub-routes (retrieve, delete, cancel, list input items) carry no model, so they pin to a single `responses_target`.
+
+```yaml title="config.yaml"
+strategy:
+  mode: fallback
+
+targets:
+  - virtual_key: openai
+  - virtual_key: azure-openai
+
+responses_target: openai
+```
+
+```bash
+# Create
+curl -s http://localhost:8080/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_KEY" \
+  -d '{
+    "model": "gpt-4o",
+    "input": "Summarize the plot of Dune in two sentences."
+  }'
+
+# Retrieve (uses the id from the create response; served by responses_target)
+curl -s http://localhost:8080/v1/responses/resp_abc123 \
+  -H "Authorization: Bearer $API_KEY"
+```
+
+Omitting `responses_target` leaves `create` fully working — it routes by model like any other surface — while the id sub-routes answer `501`. `responses_target` must name a target already listed under `targets`.
+
+---
+
+## 9. Native audio routing: speech-to-text and text-to-speech
+
+`/v1/audio/transcriptions`, `/v1/audio/translations`, and `/v1/audio/speech` are natively routed through the same targets, plugins, retry, and circuit-breaker pipeline as chat — not proxied pass-through.
+
+```yaml title="config.yaml"
+strategy:
+  mode: fallback
+
+targets:
+  - virtual_key: groq
+    retry:
+      attempts: 2
+      on_status_codes: [429, 502, 503]
+  - virtual_key: openai
+```
+
+Transcription (multipart upload, capped at 25 MiB):
+
+```bash
+curl -s http://localhost:8080/v1/audio/transcriptions \
+  -H "Authorization: Bearer $API_KEY" \
+  -F file="@meeting.mp3" \
+  -F model="whisper-large-v3"
+```
+
+Text-to-speech:
+
+```bash
+curl -s http://localhost:8080/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_KEY" \
+  -d '{
+    "model": "tts-1",
+    "input": "Your order has shipped.",
+    "voice": "alloy"
+  }' \
+  --output speech.mp3
+```
+
+Each target's registered provider must implement the surface you're calling: transcription/translation is served by `azure-openai`, `deepinfra`, `fireworks`, `groq`, `mistral`, `openai`, `sambanova`, and `together`; speech is served by `azure-openai`, `deepinfra`, `groq`, `mistral`, `openai`, and `together`. `fallback` here retries a failed transcription on the next target the same way it would a chat request.
+
+---
+
+## 10. Zero-install agentic MCP over stdio
+
+Launch an MCP tool server directly from the gateway process with a package runner — no separate container, no `url` to stand up. This uses the `command` (stdio) transport instead of the `url` (HTTP) transport.
+
+Register `anthropic` by setting `ANTHROPIC_API_KEY`.
+
+```yaml title="config.yaml"
+strategy:
+  mode: single
+
+targets:
+  - virtual_key: anthropic
+
+mcp_servers:
+  - name: brave-search
+    command: npx
+    args:
+      - -y
+      - "@modelcontextprotocol/server-brave-search"
+    env:
+      BRAVE_API_KEY: "${BRAVE_API_KEY}"
+    max_call_depth: 3
+```
+
+```bash
+curl -s http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_KEY" \
+  -d '{
+    "model": "claude-sonnet-4-6",
+    "messages": [
+      {"role": "user", "content": "What is the latest stable version of PostgreSQL?"}
+    ]
+  }'
+```
+
+`npx -y` fetches the package on first launch and the subprocess runs for the gateway's lifetime. Critically, the subprocess does **not** inherit the gateway's environment — it gets only `PATH`, `HOME`, `LANG`, `TMPDIR`, and whatever you list under `env`, so `OPENAI_API_KEY` and `MASTER_KEY` never reach it. `env` (like `headers` on an HTTP MCP server) is the only credential channel for a stdio server, and `${VAR}` is resolved when the MCP client is constructed — set `BRAVE_API_KEY` in the gateway's own environment before starting it.
+
+---
+
+## 11. Agentic pipeline with an HTTP filesystem MCP server + Anthropic
+
+Connect an MCP tool server over Streamable HTTP. The gateway runs the full agentic tool-calling loop so your client receives a final text answer without implementing tool-calling logic itself.
 
 Register `anthropic` by setting `ANTHROPIC_API_KEY`, then reference it by `virtual_key`.
 
@@ -324,7 +533,7 @@ curl -s http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_KEY" \
   -d '{
-    "model": "claude-sonnet-4-20250514",
+    "model": "claude-sonnet-4-6",
     "messages": [
       {"role": "user", "content": "Read the file /data/config.json and summarize what settings it contains."}
     ]
@@ -333,27 +542,27 @@ curl -s http://localhost:8080/v1/chat/completions \
 
 Behind the scenes the gateway:
 
-1. Injects the available MCP tools (`read_file`, `list_directory`, `search_files`) into the chat completion request.
+1. Injects the available MCP tools (`read_file`, `list_directory`, `search_files`) into the chat completion request — only when the request carries no `tools` of its own.
 2. Receives a `tool_calls` response from Claude requesting `read_file` with path `/data/config.json`.
 3. Executes the tool call against the MCP filesystem server.
-4. Sends the tool result back to Claude.
+4. Re-runs `before_request` guardrails, rate-limit, and budget checks for this loop turn, then sends the tool result back to Claude.
 5. Returns Claude's final text summary to the client.
 
-The entire agentic loop is transparent. The client sends a standard chat completion request and receives a standard text response.
+The entire agentic loop is transparent to the caller — a standard chat completion request in, a standard text response out.
 
 To run the MCP filesystem server alongside the gateway in Docker Compose:
 
 ```yaml title="docker-compose.yml"
 services:
   gateway:
-    image: ghcr.io/ferrolabs/ferrogw:latest
+    image: ghcr.io/ferro-labs/ai-gateway:latest
     ports:
       - "8080:8080"
     environment:
-      GATEWAY_CONFIG: /etc/ferro/config.yaml
+      GATEWAY_CONFIG: /etc/ferrogw/config.yaml
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
     volumes:
-      - ./config.yaml:/etc/ferro/config.yaml:ro
+      - ./config.yaml:/etc/ferrogw/config.yaml:ro
     depends_on:
       - mcp-filesystem
 
@@ -369,10 +578,57 @@ services:
 
 ---
 
+## 12. Production hardening
+
+`GATEWAY_ENV=production` turns on startup safety checks that are off by default in development.
+
+```bash title="Environment"
+export GATEWAY_ENV=production
+export MASTER_KEY=fgw_your-master-key     # generated by `ferrogw init`; the bootstrap admin credential
+export CORS_ORIGINS=https://app.example.com,https://admin.example.com
+export TRUSTED_PROXIES=10.0.0.0/8         # your load balancer's subnet
+export API_KEY_STORE_BACKEND=postgres
+export API_KEY_STORE_DSN=postgres://ferro:ferro_secret@postgres:5432/ferro_admin?sslmode=disable
+```
+
+```yaml title="docker-compose.yml"
+services:
+  gateway:
+    image: ghcr.io/ferro-labs/ai-gateway:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      GATEWAY_ENV: production
+      MASTER_KEY: ${MASTER_KEY}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES}
+      API_KEY_STORE_BACKEND: ${API_KEY_STORE_BACKEND}
+      API_KEY_STORE_DSN: ${API_KEY_STORE_DSN}
+      GATEWAY_CONFIG: /etc/ferrogw/config.yaml
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    volumes:
+      - ./config.yaml:/etc/ferrogw/config.yaml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/readyz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+```
+
+```bash
+curl -s http://localhost:8080/readyz
+```
+
+`GATEWAY_ENV=production` **refuses to start** if `ALLOW_UNAUTHENTICATED_PROXY=true` or `CORS_ORIGINS` contains a literal `*` — `CORS_ORIGINS` is always matched literally against the request's `Origin` header, never as a wildcard pattern, so a bare `*` would allow no cross-origin request at all rather than every one. It only warns (doesn't refuse) on `RATE_LIMIT_RPS=0`, `ENABLE_PPROF=true`, and the default in-memory key store, since those are legitimate for some deployments. `MASTER_KEY` (generated by `ferrogw init`, always prefixed `fgw_`) is the bootstrap/break-glass admin credential — it has no key-store row and can't be revoked without a restart, so issue day-to-day operator keys via `POST /admin/keys` and reserve `MASTER_KEY` for emergencies. `TRUSTED_PROXIES` lists the CIDRs whose `X-Forwarded-For`/`X-Real-IP` are honored for client-IP resolution (used by the per-IP rate limiter); it defaults to loopback only, so behind a real load balancer every request looks like it came from the LB until this is set. Health-check `/readyz`, not `/health` — `/health` returns `200` even when every configured target is unroutable, which is exactly the outage a health check should catch.
+
+---
+
 ## Related pages
 
-- [Routing policies](/guides/routing-policies)
-- [Plugins](/guides/plugins)
+- [Routing strategies](/routing)
+- [Plugins](/plugins)
 - [MCP integration](/guides/mcp)
+- [Authentication](/guides/auth)
 - [Benchmarks](/benchmarks)
 - [Configuration](/getting-started/configuration)
