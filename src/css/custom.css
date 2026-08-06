@@ -52,9 +52,9 @@
      length on very wide viewports. */
   --ferro-prose-measure: 54rem;
   --ifm-heading-line-height: 1.25;
-  --ifm-h1-font-size: 3rem;
-  --ifm-h2-font-size: 2.1rem;
-  --ifm-h3-font-size: 1.55rem;
+  --ifm-h1-font-size: 2.25rem;
+  --ifm-h2-font-size: 1.75rem;
+  --ifm-h3-font-size: 1.4rem;
   --ifm-code-font-size: 95%;
   --ifm-navbar-height: 4.5rem;
   --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
