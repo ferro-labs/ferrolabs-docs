@@ -1,0 +1,80 @@
+---
+title: Word Filter plugin
+description: Reference for the word-filter guardrail plugin — substring blocklist matching on request and response text, config keys, YAML example, and edge cases.
+keywords: [word-filter, content guardrail, blocklist, substring match, AI gateway plugin, before_request, after_request]
+---
+
+`word-filter` is a guardrail plugin that rejects a request whose message text contains a configured entry as a **substring** — deliberately not word-boundary-aware. Listed only at `before_request` it screens the incoming request; listed at `after_request` too, it also screens the response's choices.
+
+## Facts
+
+| | |
+|---|---|
+| Stage(s) | `before_request` (screens request messages); optionally also `after_request` (screens response choices) |
+| Reported type | `guardrail` ([`plugin.TypeGuardrail`](/plugins)) |
+| Failure policy | Fails **closed** — a plugin error (not a rejection) aborts the request as a `500` |
+| Multi-stage | No — a single `before_request` entry is a complete, valid configuration. Add an `after_request` entry only to also screen responses; the two are independent, not a matched pair like `response-cache`/`budget` |
+| External dependencies | None — in-memory only |
+| `ValidateConfig` | Not implemented — `ferrogw validate` does not catch a malformed config block for this plugin |
+
+On `before_request` a rejection reaches the caller as `400 invalid_request_error` (`request_rejected`). On `after_request` a rejection reaches the caller as `502 upstream_error` (`response_rejected`) — the stage runs after the provider has already answered, so a match there is reported, not withheld.
+
+## Configuration
+
+| Key | Type | Default | Required | Description |
+|---|---|---|---|---|
+| `blocked_words` | list of strings | `[]` (no-op when empty) | No | Entries matched as substrings against each message's `Content` and every `ContentPart.Text`. Non-string list items are silently dropped. |
+| `case_sensitive` | bool | `false` | No | When `false`, the blocklist is lowercased once at `Init` and content is lowercased per check. |
+
+Unknown keys in the `config` block are silently ignored.
+
+## Minimal config
+
+```yaml
+plugins:
+  - name: word-filter
+    type: guardrail
+    stage: before_request
+    enabled: true
+    config:
+      blocked_words: ["password", "secret"]
+      case_sensitive: false
+```
+
+To also screen the model's response, add a second, independent entry at `after_request`:
+
+```yaml
+plugins:
+  - name: word-filter
+    type: guardrail
+    stage: before_request
+    enabled: true
+    config:
+      blocked_words: ["password", "secret"]
+      case_sensitive: false
+
+  - name: word-filter
+    type: guardrail
+    stage: after_request
+    enabled: true
+    config:
+      blocked_words: ["password", "secret"]
+      case_sensitive: false
+```
+
+## Gotchas
+
+- **Substring, not word-boundary matching.** `"ass"` blocks `"class"`. This is deliberate: a boundary-aware matcher is evaded by punctuation, concatenation, and zero-width characters, and each miss is a prompt that reached the provider. There is no whole-word mode.
+- **Uninspectable content is rejected, not passed through.** An embeddings request whose input arrives as token IDs (rather than text) cannot be screened. Rather than fail open, `word-filter` rejects it at `before_request` with a generic content-policy reason — this only applies when at least one `blocked_words` entry is configured, and only at `before_request` (an unreadable *request* says nothing about what an `after_request` check should do with the *response*, which has already been returned by the provider).
+- **The matched word is never returned to the client** — only logged server-side (`word-filter: blocked request`/`response`, field `matched_word`). The rejection reason sent to the caller is a fixed string (`"request blocked by content policy"` / `"response blocked by content policy"`). This is blocklist-probe protection: an attacker cannot binary-search your blocklist through the API.
+- **Image URLs and data URIs are not screened.** `ContentPart.ImageURL` is deliberately skipped — a base64-encoded image contains any given three-letter word by chance, so treating it as text would produce constant false positives. Screening image content is an OCR problem, not a string-matching one.
+- **Both `Content` and `ContentParts[].Text` are checked.** A message decoded from JSON collapses only `"text"`-typed parts into `Content`; a part of any other type (e.g. a custom `input_text`) leaves no trace there. Both are scanned so neither path is a bypass.
+- **Streaming responses can't be un-served.** On a streaming completion, the `after_request` stage runs only after chunks have already been delivered to the caller — a match is logged, but the content already reached the client. Put the guardrail at `before_request` (screening the prompt) if withholding matters, or avoid streaming for that route.
+- **No `ValidateConfig`.** Unlike `rate-limit`, a malformed `blocked_words` value (e.g. a plain string instead of a list) is silently accepted with an empty effective blocklist — `ferrogw validate` will not flag it.
+- **Plugins are global, not per-route.** There is no per-target or per-route way to scope a blocklist; every request through the gateway is screened by every enabled `word-filter` entry.
+
+## Related
+
+- [Plugins overview](/plugins)
+- [Max token guardrail](/plugins/max-token)
+- [Getting started: configuration](/getting-started/configuration)

@@ -1,29 +1,24 @@
 ---
-title: Introduction
-description: "Ferro Labs AI Gateway is an open-source Go LLM proxy that routes traffic across 30 AI providers and 2,500+ models with sub-millisecond overhead. Drop-in OpenAI-compatible API with 8 routing strategies, 6 built-in plugins, and MCP tool-calling."
-keywords: [AI gateway, open source AI gateway, LLM proxy, OpenAI compatible, Go LLM proxy, self-hosted LLM gateway, AI middleware, multi-provider AI, LLM routing, AI gateway v1.1.0]
+title: Ferro Labs AI Gateway
+description: "Open-source, self-hosted AI gateway in Go: 30 providers and 2,500+ models behind one OpenAI-compatible API — routing strategies, plugins, MCP, embedded dashboard."
+keywords: [AI gateway, open source AI gateway, LLM proxy, OpenAI compatible, Go LLM proxy, self-hosted LLM gateway, AI middleware, multi-provider AI, LLM routing, AI gateway v1.4]
+slug: /
+hide_table_of_contents: false
 ---
-
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
 
 # Ferro Labs AI Gateway
 
-You're calling OpenAI directly. When they go down, your product goes down. When they raise prices, you scramble. When you need to test a new model, you rewrite integration code. When you want observability, you build it yourself.
+**Ferro Labs AI Gateway** is an **open-source, self-hosted AI gateway**: a single Go binary that sits in front of all your LLM traffic, speaks an OpenAI-compatible API, and routes requests across **30 providers and 2,500+ models** — with safety and cost policies enforced by built-in plugins, production observability, and a React **dashboard embedded in the binary**, served at the gateway's own root. No client code changes required.
 
-**Ferro Labs AI Gateway** is a single Go binary that sits in front of all your LLM traffic. It exposes an OpenAI-compatible API, routes requests across 30 providers and 2,500+ models, enforces safety policies with 6 built-in plugins, and emits production observability — without changing your existing client code.
+Why put a gateway in front at all? Because you're calling one LLM provider directly: when they go down, your product goes down. When they raise prices, you scramble. When you want to try a new model, you rewrite integration code. When you need observability, you build it yourself.
 
-:::tip Ferro Labs Managed — Managed AI Gateway
-Ferro Labs Managed wraps the open-source gateway with multi-tenancy, a dashboard, durable billing, semantic caching, and 5 enterprise security plugins. [Join the early access waitlist →](https://www.ferrolabs.ai/)
-:::
+Built for production from the start: sub-millisecond p99 routing overhead ([benchmarks](/benchmarks)), retries and circuit breakers under [every routing strategy](/routing), per-target concurrency limits, and `/livez` + `/readyz` probes for orchestrators.
 
 :::tip Ready to jump in?
-[Quickstart — up and running in 30 seconds →](/getting-started/quickstart)
+[Quickstart — up and running in a couple of minutes →](/getting-started/quickstart)
 :::
 
-## What is it?
-
-Drop the gateway in front of your LLM traffic. Set `base_url` to the gateway endpoint. That's it — your OpenAI SDK, LangChain, LlamaIndex, or curl commands continue to work unchanged.
+## Install in one command
 
 ```bash
 export OPENAI_API_KEY=sk-...
@@ -32,92 +27,61 @@ export ANTHROPIC_API_KEY=sk-ant-...
 docker run -d -p 8080:8080 \
   -e OPENAI_API_KEY \
   -e ANTHROPIC_API_KEY \
+  -e MASTER_KEY=$(openssl rand -hex 24) \
   ghcr.io/ferro-labs/ai-gateway:latest
 ```
 
-Then send requests to `http://localhost:8080/v1/chat/completions` exactly as you would to OpenAI.
+Send requests to `http://localhost:8080/v1/chat/completions` exactly as you would to OpenAI, authenticating with the `MASTER_KEY` you set (or a scoped key you issue from it). Open **`http://localhost:8080/`** in a browser for the built-in dashboard. New here? The [quickstart](/getting-started/quickstart) walks through `ferrogw init`, which scaffolds a config and a key for you.
+
+:::note `/v1/*` requires a key by default
+Every inference route needs a bearer token unless you explicitly set `ALLOW_UNAUTHENTICATED_PROXY=true`. See [Authentication](/guides/auth).
+:::
 
 ## Key capabilities
 
 | Capability | Details |
 |---|---|
-| **30 AI providers** | OpenAI, Anthropic, Gemini, Mistral, Groq, Cohere, DeepSeek, Together, Perplexity, Fireworks, AI21, Azure OpenAI, Azure Foundry, xAI, Ollama, Ollama Cloud, Replicate, AWS Bedrock, Vertex AI, Hugging Face, Cerebras, NVIDIA NIM, Cloudflare Workers AI, Databricks, Novita AI, Qwen, Moonshot AI, SambaNova, DeepInfra, OpenRouter |
-| **8 routing strategies** | Single, Fallback, Weighted, Conditional, Least-Latency, Cost-Optimized, Content-Based, A/B Test |
-| **6 OSS + 5 Ferro Labs Managed plugins** | Word filter, max-token, response cache, request logger, rate limit, budget (OSS) — plus PII redact, secret scan, prompt shield, schema guard, regex guard ([Ferro Labs Managed](https://www.ferrolabs.ai/)) |
-| **MCP integration** | Agentic tool-calling loop via Model Context Protocol servers with streaming support (v1.0.0) |
-| **Observability** | Prometheus metrics, structured JSON logs with trace IDs, deep `/health` per provider |
-| **Resiliency** | Per-target circuit breakers, retry with exponential backoff, per-status-code retry config |
-| **OpenAI compatible** | Chat completions, embeddings, images, and model listing — same wire format |
-| **Built in Go** | Single binary, zero runtime dependencies, sub-millisecond p99 overhead at 500 RPS. [See benchmarks →](/benchmarks) |
+| **30 AI providers** | OpenAI, Anthropic, Gemini, Vertex AI, Mistral, Groq, Cohere, DeepSeek, Together, Perplexity, Fireworks, AI21, Azure OpenAI, Azure AI Foundry, xAI, Ollama, Ollama Cloud, Replicate, AWS Bedrock, Hugging Face, Cerebras, NVIDIA NIM, Cloudflare Workers AI, Databricks, Novita, Qwen, Moonshot, SambaNova, DeepInfra, OpenRouter — [see the matrix →](/providers) |
+| **8 routing strategies** | Single, fallback, weighted load balancing, least-latency, cost-optimized, conditional, content-based, and A/B test — [routing guide →](/routing) |
+| **6 built-in plugins** | Word filter, max-token, rate limit, budget, response cache, request logger — plus [5 Ferro Labs Managed](/plugins/enterprise) security plugins. [Plugin catalogue →](/plugins) |
+| **Unified request pipeline** | Chat, streaming, embeddings, and image generation share one routing pipeline — retry, circuit breaking, per-target concurrency, timeouts, metrics, and request logging are true of every surface. |
+| **Native endpoints** | Chat completions, embeddings, images, **rerank, moderations, audio (STT/TTS), files & batches, and `/v1/responses`** — governed and priced, not blindly proxied. [API reference →](/api-reference/overview) |
+| **MCP tool-calling** | Model Context Protocol servers over **HTTP or stdio** (run any `npx`/`uvx` server as a managed subprocess), with per-turn guardrails and budgeting on agentic loops. [MCP guide →](/guides/mcp) |
+| **Embedded dashboard** | Overview, keys, request logs, analytics, config history, playground, audit, and tracing — compiled into the binary, served at the root. [Dashboard tour →](/guides/dashboard) |
+| **Observability** | Prometheus `/metrics` (scoped), OpenTelemetry tracing, structured JSON logs with 32-hex trace IDs, and `/livez` + `/readyz` probes. [Observability →](/guides/observability) |
+| **Built in Go** | Ships as a single static binary; sub-millisecond p99 routing overhead. [See benchmarks →](/benchmarks) |
 
-:::info Why Go?
-Go's goroutine scheduler, low-GC overhead, and lack of a GIL make it ideal for a latency-sensitive proxy. The gateway ships as a single static binary under 20MB with zero runtime dependencies. [Published benchmarks](/benchmarks) show sub-millisecond p99 overhead at 500 RPS — while Python-based gateways degrade beyond 200 RPS.
+:::tip What's new in v1.4
+The dashboard now ships **embedded** in the OSS binary, all four core surfaces share **one routing pipeline** (with retry honoured under every strategy), and rerank / moderations / audio / responses became first-class routed endpoints. Some breaking changes ship with it — read the [changelog](/changelog) before upgrading.
 :::
 
-## Docs map
+## Where to next
 
-### Getting started
-- [Overview](/getting-started/overview) — When and why to use the gateway
-- [Architecture](/getting-started/architecture) — Component diagrams and data flow
-- [Request lifecycle](/getting-started/request-lifecycle) — Step-by-step request flow
-- [Quickstart](/getting-started/quickstart) — Docker, build from source, first request
-- [Concepts](/getting-started/concepts) — Core ideas: routing, plugins, observability, MCP
-- [Configuration](/getting-started/configuration) — Full config reference
+### Get started
+- [Overview](/getting-started/overview) — when and why to use the gateway
+- [Quickstart](/getting-started/quickstart) — Docker, `ferrogw init`, your first request
+- [Architecture](/getting-started/architecture) — components and the unified request pipeline
+- [Configuration](/getting-started/configuration) — the full config reference
+- [Concepts](/getting-started/concepts) — routing, plugins, observability, MCP
 
-### Guides
-- [Providers](/guides/providers) — All 30 providers and supported capabilities
-- [Provider configuration](/guides/providers-config) — Environment variables per provider
-- [Authentication](/guides/auth) — API key configuration
-- [Routing policies](/guides/routing-policies) — All 8 routing strategies with examples
-- [Plugins](/guides/plugins) — 6 built-in + 5 managed plugins with YAML config
-- [MCP integration](/guides/mcp) — Model Context Protocol tool servers
-- [Observability](/guides/observability) — Metrics, logs, health checks
-- [Rate limiting](/guides/rate-limiting) — IP-level and request-level limiting
-- [Admin auth](/guides/admin-auth) — Admin API scopes and tokens
-- [Use cases](/guides/use-cases) — Recipe-style configurations for common scenarios
-- [Why Ferro Labs](/guides/why-ferro) — Comparison with LiteLLM, Portkey, and other gateways
+### Core reference
+- [Providers](/providers) — all 30 providers, supported endpoints, and how to enable them
+- [Routing](/routing) — the 8 strategies, with pool-vs-named behaviour and examples
+- [Plugins](/plugins) — the 6 built-in plugins, config, and pipeline stages
+- [Dashboard](/guides/dashboard) — the embedded console
+- [API reference](/api-reference/overview) — endpoints, streaming, admin, and errors
 
-### Performance
-- [Benchmarks](/benchmarks) — Published Go vs Python gateway performance data
+### Operate
+- [Authentication](/guides/auth) — master key, scoped keys, and sessions
+- [Observability](/guides/observability) & [Monitoring](/operations/monitoring)
+- [Server settings](/operations/server-settings) — every environment variable
+- [Troubleshooting](/guides/troubleshooting)
 
-### Integrations
-- [Integrations overview](/integrations/overview) — SDKs, frameworks, deployment, and providers
-- [Python SDK quickstart](/integrations/sdk/python/quickstart) — Install `ferrolabsai` and send your first request
-- [Python SDK reference](/integrations/sdk/python/reference) — Full API reference
-- [Go SDK](/integrations/sdk/go) — Embed the gateway, write custom plugins
-- [OpenAI-compatible SDKs](/integrations/sdk/openai-compatible) — Use any OpenAI SDK with zero changes
+:::info Ferro Labs Managed
+Need multi-tenancy, hosted infrastructure, semantic caching, and enterprise security plugins on top of the OSS engine? [Ferro Labs Managed](/ferrocloud/overview) is in early access — [join the waitlist →](https://www.ferrolabs.ai/).
+:::
 
-### Deployment
-- [Railway](/integrations/deployment/railway) — One-click Railway deploy (SQLite or PostgreSQL)
-- [Render](/integrations/deployment/render) — One-click Render deploy with managed PostgreSQL
-- [Docker Compose](/integrations/deployment/docker-compose) — Production-like deployment
-- [Kubernetes](/integrations/deployment/kubernetes) — Helm chart and manifests
-- [Fly.io](/integrations/deployment/fly-io) — Deploy to Fly.io
-
-### Operations & reference
-- [Monitoring](/operations/monitoring) — Prometheus queries, alerting, dashboards
-- [Request logging](/operations/request-logging) — Persistent log backends
-- [Server settings](/operations/server-settings) — All environment variables
-- [API reference](/api-reference/overview) — Endpoints, request format, admin API
-- [Security](/security/data-handling) — Data handling and least-privilege configuration
-- [Troubleshooting](/guides/troubleshooting) — Common issues and fixes
-- [FAQ](/faq) — Common questions
-
-### Ferro Labs Managed (Managed)
-- [Ferro Labs Managed overview](/ferrocloud/overview) — Managed multi-tenant AI gateway
-- [Semantic caching](/ferrocloud/semantic-cache) — pgvector-based semantic response cache
-- [OSS vs Ferro Labs Managed](/guides/oss-vs-ferrocloud) — Feature comparison
-
-<script type="application/ld+json">
-{JSON.stringify({
-  "@context": "https://schema.org",
-  "@type": "SoftwareApplication",
-  "name": "Ferro Labs AI Gateway",
-  "applicationCategory": "DeveloperApplication",
-  "operatingSystem": "Linux, macOS, Windows",
-  "softwareVersion": "1.1.0",
-  "license": "https://opensource.org/licenses/Apache-2.0",
-  "url": "https://github.com/ferro-labs/ai-gateway",
-  "description": "Open-source, high-performance AI gateway built in Go. Routes traffic across 30 LLM providers with sub-millisecond overhead."
-})}
-</script>
+{/* No page-local JSON-LD here: the site-wide graph in docusaurus.config.ts
+    already declares the one canonical SoftwareApplication entity. A second,
+    un-@id'd copy with a different url/description read as a conflicting
+    duplicate entity to consumers. */}

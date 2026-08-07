@@ -1,0 +1,61 @@
+---
+title: Max Token Plugin
+description: Reference for the max-token guardrail plugin — rejects requests over a declared completion ceiling, message count, or input length; config keys, YAML, gotchas.
+keywords: [max-token plugin, AI gateway guardrail, max_tokens limit, max_completion_tokens, message count limit, input length limit, request rejection, before_request]
+---
+
+`max-token` is a guardrail plugin that **rejects** a request whose declared completion ceiling exceeds `max_tokens`, whose message count exceeds `max_messages`, or whose total input length exceeds `max_input_length`. It runs at `before_request`, so a rejected request never reaches a provider.
+
+## Facts
+
+| | |
+|---|---|
+| Stage(s) | `before_request` only |
+| Reported type | `guardrail` ([`plugin.TypeGuardrail`](/plugins)) |
+| Failure policy | Fails **closed** — a plugin error (not a rejection) aborts the request as `500` |
+| Denial status | `400 invalid_request_error` (`request_rejected`) — not `429` and not `402` |
+| Multi-stage | No — a single `before_request` entry is a complete, valid configuration |
+| Agentic loops | Re-checked on every MCP tool-loop turn (`RunBeforeLoopTurn`), since guardrails are not exempted the way `transform`/`logging`/`metrics` plugins are — each turn's completion ceiling and message count are enforced again |
+| Content-reading | [`ContentAgnostic`](#gotchas) — reads request content only when `max_input_length` is configured above `0`; the other two checks are counts, not content |
+| External dependencies | None — pure in-process arithmetic over the already-decoded request, no state carried between requests |
+
+## Configuration
+
+| Key | Type | Default | Required | Description |
+|---|---|---|---|---|
+| `max_tokens` | int (or float64) | `4096` | No | Rejects when the request's **effective** completion ceiling — `EffectiveMaxTokens()`, where `max_completion_tokens` supersedes `max_tokens` when both are set — exceeds this. `0` disables the check. A request that sets neither field declares no ceiling and passes uncapped; see [Gotchas](#gotchas). |
+| `max_messages` | int (or float64) | `100` | No | Rejects when `len(Request.Messages)` exceeds this. `0` disables the check. Skipped on projected surfaces (embeddings/images set `Metadata["surface"]`), so a 150-document embedding batch is not refused as 150 "messages". |
+| `max_input_length` | int (or float64) | `0` (off) | No | Rejects when the total character length of every message — `Content`, or for a multipart message the sum of `ContentParts[].Text` and each `ImageURL.URL` — exceeds this. `0` means no limit. Setting this above `0` makes the plugin read request content; see [Gotchas](#gotchas). |
+
+Config values are accepted only as `int` or `float64` (YAML/JSON both decode plain numbers to one of these); a value of any other type — a quoted string, for instance — is silently ignored and the key keeps its default. There is no `ferrogw validate` check for this: `max-token` does not implement `ConfigValidator`.
+
+## Minimal config
+
+```yaml
+plugins:
+  - name: max-token
+    type: guardrail
+    stage: before_request
+    enabled: true
+    config:
+      max_tokens: 4096
+      max_messages: 100
+      max_input_length: 0
+```
+
+## Gotchas
+
+- **It's reject-only — it never imposes a ceiling.** A request that sets neither `max_tokens` nor `max_completion_tokens` declares no ceiling, is not rejected, and runs to the provider's own default uncapped. This is deliberate: writing a ceiling the caller never asked for is transform behavior in a guardrail — the injected value would change what is sent upstream, show up in the provider's bill, and truncate completions nobody configured. An operator who needs a hard bound sets it on the client or picks a model whose default is the bound they want.
+- **`max_completion_tokens` supersedes `max_tokens`.** The plugin reads `EffectiveMaxTokens()`, never `Request.MaxTokens` directly, so a request cannot pair a small `max_tokens` with a huge `max_completion_tokens` and have the huge value smuggled past the cap — a request setting `max_tokens: 5` and `max_completion_tokens: 500000` is rejected against the 500000 figure, not the 5.
+- **`0` disables each check — opposite polarity to `rate-limit`.** For `max_tokens`, `max_messages`, and `max_input_length`, `0` means "this check is off." That's the reverse of the [`rate-limit`](/plugins/rate-limit) plugin, where `requests_per_second: 0` is rejected as a load error rather than treated as "no limiting." Use `0` here freely; disable `max-token` entirely with `enabled: false` instead if you want no checks at all.
+- **`max_messages` is skipped on projected surfaces.** Embeddings and image-generation requests reach the plugin through a projection that turns each input element into one user message, so a 150-document embedding batch arrives here as 150 "messages." The gateway sets `Metadata["surface"]` on those requests, and `max-token` skips the message-count check when that key is present — a conversation-turn ceiling isn't a statement about how many documents may be embedded at once. `max_input_length`, a size measure, still applies on projected surfaces.
+- **Content-agnostic by default; `max_input_length > 0` flips that.** With `max_input_length` unset (or `0`), `max-token` never reads message content — `max_tokens` is the caller's own declared number and `max_messages` is a list length, neither of which changes when the text inside a message can't be read. That matters for the `/v1/*` pass-through proxy: a surface that hands a guardrail an unreadable body (a multipart upload, an audio payload, token-ID input) has to treat a guardrail's vacuous approval as consent unless the guardrail says otherwise, so it refuses uninspectable pass-through bodies by default — *except* when the only configured `before_request` guardrail declares it reads no content, which `max-token` does (its `IgnoresRequestContent()` returns `true`) as long as `max_input_length` is `0`. Set `max_input_length` above `0` and the plugin becomes content-reading: it now measures the projected text, so an unreadable pass-through body would satisfy the cap at length zero — a vacuous pass, not a real one — and the gateway refuses those bodies instead of serving them once this key is set.
+- **Multipart messages are measured from `ContentParts` alone.** `Content` already holds the concatenated text parts for a decoded multipart message, so `max_input_length` sums `ContentParts[].Text` plus each part's `ImageURL.URL` length rather than adding `Content` on top — adding both would double-count the text while still ignoring the image payload, which for a base64 data URI is nearly the entire request.
+- **`Execute` does not branch on stage.** Nothing stops a config from registering `max-token` at `after_request` or `on_error` too, and the manager will call it there — `Execute` just re-runs the same three checks against `pctx.Request`, which is still populated in every stage. On a request that already cleared `before_request`, that second run is redundant (it re-approves what it already approved) rather than harmful, but it is not a documented pairing the way `budget`'s two stages are — there's nothing for a later stage to add.
+
+## Related
+
+- [Plugins overview](/plugins)
+- [Word filter guardrail](/plugins/word-filter)
+- [Rate limit plugin](/plugins/rate-limit)
+- [Getting started: configuration](/getting-started/configuration)

@@ -1,6 +1,6 @@
 ---
 title: ferrogw CLI reference
-description: Command-line reference for the ferrogw binary — init, serve, validate, doctor, status, version, plugins, and admin subcommands, with global flags and env vars.
+description: "Reference for the ferrogw CLI: init, serve, validate, doctor, status, plugins, version, and admin subcommands, with every global flag and environment variable."
 keywords: [ferrogw CLI, AI gateway CLI, ferrogw commands, ferrogw admin, gateway command line, LLM gateway CLI reference]
 ---
 
@@ -61,29 +61,34 @@ ferrogw init [flags]
 **Example**
 
 ```bash
+export OPENAI_API_KEY=sk-... ANTHROPIC_API_KEY=sk-ant-...
 ferrogw init
 ```
 
 ```text
   Ferro Labs AI Gateway -- Setup
 
-  ✔ Created config.yaml
-  ✔ Master key: fgw_4f9c2a1b7e3d8650a1c4f0b29d6e7a83
+  [OK] Created config.yaml
+  [OK] Targets from detected credentials: openai, anthropic
+  [OK] Master key: fgw_4f9c2a1b7e3d8650a1c4f0b29d6e7a83
 
-  ⚠ Save this key -- you need it for the dashboard and API.
+  [!] Save this key -- you need it for the Admin API and web application.
     export MASTER_KEY=fgw_4f9c2a1b7e3d8650a1c4f0b29d6e7a83
 
   Next steps:
-    1. Set provider API keys (e.g. export OPENAI_API_KEY=sk-...)
-    2. Start the gateway:  ferrogw serve
-    3. Open dashboard:     http://localhost:8080/dashboard
+    1. Use this config:    export GATEWAY_CONFIG=config.yaml
+    2. Set provider API keys (e.g. export OPENAI_API_KEY=sk-...)
+    3. Start the gateway:  ferrogw serve
+    4. Check readiness:    curl http://localhost:8080/readyz
 ```
 
+The dashboard is served from the gateway's own root once it's running — there's no separate `/dashboard` route or standalone web container to open.
+
 :::warning
-The master key is shown **once**. Store it securely (export it as `MASTER_KEY` or place it in your secret manager). If an existing config file is present, `init` skips writing it but still prints a freshly generated key.
+The master key is shown **once** and is never written to disk — store it securely (export it as `MASTER_KEY` or place it in your secret manager). If an existing config file is present, `init` leaves that file alone and generates **no** new master key: the key already in use for that deployment keeps working, and reprinting one would just be a credential that looks live and authenticates against nothing.
 :::
 
-The generated `config.yaml` starts with a `fallback` strategy across `openai` and `anthropic` targets, with other providers commented out for you to enable.
+`init` always uses a `fallback` strategy, but its `targets` are scaffolded from whatever provider credentials the environment already holds — the same detection `ferrogw serve` uses to auto-register providers — so the file it writes is one this deployment can actually serve on the first request. Each detected provider (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and so on) becomes a target, in provider-registry order. If no provider credentials are found at all, `init` writes a single placeholder target (`openai`) with a comment explaining that a real key still needs to be set before the gateway can route anything.
 
 ### `ferrogw serve`
 
@@ -108,7 +113,12 @@ The listen port comes from `PORT` (default `8080`), and the config path from `GA
 
 ### `ferrogw validate`
 
-Loads and validates a configuration file **offline** — no running gateway is required. Accepts YAML or JSON (auto-detected). Exits non-zero if the file fails to load or fails validation.
+Loads and validates a configuration file **offline** — no running gateway is required. Accepts YAML or JSON (auto-detected). Validation runs two layers, both of which `ferrogw serve` runs too:
+
+- **Config-level** — target/strategy shape, alias chains, MCP server entries, and (since v1.4.0) that any plugin listed at multiple stages — `response-cache`, `budget`, and `request-logger` all normally are — carries byte-identical config at each stage it's listed at.
+- **Binary-level** — every target's `virtual_key` must name a provider this binary registers, and every enabled plugin's `name` and `stage` must resolve against what this binary ships. A disabled plugin entry is not checked, matching what `serve` skips too.
+
+It does not resolve `${VAR}` references, contact any provider, or check that credentials exist — a target naming a real provider whose API key is only set in production is a valid config here. Exits non-zero if the file fails to load or fails either layer.
 
 **Usage**
 
@@ -123,7 +133,7 @@ ferrogw validate config.yaml
 ```
 
 ```text
-✔ Config is valid
+[OK] Config is valid
   Strategy:  fallback
   Targets:   2
   Providers: openai, anthropic
@@ -136,9 +146,13 @@ With `--format json` or `--format yaml`, the parsed config is printed in that fo
 Runs a set of environment, configuration, and connectivity checks to help diagnose setup problems. It reports:
 
 - **Provider API keys** — presence of `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `MISTRAL_API_KEY`.
-- **Configuration** — loads and validates the file at `GATEWAY_CONFIG` (if set).
+- **Configuration** — if `GATEWAY_CONFIG` is set, loads the file and runs the same two-layer check `ferrogw validate` does: config-level validation (including the multi-stage plugin agreement rule) plus provider-id and plugin name/stage resolution against this binary. An invalid config is reported in red here too, matching what `validate` and `serve` would reject.
 - **Auth** — whether `MASTER_KEY` is set.
 - **Gateway connectivity** — a `GET /health` round-trip to the configured gateway URL, with latency.
+
+:::note
+`doctor` only exits non-zero when the loaded config is invalid. A missing provider key or an unreachable gateway are reported as findings, not treated as failures — that's what makes `ferrogw doctor` safe to run against a laptop with no gateway running yet, while still catching a config a pipeline would need to fail on.
+:::
 
 **Usage**
 
@@ -154,27 +168,33 @@ ferrogw doctor
 
 ```text
   Provider API Keys
-    ✔ openai
-    ✔ anthropic
-    - gemini
-    - groq
-    - mistral
+    [OK] openai
+    [OK] anthropic
+    [-] gemini
+    [-] groq
+    [-] mistral
 
     2 found
 
   Configuration
-    ✔ config.yaml (strategy=fallback, targets=2)
+    [OK] config.yaml (strategy=fallback, targets=2)
 
   Auth
-    ✔ MASTER_KEY is set
+    [OK] MASTER_KEY is set
 
   Gateway Connectivity
-    ✔ http://localhost:8080 -- healthy (3ms)
+    [OK] http://localhost:8080 -- healthy (3ms)
 ```
 
 ### `ferrogw status`
 
-Checks the health of a running gateway by calling `GET /health`, then reports the version and provider/model counts (when available from `/admin/providers`).
+Checks the health of a running gateway by calling `GET /health`, then reports the version and provider/model counts (when available from `GET /admin/providers`).
+
+- **Exits non-zero when the gateway is unreachable.** The connection or timeout error is returned, not swallowed, so `ferrogw status || alert` can see it. A gateway that *answers* — including a `503`-degraded `/health` — is still reachable and exits `0`; the degraded status is printed as a finding, not treated as a failure.
+- **Diagnostics go to stderr.** The "gateway unreachable" error included, keeping stdout the machine-readable channel so `ferrogw status | jq` doesn't have to sort output from errors.
+- **Colour is suppressed off a terminal.** Piping or redirecting output (or setting `NO_COLOR`) drops the ANSI codes, so a log file or `grep` sees plain ASCII text.
+- **`--format json`/`--format yaml` are refused.** `status` reports a human-readable narrative, not structured data — there's no useful machine encoding for it, so asking for one is a command error rather than silently getting ANSI-decorated text back.
+- **Takes no positional arguments.** A stray one is rejected rather than silently ignored.
 
 **Usage**
 
@@ -189,8 +209,8 @@ ferrogw status --gateway-url http://localhost:8080
 ```
 
 ```text
-  ✔ http://localhost:8080 -- healthy (4ms)
-  Version: 1.1.0
+  [OK] http://localhost:8080 -- healthy (4ms)
+  Version: 1.4.1
   Providers: 30 (412 models)
 ```
 
@@ -237,7 +257,7 @@ ferrogw version
 ```
 
 ```text
-  Version      1.1.0
+  Version      1.4.1
   Commit       a1b2c3d
   Built        2026-06-01T12:00:00Z
   Go           go1.25.0
@@ -271,6 +291,10 @@ The `admin` command groups operations into four areas: `keys`, `config`, `logs`,
 ```bash
 ferrogw admin keys create --name ci-bot --scope read_only --expires-in 720h
 ```
+
+:::note
+`admin keys create` and `admin keys rotate` fail rather than print `null` when the Admin API answers `2xx` with an empty body — a payload was requested and none arrived, so that's reported as an error, not a silently empty result. `admin keys revoke` expects `204 No Content`; anything else, including a body-less redirect, is reported as a failure instead of being read as success.
+:::
 
 #### `admin config` — runtime configuration
 
@@ -331,6 +355,10 @@ These persistent flags apply to all subcommands.
 The API key resolves in order: `--api-key` flag → `FERROGW_API_KEY` → `MASTER_KEY`. This means once you export `MASTER_KEY`, the admin commands authenticate without any extra flag.
 :::
 
+:::note
+`--format` only changes output for the commands that return structured data — `validate`, `plugins`, `version`, and the `admin` subcommands. `init`, `doctor`, and `status` render a human-readable report only and refuse any `--format` other than `table`.
+:::
+
 ## Environment variables
 
 `ferrogw` reads the following environment variables. Server-side variables are read by `serve`; CLI variables are read by the Admin API client.
@@ -338,11 +366,19 @@ The API key resolves in order: `--api-key` flag → `FERROGW_API_KEY` → `MASTE
 | Variable | Read by | Description |
 |---|---|---|
 | `GATEWAY_CONFIG` | `serve`, `doctor` | Path to the config file (YAML or JSON) |
+| `GATEWAY_ENV` | `serve` | Set to `production` (case-insensitive) to turn on production safety checks — refuses `ALLOW_UNAUTHENTICATED_PROXY=true` and a `*` in `CORS_ORIGINS`; warns on `RATE_LIMIT_RPS=0`, `ENABLE_PPROF`, and the in-memory key store |
 | `PORT` | `serve` | HTTP listen port (default `8080`) |
-| `MASTER_KEY` | `serve`, admin CLI | Admin + proxy credential; generated by `ferrogw init` |
+| `MASTER_KEY` | `serve`, admin CLI | Bootstrap/break-glass admin credential; generated by `ferrogw init` |
 | `FERROGW_URL` | CLI | Gateway base URL when `--gateway-url` is not set |
 | `FERROGW_API_KEY` | CLI | Admin API key when `--api-key` is not set |
-| `ALLOW_UNAUTHENTICATED_PROXY` | `serve` | Set to `true` to leave proxy routes unauthenticated (development only — not recommended for production) |
+| `ALLOW_UNAUTHENTICATED_PROXY` | `serve` | Set to `true` to leave proxy routes unauthenticated (development only — refused when `GATEWAY_ENV=production`) |
 | `ENABLE_PPROF` | `serve` | Set to `true` to mount `/debug/pprof/*` profiling routes |
 
-Provider credentials (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and the rest) are documented in the [Providers guide](/guides/providers). For the full server configuration schema, see [Configuration](/getting-started/configuration).
+Provider credentials (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and the rest) are documented in [Provider configuration](/providers/configuration). For the full server configuration schema, see [Configuration](/getting-started/configuration).
+
+## Related
+
+- [Configuration](/getting-started/configuration)
+- [Provider configuration](/providers/configuration)
+- [Server settings](/operations/server-settings)
+- [Troubleshooting](/guides/troubleshooting)

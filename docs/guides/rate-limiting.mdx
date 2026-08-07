@@ -1,28 +1,40 @@
 ---
 title: Rate limiting
-description: Control AI request volume in the Ferro Labs AI Gateway with per-IP HTTP rate limiting, a global token-bucket plugin, and optional per-API-key and per-user request budgets to protect your LLM spend.
-keywords: [AI rate limiting, LLM rate limit, per-IP rate limiting, per-key rate limiting, per-user rate limiting, AI gateway throttling, token rate limiting, request budget control]
+description: Configure per-IP HTTP throttling and the rate-limit plugin in the Ferro Labs AI Gateway — trusted-proxy IP resolution, Retry-After, and per-key/user limits.
+keywords: [AI rate limiting, LLM rate limit, per-IP rate limiting, per-key rate limiting, per-user rate limiting, AI gateway throttling, token rate limiting, provider concurrency limit]
 ---
 
 The gateway rate-limits in two independent places:
 
-1. **Per-IP HTTP middleware** — runs at the edge, before routing, configured by environment variables.
-2. **The `rate-limit` plugin** — runs at the `before_request` stage, configured in your gateway config. It layers a global limiter with optional per-API-key and per-user limiters.
+1. **Per-IP HTTP middleware** — runs at the edge, before routing, configured by environment variables. **On by default.**
+2. **The `rate-limit` plugin** — runs at the `before_request` stage, configured in your gateway config. It layers a global limiter with optional per-API-key and per-user limiters. Off by default.
 
-These two layers are separate systems. The middleware keys on client IP; the plugin keys on global traffic, API key, and user ID. You can run either, both, or neither.
+These two layers are separate systems. The middleware keys on client IP; the plugin keys on global traffic, API key, and user ID. You can run either, both, or neither. A third rejection — `provider_saturated` — is rate-shaped but comes from a different setting entirely; see [Other 429s and the 402 budget response](#other-429s-and-the-402-budget-response) below.
 
 ## Per-IP HTTP middleware
 
-This layer is wired into the HTTP router and keyed on the client IP. It is enabled only when `RATE_LIMIT_RPS` is set to a positive number:
+This layer is wired into the HTTP router and keyed on the client IP. **It is enabled by default** at 20 requests/second with a burst of 40 — no configuration is required to get it:
 
 ```bash
-export RATE_LIMIT_RPS=20    # required to enable; per-IP requests/second
-export RATE_LIMIT_BURST=40  # optional burst capacity (defaults to RATE_LIMIT_RPS when unset)
+export RATE_LIMIT_RPS=20    # default 20; set to 0 to disable the middleware entirely
+export RATE_LIMIT_BURST=40  # default 40
 ```
 
-The client IP is taken from the connection's remote address, or from the first entry of the `X-Forwarded-For` header when present (set this only behind a trusted proxy).
+Setting `RATE_LIMIT_RPS` alone always resets the burst back to the default of 40 too — set `RATE_LIMIT_BURST` explicitly alongside it for a custom rate/burst combination. The store tracks up to 100,000 distinct IPs; invalid values for either variable are ignored with a startup warning and fall back to the default.
 
-When an IP exceeds its bucket, the request is rejected with HTTP `429 Too Many Requests` and an OpenAI-style JSON error body:
+:::note
+`RATE_LIMIT_RPS=0` is a legitimate way to turn the middleware off — for example when rate limiting is enforced at an ingress or upstream API gateway instead. Under `GATEWAY_ENV=production` this only produces a startup **warning**, not a refusal to boot.
+:::
+
+The client IP is **not** read as the leftmost entry of `X-Forwarded-For`. It is resolved from the trusted-proxy chain: `X-Forwarded-For`/`X-Real-IP` is honored only when the direct TCP peer is inside a trusted-proxy CIDR (`TRUSTED_PROXIES`, default `127.0.0.0/8,::1/128` — loopback only), and even then walks the `X-Forwarded-For` chain from the **right**, taking the first hop that isn't itself a trusted proxy. Proxies append to the chain, so the rightmost untrusted entry is the one an actual trusted hop observed; the leftmost entry is whatever the original caller chose to send and is never trusted. Reading the chain the other way — from the left — was a spoofing bug fixed in v1.4.0: a caller could set its own `X-Forwarded-For` header to mint a fresh IP (and therefore a fresh bucket) on every request.
+
+Deploy behind a reverse proxy or load balancer outside the default loopback range and set `TRUSTED_PROXIES` to its real CIDR — otherwise every request resolves to the proxy's own IP and the whole layer collapses into one shared bucket for all clients.
+
+```bash
+export TRUSTED_PROXIES=10.0.0.0/8   # CIDRs of your reverse proxy / ingress / sidecar
+```
+
+When an IP exceeds its bucket, the request is rejected with HTTP `429 Too Many Requests`, a `Retry-After: 1` header, and an OpenAI-style JSON error body:
 
 ```json
 {
@@ -34,11 +46,11 @@ When an IP exceeds its bucket, the request is rejected with HTTP `429 Too Many R
 }
 ```
 
-:::note
-The `429` response does **not** include a `Retry-After` header. Clients should back off using their own retry/jitter policy rather than relying on a server-provided delay.
-:::
+Every 429 the gateway decides on its own — this middleware, the plugin below, and a saturated provider target — carries the same `Retry-After: 1`. An upstream provider's own `Retry-After` hint, when one is present on a proxied error, is propagated instead of the constant.
 
-If `RATE_LIMIT_RPS` is unset (or non-positive), the per-IP middleware is disabled entirely.
+:::tip
+`POST /admin/session` — the dashboard sign-in endpoint — carries its own independent limiter (10 requests/minute, burst 20, keyed on IP) that is unaffected by `RATE_LIMIT_RPS=0`. It is the only unauthenticated write path on the gateway, so it cannot be switched off while tuning inference throughput.
+:::
 
 ## The `rate-limit` plugin
 
@@ -73,11 +85,17 @@ Set `enabled: true` to turn it on. The plugin uses in-memory token buckets, so l
 | `user_rpm` | unset (off) | Per user, requests/minute | request `user` field (`Request.User`) |
 
 - **`requests_per_second`** — the global rate, always active. Every request consumes one token from this bucket regardless of key or user.
-- **`burst`** — global burst capacity. When unset (or `≤ 0`) it defaults to `requests_per_second`, meaning no extra headroom above the steady rate.
-- **`key_rpm`** — optional. Caps requests per minute for each distinct API key. Internally the bucket refills at `key_rpm / 60` tokens per second with a burst of `key_rpm`, so an idle key can spend up to a full minute's worth of requests at once. Must be `> 0` if set.
-- **`user_rpm`** — optional. Caps requests per minute for each distinct user ID, using the same refill/burst semantics as `key_rpm`. Must be `> 0` if set.
+- **`burst`** — global burst capacity. When unset it defaults to `requests_per_second`, meaning no extra headroom above the steady rate.
+- **`key_rpm`** — optional. Caps requests per minute for each distinct API key. Internally the bucket refills at `key_rpm / 60` tokens per second with a burst of `key_rpm`, so an idle key can spend up to a full minute's worth of requests at once.
+- **`user_rpm`** — optional. Caps requests per minute for each distinct user ID, using the same refill/burst semantics as `key_rpm`.
 
 The per-key and per-user stores track up to 100,000 distinct keys each, evicting the least recently used entry beyond that cap to bound memory.
+
+:::warning
+Every field you set — `requests_per_second`, `burst`, `key_rpm`, `user_rpm` — must be a **positive** number. `0` (or a negative value, `NaN`, or `Inf`) is rejected at load by both the gateway and `ferrogw validate`, because each field is a rate: a rate of zero blackholes every request forever rather than acting as "off," and a gateway that started up and reported healthy while silently rejecting all traffic is the worst shape a config mistake can take. Turn the plugin off with `enabled: false` instead.
+
+This is the deliberate opposite of `RATE_LIMIT_RPS=0` for the per-IP middleware above: there the environment variable *is* the whole switch, so `0` means "no limiting." Here each field is one setting inside a plugin that already has its own switch.
+:::
 
 ### Evaluation order
 
@@ -95,23 +113,37 @@ Each rejection sets a distinct reason on the plugin context so you can tell whic
 | Per-key | `per-key rate limit exceeded` |
 | Per-user | `per-user rate limit exceeded` |
 
-Requests with no API key in metadata skip the per-key check; requests with an empty `user` field skip the per-user check. The three limiters are independent — configure any combination.
+Requests with no API key in metadata skip the per-key check; requests with an empty `user` field skip the per-user check. The three limiters are independent — configure any combination. See the [rate-limit plugin reference](/plugins/rate-limit) for the full settings table and failure-mode details.
 
-## Important: `key_rpm` is inert in the bare open-source gateway
+## `key_rpm` is keyed on the authenticated credential
 
-:::warning
-In the bare open-source gateway, **nothing populates `pctx.Metadata["api_key"]`**. The per-key limiter only fires when that metadata is present, so `key_rpm` (and any per-key budgets) are effectively **inert when self-hosting the OSS gateway as-is** — every request simply skips the per-key check.
+`key_rpm` reads `pctx.Metadata["api_key"]`, which the gateway itself populates on every authenticated request — no Ferro Labs Managed layer or custom embedding host required. When a caller authenticates with a bearer API key or a dashboard session, the gateway copies that credential's opaque, non-secret ID (never the raw key) into the plugin context, and `key_rpm` scopes its bucket to that ID. A session inherits the bucket of the API key it was minted from, so re-authenticating cannot reset a caller's limit.
 
-`key_rpm` becomes active only when the embedding host injects an `api_key` into the plugin context metadata. **Ferro Labs Managed** does this as part of its credential/tenant layer; a custom embedding host can do the same. If you are self-hosting and your per-key limits appear to do nothing, this is why — it is expected behavior, not a misconfiguration.
+The check is skipped only for requests that carry no authenticated credential at all — for example when `ALLOW_UNAUTHENTICATED_PROXY=true` is set for local development. In that case `key_rpm` has nothing to key on and every request falls through to the global limiter alone.
 
-`user_rpm` has no such dependency: it keys on the request's `user` field, which any OpenAI-compatible client can send, so it works out of the box.
-:::
+`user_rpm` has no such dependency: it keys on the request's `user` field, which any OpenAI-compatible client can send, so it works identically with or without authentication.
+
+## Other 429s and the 402 budget response
+
+Two more rejections are rate-shaped but come from settings outside this page:
+
+- **`provider_saturated` (429)** — when a target's `targets[].concurrency` limit and its queue are both full, the gateway sheds the request with `429 Too Many Requests` and code `provider_saturated`, carrying the same `Retry-After: 1`. This bounds in-flight requests *per provider target*, independent of both layers above — see [Configuration](/getting-started/configuration) for `targets[].concurrency`.
+- **Budget exhaustion (402, not 429)** — the [`budget` plugin](/plugins/budget) rejects an over-cap request with `402 Payment Required` and code `insufficient_quota`, and deliberately carries **no** `Retry-After` header. A spend cap clears on cost roll-off or an explicit reset, never on a timer, so a `429` there would invite a client to retry once a second forever against an answer that cannot change until the cap resets.
 
 ## Choosing a layer
 
 | Goal | Use |
 |---|---|
-| Coarse abuse protection at the edge, per client IP | Per-IP HTTP middleware (`RATE_LIMIT_RPS`) |
+| Coarse abuse protection at the edge, per client IP | Per-IP HTTP middleware (`RATE_LIMIT_RPS`, on by default) |
 | A ceiling on total throughput to your providers | Plugin `requests_per_second` / `burst` |
-| Per-tenant fairness by API key | Plugin `key_rpm` (requires injected `api_key` metadata — Ferro Labs Managed or a custom host) |
+| Per-tenant fairness by API key | Plugin `key_rpm` (keyed on the authenticated credential automatically) |
 | Per-end-user fairness by user ID | Plugin `user_rpm` (send the `user` field on requests) |
+| Protect one provider target from overload | `targets[].concurrency` → `provider_saturated` 429 |
+| Cap total spend rather than request rate | [`budget` plugin](/plugins/budget) → `402 insufficient_quota` |
+
+## Related
+
+- [rate-limit plugin reference](/plugins/rate-limit)
+- [budget plugin](/plugins/budget)
+- [Configuration](/getting-started/configuration)
+- [Server settings](/operations/server-settings)

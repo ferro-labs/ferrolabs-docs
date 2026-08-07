@@ -1,6 +1,6 @@
 ---
 title: Performance Benchmarks
-description: "AI gateway benchmark results: sub-millisecond p99 latency overhead at 500 RPS. Go-native AI Gateway vs Python-based LLM proxy performance."
+description: "AI gateway benchmark results: sub-millisecond p99 latency overhead at 500 RPS vs Python-based LLM proxies, with full open-source reproduction steps."
 keywords:
   - AI gateway benchmark
   - LLM proxy performance
@@ -36,6 +36,23 @@ Every number on this page comes from reproducible, open-source benchmarks. No sy
 **What was measured:** Gateway-added overhead only (total response time minus the 50 ms upstream latency). Memory sampled via `docker stats` at 1 s intervals.
 
 All tests run five times; tables report median of medians (p50) and median of p99s.
+
+:::
+
+:::warning Gateway version and config not recorded
+
+The original benchmark report does not state which gateway version or runtime
+configuration produced the numbers below, and doesn't say whether auth
+(`ALLOW_UNAUTHENTICATED_PROXY`), the per-IP rate limiter (`RATE_LIMIT_RPS`,
+**on by default since v1.1.18** at 20 rps / burst 40), or the request-logger
+plugin were enabled during the run. All three sit on the request hot path and
+add measurable overhead, and AI Gateway's current shipping defaults — auth
+required on `/v1/*`, per-IP limiting on, plus the v1.4.0 unified routing
+pipeline — may not match what was measured here.
+
+Treat these numbers as directional rather than a v1.4.x guarantee. [Reproduce
+the benchmarks](#reproduce-the-benchmarks) against the version and config you
+plan to run to get numbers you can cite.
 
 :::
 
@@ -80,7 +97,7 @@ Sub-millisecond p99 overhead holds through 1 000 RPS. Even at 2 000 RPS the gate
 - **Goroutines for concurrency** — thousands of in-flight requests multiplexed onto a small thread pool with near-zero scheduling cost. No thread-per-request overhead.
 - **No GIL** — every CPU core does real work in parallel. Python's Global Interpreter Lock serializes CPU-bound gateway logic (auth, routing, logging) across all requests.
 - **Low-GC overhead with careful allocation** — arena-style buffering and sync.Pool reuse keep heap churn minimal. GC pauses stay under 0.5 ms even at 2 000 RPS.
-- **Single static binary, zero dependencies at runtime** — no interpreter, no virtualenv, no pip install at deploy time. One `COPY` in your Dockerfile.
+- **Single static binary** — no interpreter, no virtualenv, no pip install at deploy time. One `COPY` in your Dockerfile. (Not zero-dependency at runtime: the gateway fetches the model catalog on startup by default — set `FERRO_MODEL_CATALOG_TIMEOUT=0` for air-gapped deploys — and optional stores like Postgres are runtime dependencies you configure, not compiled in.)
 
 :::
 
@@ -88,7 +105,7 @@ Sub-millisecond p99 overhead holds through 1 000 RPS. Even at 2 000 RPS the gate
 
 ## Reproduce the Benchmarks
 
-The full benchmark suite is open source. Clone it, run it, verify every number on this page. This is a LiteLLM alternative performance comparison you can audit yourself.
+The full benchmark suite is open source. Clone it, run it, verify every number on this page. This is a LiteLLM alternative performance comparison you can audit yourself — pin the gateway image to the version you care about (e.g. `ghcr.io/ferro-labs/ai-gateway:v1.4.1`) since, as noted above, these numbers have not been re-measured against the current release.
 
 ```bash
 # Clone the benchmark repository
@@ -124,4 +141,4 @@ python3 plot.py results/
 
 - [Why Ferro Labs AI Gateway?](/guides/why-ferro) — architecture decisions behind these numbers
 - [Quickstart](/getting-started/quickstart) — deploy AI Gateway in under 5 minutes
-- [Routing policies](/guides/routing-policies) — configure the routing layer benchmarked above
+- [Routing](/routing) — configure the routing layer benchmarked above

@@ -1,0 +1,76 @@
+---
+title: Rate Limit Plugin
+description: Reference for the rate-limit plugin — global token-bucket rps/burst plus optional per-key and per-user RPM limits, 429 denials, config keys, and YAML examples.
+keywords: [rate limit plugin, AI gateway rate limiting, token bucket, requests per second, per-key rate limit, per-user rate limit, 429 too many requests, RATE_LIMIT_RPS]
+---
+
+The `rate-limit` plugin enforces token-bucket rate limits on gateway traffic: a global requests-per-second bucket, plus optional per-API-key and per-user requests-per-minute buckets layered on top. It runs at `before_request`, rejecting a request with a 429 before it ever reaches a provider.
+
+This plugin is distinct from the gateway's per-IP HTTP rate limiter, which is a separate, always-on middleware layer configured by the `RATE_LIMIT_RPS` and `RATE_LIMIT_BURST` environment variables — see [Gotchas](#gotchas) for how the two differ.
+
+## Facts
+
+| | |
+|---|---|
+| Stage | `before_request` only |
+| Reported type | `ratelimit` (`plugin.TypeRateLimit`) |
+| Failure policy | Fails **closed** (a plugin error returns `500`) |
+| Denial status | **429**, with a `Retry-After` header |
+| Multi-stage | No — a single `plugins[]` entry is enough (unlike `budget`, `response-cache`, `request-logger`) |
+| Agentic loops | Re-checked on every MCP tool-loop turn (`RunBeforeLoopTurn`) — each provider call inside a loop spends a token |
+| External dependencies | None — in-memory token buckets, per-process. Limits are not shared across replicas |
+
+## Config keys
+
+| Key | Type | Default | Required | Description |
+|---|---|---|---|---|
+| `requests_per_second` | float or int, **must be > 0** | `100` | No | Global request rate applied to all traffic. `0`, negative, `NaN`, and `Inf` are all rejected — both at plugin `Init` and by `ferrogw validate`. A rate of zero would blackhole all traffic rather than disable the limit; use `enabled: false` to turn the plugin off instead. |
+| `burst` | float or int, **must be > 0** | `= requests_per_second` | No | Global burst capacity. Same positivity rule as `requests_per_second`. |
+| `key_rpm` | float or int, **must be > 0** | unset (per-key limiting off) | No | Per-API-key requests/minute, keyed on `Metadata["api_key"]` (the opaque credential id). Burst equals one full minute's worth of tokens. A request with no key in metadata is not individually limited by this option. Backed by an LRU store capped at 100,000 keys. |
+| `user_rpm` | float or int, **must be > 0** | unset (per-user limiting off) | No | Per-user requests/minute, keyed on `Request.User`. A request with an empty `User` field is not individually limited by this option. Same 100,000-entry LRU cap. |
+
+## Minimal config
+
+```yaml
+plugins:
+  - name: rate-limit
+    type: guardrail
+    stage: before_request
+    enabled: true
+    config:
+      requests_per_second: 100
+      burst: 100
+      key_rpm: 60
+      user_rpm: 30
+```
+
+`key_rpm` and `user_rpm` are optional — omit either (or both) to run only the global bucket:
+
+```yaml
+plugins:
+  - name: rate-limit
+    type: guardrail
+    stage: before_request
+    enabled: true
+    config:
+      requests_per_second: 50
+      burst: 100
+```
+
+## Gotchas
+
+- **Zero is a load error, not "off."** Every key here is a rate, not a switch: `requests_per_second: 0` (or a negative value, `NaN`, or `Inf`) fails at plugin `Init` and is caught ahead of time by `ferrogw validate` — it never silently starts a gateway that reports healthy and answers 429 to every request forever. To disable the plugin, set `enabled: false`. This is the opposite polarity of `RATE_LIMIT_RPS`, where `0` means no limiting.
+- **Not the same limiter as `RATE_LIMIT_RPS`.** The gateway also runs a per-IP HTTP rate limiter as always-on middleware, configured by the `RATE_LIMIT_RPS` / `RATE_LIMIT_BURST` environment variables (default 20 rps / burst 40, enabled unless `RATE_LIMIT_RPS=0`). That limiter keys on the client IP resolved from the trusted-proxy chain (`TRUSTED_PROXIES`) and runs ahead of the plugin pipeline. This plugin keys on the whole gateway process (global bucket) plus, optionally, the API key and the authenticated user — two independent layers that can both reject the same request for different reasons. See [Rate limiting](/guides/rate-limiting) for the full picture of both layers together.
+- **Check order: global → per-key → per-user.** The first bucket to deny wins, and the reason in the rejection response says which one it was. All three denials increment the same Prometheus counter, `gateway_rate_limit_rejections_total{key_type="plugin"}` — one label covers all three buckets, so the counter alone cannot tell you which layer is shedding load; read the rejection reason for that.
+- **In-memory, per-process.** Token buckets live in process memory. A multi-replica deployment does not share buckets across replicas — each instance enforces its configured rate independently, so the effective fleet-wide rate is roughly `requests_per_second × replica count`.
+- **Requests with no key or user skip those buckets, not the request.** A request carrying no `api_key` in metadata (for example under `ALLOW_UNAUTHENTICATED_PROXY=true`) is not individually rate-limited by `key_rpm`; it still passes through the global bucket. Same for `user_rpm` when `Request.User` is empty.
+- **Unknown config keys are silently ignored.** `requests_per_minute` (instead of the correct `key_rpm`/`user_rpm`) is not an error — the plugin simply never sees it, and the 100 rps default stays active. Double-check spelling against the table above; there is no config-load error to catch a typo here.
+- **Re-checked per agentic loop turn.** Inside an MCP tool loop, `RunBeforeLoopTurn` re-runs this plugin on every turn (unlike `request-logger`, which does not), so a long tool-calling conversation spends one token per provider call, not one per top-level request.
+- **Fails closed, on purpose.** If the plugin itself errors — as opposed to denying a request — the request gets a `500`, not a `429`. A broken rate limiter has limited nobody, and answering `429` would invite every retrying client straight into the outage it's supposed to be protecting against.
+
+## Related
+
+- [Rate limiting](/guides/rate-limiting)
+- [Plugins overview](/plugins)
+- [Budget plugin](/plugins/budget)
+- [Request logger plugin](/plugins/request-logger)

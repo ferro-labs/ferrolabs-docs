@@ -7,10 +7,13 @@ Full machine-readable corpus: https://docs.ferrolabs.ai/llms-full.txt
 ## Documentation
 
 - [Introduction](https://docs.ferrolabs.ai/): Overview, key capabilities, and docs map
-- [Quickstart](https://docs.ferrolabs.ai/getting-started/quickstart/): Get running in 30 seconds (curl/Python/Node tabs)
-- [Architecture](https://docs.ferrolabs.ai/getting-started/architecture/): Component diagrams and data flow
+- [Overview](https://docs.ferrolabs.ai/getting-started/overview/): When and why to use the gateway
+- [Quickstart](https://docs.ferrolabs.ai/getting-started/quickstart/): Docker, ferrogw init, and your first request
+- [Architecture](https://docs.ferrolabs.ai/getting-started/architecture/): The unified routing pipeline and components
 - [Request Lifecycle](https://docs.ferrolabs.ai/getting-started/request-lifecycle/): Real middleware, plugin, and routing order
+- [Concepts](https://docs.ferrolabs.ai/getting-started/concepts/): Routing, plugins, observability, MCP
 - [Configuration](https://docs.ferrolabs.ai/getting-started/configuration/): Full config reference
+- [Dashboard](https://docs.ferrolabs.ai/guides/dashboard/): The embedded operations console
 
 ## Integrations
 
@@ -28,19 +31,44 @@ Full machine-readable corpus: https://docs.ferrolabs.ai/llms-full.txt
 - [Kubernetes](https://docs.ferrolabs.ai/integrations/deployment/kubernetes/): Helm chart deployment
 - [Deploy to Fly.io](https://docs.ferrolabs.ai/integrations/deployment/fly-io/): Fly.io deployment
 
+## Providers
+
+- [Providers](https://docs.ferrolabs.ai/providers/): All 30 providers and the endpoint-support matrix
+- [Provider Configuration](https://docs.ferrolabs.ai/providers/configuration/): Environment variables and special config per provider
+
+## Routing
+
+- [Routing Overview](https://docs.ferrolabs.ai/routing/): Strategy model, pool vs named modes, targets
+- [Single](https://docs.ferrolabs.ai/routing/single/): One target, no failover (default)
+- [Fallback](https://docs.ferrolabs.ai/routing/fallback/): Try targets in order, advance on failure
+- [Load Balance](https://docs.ferrolabs.ai/routing/loadbalance/): Weighted random across targets
+- [Least Latency](https://docs.ferrolabs.ai/routing/least-latency/): Route to the fastest observed target
+- [Cost Optimized](https://docs.ferrolabs.ai/routing/cost-optimized/): Route to the cheapest priced target
+- [Conditional](https://docs.ferrolabs.ai/routing/conditional/): Route on model / model_prefix
+- [Content Based](https://docs.ferrolabs.ai/routing/content-based/): Route on prompt content
+- [A/B Test](https://docs.ferrolabs.ai/routing/ab-test/): Weighted variant split for migrations
+
+## Plugins
+
+- [Plugins Overview](https://docs.ferrolabs.ai/plugins/): Plugin system, stages, ordering, failure policy
+- [Word Filter](https://docs.ferrolabs.ai/plugins/word-filter/): Substring content guardrail
+- [Max Token](https://docs.ferrolabs.ai/plugins/max-token/): Reject oversized requests
+- [Rate Limit](https://docs.ferrolabs.ai/plugins/rate-limit/): Token-bucket global/per-key/per-user limits
+- [Budget](https://docs.ferrolabs.ai/plugins/budget/): Per-key USD spend caps (402 on exhaustion)
+- [Response Cache](https://docs.ferrolabs.ai/plugins/response-cache/): Credential-scoped exact-match cache
+- [Request Logger](https://docs.ferrolabs.ai/plugins/request-logger/): Durable request logs with cost/latency
+- [Managed Plugins](https://docs.ferrolabs.ai/plugins/enterprise/): 5 Ferro Labs Managed security plugins
+
 ## Guides
 
-- [Providers](https://docs.ferrolabs.ai/guides/providers/): All 30 AI providers
-- [Provider Configuration](https://docs.ferrolabs.ai/guides/providers-config/): Environment variables per provider
-- [Provider Capability Matrix](https://docs.ferrolabs.ai/guides/provider-capabilities/): Which providers support chat/embeddings/images/discovery
-- [Routing Policies](https://docs.ferrolabs.ai/guides/routing-policies/): 8 routing strategies
-- [Plugins](https://docs.ferrolabs.ai/guides/plugins/): 6 built-in plugins (+ 5 managed guardrails)
-- [MCP Integration](https://docs.ferrolabs.ai/guides/mcp/): Model Context Protocol tool servers
+- [MCP Integration](https://docs.ferrolabs.ai/guides/mcp/): Model Context Protocol (HTTP + stdio)
+- [Use Cases](https://docs.ferrolabs.ai/guides/use-cases/): Recipe-style configurations
 - [Virtual Keys](https://docs.ferrolabs.ai/guides/virtual-keys/): config virtual_key vs admin API keys
 - [Cost Tracking](https://docs.ferrolabs.ai/guides/cost-tracking/): See and cap spend
-- [Authentication](https://docs.ferrolabs.ai/guides/auth/): MASTER_KEY and API key management
+- [Authentication](https://docs.ferrolabs.ai/guides/auth/): MASTER_KEY, scoped keys, sessions
 - [Rate Limiting](https://docs.ferrolabs.ai/guides/rate-limiting/): Per-IP, per-key, and per-user limits
 - [Observability](https://docs.ferrolabs.ai/guides/observability/): Prometheus metrics and OpenTelemetry
+- [Data Handling](https://docs.ferrolabs.ai/security/data-handling/): Redaction, isolation, and audit trail
 
 ## API Reference
 

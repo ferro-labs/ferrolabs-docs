@@ -1,16 +1,25 @@
 openapi: 3.0.3
 info:
   title: Ferro Labs AI Gateway
-  version: 1.0.0
+  version: 1.4.1
   description: |
     The Ferro Labs AI Gateway is an open-source, high-performance LLM proxy that provides a
-    unified OpenAI-compatible API across 29 providers and 2,500+ models.
+    unified OpenAI-compatible API across 30 providers and 2,500+ models.
 
     Point any OpenAI-compatible client at `http://localhost:8080` — provider credentials are
     managed server-side via environment variables. No code changes needed.
 
-    Use the `X-Provider` header to override the routing strategy and force a specific provider
-    per-request.
+    Chat completions, legacy completions, embeddings, images, rerank, moderations, audio, and
+    `POST /v1/responses` are **routed**: the gateway picks a provider from the configured
+    `targets` allowlist via the active routing strategy, and setting a provider's API key alone
+    does not make it reachable unless it also appears in `targets`. An unowned model returns
+    `404 model_not_found`.
+
+    The `X-Provider` header does **not** affect any of those routed surfaces. It is read only by
+    the transparent `/v1/*` pass-through proxy (endpoints the gateway has no native handler for,
+    e.g. `/v1/fine_tuning`) and by `POST /v1/responses` when its resolution falls back to the
+    header, and even there it is gated on `targets` membership — it can select among configured
+    providers, never bypass the allowlist.
 
     ## Authentication
 
@@ -20,8 +29,8 @@ info:
     local development only.
 
     Admin endpoints (`/admin/*`) and the observability endpoints (`/metrics`, `/debug/*`) also
-    require a bearer token — the `MASTER_KEY` or an admin-scoped issued key. Only `/health` is
-    public.
+    require a bearer token — the `MASTER_KEY` or an admin-scoped issued key. `/health`, `/livez`,
+    `/readyz`, and CORS preflight requests are the only unauthenticated routes.
 
     ```
     Authorization: Bearer <master-key-or-issued-key>
@@ -42,11 +51,21 @@ servers:
 
 tags:
   - name: Inference
-    description: OpenAI-compatible chat, completion, embedding, and image generation endpoints.
+    description: >-
+      OpenAI-compatible chat, completion, embedding, image, rerank, moderation, and audio
+      endpoints. Routed via the configured `targets` allowlist and routing strategy.
+  - name: Responses
+    description: >-
+      OpenAI Responses API — `POST /v1/responses` is model-routed, governed, and priced;
+      the stateful id sub-routes pin to the configured `responses_target`.
+  - name: Files & Batches
+    description: >-
+      Transparent pass-through of the Files and Batch APIs to the single configured
+      `batch_target` provider. Ids are native (not rewritten); the gateway keeps no state.
   - name: Models
-    description: Enumerate available models across all active providers.
+    description: Enumerate available models and per-provider parameter capabilities across all active providers.
   - name: Operations
-    description: Health checks and Prometheus metrics.
+    description: Liveness/readiness/health probes and Prometheus metrics.
   - name: Admin – Keys
     description: Manage API keys — create, rotate, revoke, and view usage. Requires admin auth.
   - name: Admin – Logs
@@ -65,20 +84,14 @@ paths:
         Creates a chat completion via the configured routing strategy.
         Identical to the OpenAI `POST /v1/chat/completions` endpoint.
 
-        - Use `X-Provider: anthropic` to force a specific provider.
+        - Routed through the `targets` allowlist — this endpoint does **not** read `X-Provider`;
+          selecting a provider directly is only available on the `/v1/*` pass-through and on
+          `POST /v1/responses`.
         - Set `stream: true` for SSE streaming.
         - Model names follow each provider's native identifiers.
       tags: [Inference]
       security:
         - bearerAuth: []
-      parameters:
-        - name: X-Provider
-          in: header
-          required: false
-          description: Override routing strategy and force a specific provider (e.g. `openai`, `anthropic`, `gemini`).
-          schema:
-            type: string
-            example: anthropic
       requestBody:
         required: true
         content:
@@ -128,25 +141,42 @@ paths:
                 description: "SSE stream of `ChatCompletionChunk` events when `stream: true`."
         '400':
           $ref: '#/components/responses/BadRequest'
-        '403':
-          $ref: '#/components/responses/Forbidden'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '402':
+          $ref: '#/components/responses/PaymentRequired'
+        '404':
+          $ref: '#/components/responses/ModelNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
         '502':
           $ref: '#/components/responses/ProviderError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
 
   /v1/completions:
     post:
       operationId: createCompletion
       summary: Create text completion (legacy)
-      description: Legacy text completion endpoint. Proxied to the selected provider.
+      description: |
+        Legacy text completion endpoint. The prompt is wrapped as a single user message and
+        routed through the same pipeline `/v1/chat/completions` uses — targets, aliases,
+        strategy, plugins, circuit breakers, and request logging all apply — then the chat
+        response is re-wrapped in the legacy envelope. There is **no** pass-through to a
+        provider's own completions route.
+
+        `echo` is honoured (per choice). `best_of`, `logprobs`, and `suffix` are accepted and
+        ignored. `stream: true`, prompt batches, and token-id prompts are refused with `400`
+        because the chat surface cannot express them.
       tags: [Inference]
       security:
         - bearerAuth: []
-      parameters:
-        - name: X-Provider
-          in: header
-          required: false
-          schema:
-            type: string
       requestBody:
         required: true
         content:
@@ -160,6 +190,7 @@ paths:
                   example: gpt-3.5-turbo-instruct
                 prompt:
                   type: string
+                  description: "String only — array/batch and token-id prompts return 400."
                   example: "Once upon a time"
                 max_tokens:
                   type: integer
@@ -167,35 +198,59 @@ paths:
                 temperature:
                   type: number
                   example: 0.7
+                echo:
+                  type: boolean
+                  default: false
+                  description: Honoured — the prompt precedes the completion, per choice.
+                best_of:
+                  type: integer
+                  description: Accepted and ignored.
+                logprobs:
+                  type: integer
+                  description: Accepted and ignored.
+                suffix:
+                  type: string
+                  description: Accepted and ignored (fill-in-the-middle is not expressible via chat).
                 stream:
                   type: boolean
                   default: false
+                  description: Not supported on this endpoint — returns 400 if true.
       responses:
         '200':
-          description: Completion response
+          description: Completion response, wrapped in the legacy envelope
           content:
             application/json:
               schema:
                 type: object
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '402':
+          $ref: '#/components/responses/PaymentRequired'
+        '404':
+          $ref: '#/components/responses/ModelNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
         '502':
           $ref: '#/components/responses/ProviderError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
 
   /v1/embeddings:
     post:
       operationId: createEmbedding
       summary: Create embedding
-      description: Creates vector embeddings for the provided input. Proxied to the selected provider.
+      description: Creates vector embeddings for the provided input via the configured routing strategy.
       tags: [Inference]
       security:
         - bearerAuth: []
-      parameters:
-        - name: X-Provider
-          in: header
-          required: false
-          schema:
-            type: string
       requestBody:
         required: true
         content:
@@ -261,23 +316,33 @@ paths:
                     $ref: '#/components/schemas/Usage'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '402':
+          $ref: '#/components/responses/PaymentRequired'
+        '404':
+          $ref: '#/components/responses/ModelNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
         '502':
           $ref: '#/components/responses/ProviderError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
 
   /v1/images/generations:
     post:
       operationId: createImage
       summary: Create image
-      description: Generates images from a text prompt. Proxied to the selected provider (OpenAI DALL-E, Stability AI, Replicate, etc.).
+      description: Generates images from a text prompt via the configured routing strategy (OpenAI, Gemini, Vertex AI, Bedrock, Replicate, and other image-capable providers).
       tags: [Inference]
       security:
         - bearerAuth: []
-      parameters:
-        - name: X-Provider
-          in: header
-          required: false
-          schema:
-            type: string
       requestBody:
         required: true
         content:
@@ -332,8 +397,756 @@ paths:
                           type: string
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '402':
+          $ref: '#/components/responses/PaymentRequired'
+        '404':
+          $ref: '#/components/responses/ModelNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
         '502':
           $ref: '#/components/responses/ProviderError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
+
+  /v1/rerank:
+    post:
+      operationId: createRerank
+      summary: Rerank documents
+      description: |
+        Ranks documents by relevance to a query (Cohere-v2 request/response contract), routed
+        via the configured targets to the first registered rerank-capable provider that serves
+        the requested model. Supported by 5 providers: bedrock, cohere, deepinfra, nvidia-nim,
+        together.
+      tags: [Inference]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RerankRequest'
+            examples:
+              basic:
+                summary: Basic rerank
+                value:
+                  model: rerank-v3.5
+                  query: "What is the capital of France?"
+                  documents:
+                    - "Paris is the capital of France."
+                    - "Berlin is the capital of Germany."
+                  top_n: 1
+      responses:
+        '200':
+          description: Rerank response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RerankResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '402':
+          $ref: '#/components/responses/PaymentRequired'
+        '404':
+          $ref: '#/components/responses/ModelNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          $ref: '#/components/responses/ProviderError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
+
+  /v1/moderations:
+    post:
+      operationId: createModeration
+      summary: Classify content
+      description: |
+        Classifies text for policy violations (OpenAI contract), routed via the configured
+        targets to the first registered moderation-capable provider that serves the requested
+        model. Only 2 providers implement this surface: openai and mistral.
+      tags: [Inference]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModerationRequest'
+      responses:
+        '200':
+          description: Moderation response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModerationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '402':
+          $ref: '#/components/responses/PaymentRequired'
+        '404':
+          $ref: '#/components/responses/ModelNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          $ref: '#/components/responses/ProviderError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
+
+  /v1/audio/speech:
+    post:
+      operationId: createSpeech
+      summary: Generate speech from text (text-to-speech)
+      description: |
+        Synthesizes audio from text, routed via the configured targets to the first registered
+        speech-capable provider that serves the requested model. `input` is capped at 4096
+        characters (enforced by the gateway — TTS carries no `usage` to price, so this endpoint
+        is unpriced and the cap is the trust-boundary check). Returns raw audio bytes with a
+        `Content-Type` matching `response_format`.
+      tags: [Inference]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SpeechRequest'
+      responses:
+        '200':
+          description: Synthesized audio bytes
+          content:
+            audio/mpeg:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '402':
+          $ref: '#/components/responses/PaymentRequired'
+        '404':
+          $ref: '#/components/responses/ModelNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          $ref: '#/components/responses/ProviderError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
+
+  /v1/audio/transcriptions:
+    post:
+      operationId: createTranscription
+      summary: Transcribe audio (speech-to-text)
+      description: |
+        Transcribes audio in its original language, routed via the configured targets to the
+        first registered transcription-capable provider that serves the requested model.
+        Multipart upload, capped at 25 MiB — larger than the shared 10 MiB JSON body limit, and
+        enforced independently of it.
+      tags: [Inference]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, model]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                model:
+                  type: string
+                  example: whisper-1
+                language:
+                  type: string
+                  description: ISO-639-1 hint.
+                prompt:
+                  type: string
+                response_format:
+                  type: string
+                  enum: [json, text, srt, verbose_json, vtt]
+                  default: json
+                temperature:
+                  type: number
+      responses:
+        '200':
+          description: Transcription response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  text:
+                    type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '402':
+          $ref: '#/components/responses/PaymentRequired'
+        '404':
+          $ref: '#/components/responses/ModelNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '413':
+          description: Audio upload exceeds the 25 MiB cap.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          $ref: '#/components/responses/ProviderError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
+
+  /v1/audio/translations:
+    post:
+      operationId: createTranslation
+      summary: Translate audio to English
+      description: |
+        Transcribes audio and translates it to English, routed via the configured targets to the
+        first registered transcription-capable provider that serves the requested model. Same
+        multipart contract and 25 MiB cap as `/v1/audio/transcriptions`; `language` is ignored
+        (the target is always English).
+      tags: [Inference]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, model]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                model:
+                  type: string
+                  example: whisper-1
+                prompt:
+                  type: string
+                response_format:
+                  type: string
+                  enum: [json, text, srt, verbose_json, vtt]
+                  default: json
+                temperature:
+                  type: number
+      responses:
+        '200':
+          description: Translation response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  text:
+                    type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '402':
+          $ref: '#/components/responses/PaymentRequired'
+        '404':
+          $ref: '#/components/responses/ModelNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '413':
+          description: Audio upload exceeds the 25 MiB cap.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          $ref: '#/components/responses/ProviderError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
+
+  /v1/responses:
+    post:
+      operationId: createResponse
+      summary: Create a model response (Responses API)
+      description: |
+        Governed, priced pass-through of the OpenAI Responses API. Routes by the body's `model`
+        field exactly like chat, through the full pipeline (plugins, guardrails, circuit breaker,
+        per-target concurrency, request logging). Unlike the generic `/v1/*` proxy this endpoint
+        is **priced**: `usage` is teed out of the JSON body or the terminal
+        `response.completed`/`response.incomplete` SSE event as it streams through. The body is
+        forwarded verbatim — only `model`, `max_output_tokens`, and the guardrail text projection
+        (`input`/`instructions`) are parsed from it. Native-wire providers (e.g. anthropic,
+        bedrock, gemini, vertex-ai) return 501 here; use their chat surface instead.
+      tags: [Responses]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [model]
+              properties:
+                model:
+                  type: string
+                  example: gpt-4o
+                input:
+                  description: String or structured input items, forwarded verbatim.
+                instructions:
+                  type: string
+                max_output_tokens:
+                  type: integer
+                stream:
+                  type: boolean
+                  default: false
+      responses:
+        '200':
+          description: "Response object, or an SSE stream of Responses events when `stream: true`"
+          content:
+            application/json:
+              schema:
+                type: object
+            text/event-stream:
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '402':
+          $ref: '#/components/responses/PaymentRequired'
+        '404':
+          $ref: '#/components/responses/ModelNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+        '502':
+          $ref: '#/components/responses/ProviderError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
+
+  /v1/responses/{response_id}:
+    get:
+      operationId: getResponse
+      summary: Retrieve a response
+      description: >-
+        Stateful id sub-route — carries no model, so it pins to the single configured
+        `responses_target` (native id, zero gateway state). Returns 501 when `responses_target`
+        is unset.
+      tags: [Responses]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: response_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Response object
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+    delete:
+      operationId: deleteResponse
+      summary: Delete a response
+      description: Stateful id sub-route, pinned to `responses_target`. Returns 501 when unset.
+      tags: [Responses]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: response_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Deletion confirmation
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  /v1/responses/{response_id}/cancel:
+    post:
+      operationId: cancelResponse
+      summary: Cancel a background response
+      description: Stateful id sub-route, pinned to `responses_target`. Returns 501 when unset.
+      tags: [Responses]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: response_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Response object with cancelled status
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  /v1/responses/{response_id}/input_items:
+    get:
+      operationId: listResponseInputItems
+      summary: List input items for a response
+      description: Stateful id sub-route, pinned to `responses_target`. Returns 501 when unset.
+      tags: [Responses]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: response_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of input items
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  /v1/files:
+    get:
+      operationId: listFiles
+      summary: List files
+      description: >-
+        Transparent pass-through to the configured `batch_target` (no model to route on — a
+        single backend serves the whole surface). 501 when `batch_target` is unset or names a
+        non-batch-capable provider. Supported `batch_target` providers: openai, azure-openai,
+        groq, novita, qwen.
+      tags: [Files & Batches]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of files
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+    post:
+      operationId: uploadFile
+      summary: Upload a file
+      description: >-
+        Transparent pass-through to `batch_target`. Streams outside the shared request-body
+        limit — the upstream enforces its own cap.
+      tags: [Files & Batches]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                purpose:
+                  type: string
+      responses:
+        '200':
+          description: File object (native provider id)
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  /v1/files/{file_id}:
+    get:
+      operationId: getFile
+      summary: Retrieve a file
+      description: Transparent pass-through to `batch_target`, keyed on the provider's native file id.
+      tags: [Files & Batches]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: file_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: File object
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+    delete:
+      operationId: deleteFile
+      summary: Delete a file
+      description: Transparent pass-through to `batch_target`.
+      tags: [Files & Batches]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: file_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Deletion confirmation
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  /v1/files/{file_id}/content:
+    get:
+      operationId: getFileContent
+      summary: Retrieve file content
+      description: Transparent pass-through to `batch_target`. Returns the raw file bytes.
+      tags: [Files & Batches]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: file_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Raw file bytes
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  /v1/batches:
+    get:
+      operationId: listBatches
+      summary: List batches
+      description: >-
+        Transparent pass-through to `batch_target`. A batch references an uploaded
+        `input_file_id`; the model lives per-line inside the JSONL, so gateway model→target
+        routing does not apply here.
+      tags: [Files & Batches]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of batches
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+    post:
+      operationId: createBatch
+      summary: Create a batch
+      description: Transparent pass-through to `batch_target`.
+      tags: [Files & Batches]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [input_file_id, endpoint, completion_window]
+              properties:
+                input_file_id:
+                  type: string
+                endpoint:
+                  type: string
+                  example: /v1/chat/completions
+                completion_window:
+                  type: string
+                  example: 24h
+      responses:
+        '200':
+          description: Batch object (native provider id)
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  /v1/batches/{batch_id}:
+    get:
+      operationId: getBatch
+      summary: Retrieve a batch
+      description: Transparent pass-through to `batch_target`, keyed on the provider's native batch id.
+      tags: [Files & Batches]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: batch_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Batch object
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  /v1/batches/{batch_id}/cancel:
+    post:
+      operationId: cancelBatch
+      summary: Cancel a batch
+      description: Transparent pass-through to `batch_target`.
+      tags: [Files & Batches]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: batch_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Batch object with cancelling status
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
 
   /v1/models:
     get:
@@ -371,15 +1184,66 @@ paths:
                     object: model
                     created: 1710000000
                     owned_by: anthropic
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+
+  /v1/capabilities:
+    get:
+      operationId: getCapabilities
+      summary: Get provider parameter capabilities
+      description: |
+        Returns, per provider this gateway currently serves (the same set `/v1/models` answers
+        from — a target names it), which OpenAI chat parameters that provider forwards,
+        translates, or does not support. Also reports `image_response_formats`: the
+        `response_format` values a provider restricts on `/v1/images/generations` (an absent
+        provider honours whatever format is requested).
+      tags: [Models]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Capability matrix
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  providers:
+                    type: object
+                    additionalProperties:
+                      type: object
+                      additionalProperties:
+                        type: string
+                        enum: [forward, translate, unsupported]
+                  image_response_formats:
+                    type: object
+                    additionalProperties:
+                      type: array
+                      items:
+                        type: string
+              example:
+                providers:
+                  anthropic:
+                    logprobs: unsupported
+                    frequency_penalty: unsupported
+                image_response_formats:
+                  gemini: [b64_json]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
 
   /health:
     get:
       operationId: getHealth
       summary: Health check
       description: |
-        Returns per-provider health status and aggregated model counts.
-        Use as a Kubernetes readiness probe or load balancer health check.
+        Returns per-provider health status and aggregated model counts. Deep diagnostic —
+        distinct from `/livez` (process alive) and `/readyz` (ready to serve), see below.
         Returns HTTP 200 even when some providers are degraded — check the `status` field.
+        Unauthenticated by design; this payload is what orchestrators and the dashboard read.
       tags: [Operations]
       responses:
         '200':
@@ -406,6 +1270,99 @@ paths:
                     last_error: "rate_limit_exceeded"
                 total_models: 2531
                 uptime_seconds: 86400
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+
+  /livez:
+    get:
+      operationId: getLivez
+      summary: Liveness probe
+      description: |
+        Reports process liveness only — no dependency checks — so it always returns 200.
+        Orchestrators use it to decide whether to restart the process. Unauthenticated, and
+        never subject to rate limiting or the per-client middleware chain.
+      tags: [Operations]
+      responses:
+        '200':
+          description: Process is alive
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+
+  /readyz:
+    get:
+      operationId: getReadyz
+      summary: Readiness probe
+      description: |
+        Reports whether the gateway can serve traffic: config must be loaded, backing stores
+        (key store, config manager) must be reachable, and at least one configured target must be
+        routable. Answers are cached for up to 1s so a request burst costs at most one round of
+        store pings. Unauthenticated, and never subject to rate limiting — a probe is never
+        refused for volume.
+      tags: [Operations]
+      responses:
+        '200':
+          description: Ready to serve traffic
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ready
+                  providers:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        circuit:
+                          type: string
+                          enum: [closed, open, half-open]
+                  targets:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        routable:
+                          type: boolean
+                  mcp_servers:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        ready:
+                          type: boolean
+                        required:
+                          type: boolean
+        '503':
+          description: Not ready — no routable targets, a required MCP server is down, or a backing store is unreachable.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: not_ready
+                  reason:
+                    type: string
+                    example: no routable targets
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
 
   /metrics:
     get:
@@ -695,7 +1652,11 @@ paths:
     get:
       operationId: listLogs
       summary: List request logs
-      description: Query per-request audit logs with filtering by provider, model, status, and time range.
+      description: |
+        Query per-request audit logs with filtering by provider, model, credential, and time
+        range. Defaults to **one row per request** (terminal stages only) — the logger still
+        writes one row per plugin stage internally, so pass `stage=all` for the raw event stream
+        or `stage=<name>` for a single stage.
       tags: [Admin – Logs]
       security:
         - adminAuth: []
@@ -719,9 +1680,18 @@ paths:
           in: query
           schema:
             type: string
+        - name: api_key_id
+          in: query
+          description: >-
+            Narrow to rows served under one credential's opaque id (matched exactly against the
+            stored value, never against the live key store — a deleted or revoked key keeps its
+            rows). `api_key_id=none` selects rows naming no credential (unauthenticated requests
+            and pre-column rows).
+          schema:
+            type: string
         - name: stage
           in: query
-          description: Filter by request stage (e.g. `request`, `response`).
+          description: "`all` for the raw per-stage event stream, or a stage name for one stage. Omitted = terminal stages only (one row per request)."
           schema:
             type: string
         - name: since
@@ -967,19 +1937,33 @@ components:
 
   responses:
     BadRequest:
-      description: Bad request — malformed JSON, missing required fields, or validation error.
+      description: >-
+        Bad request — malformed JSON, missing required fields, a `before_request` guardrail
+        plugin's denial (`request_rejected`), or a parameter the resolved provider cannot express
+        under `compatibility.on_unsupported_param: reject`.
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
     Unauthorized:
-      description: Missing or invalid admin bearer token.
+      description: >-
+        Missing or invalid bearer token. Applies to `/admin/*`, `/metrics`, `/debug/*`, and —
+        unless `ALLOW_UNAUTHENTICATED_PROXY=true` — every `/v1/*` inference endpoint.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    PaymentRequired:
+      description: >-
+        The configured `budget` plugin's spend cap is exhausted (`insufficient_quota`). Not in
+        any OpenAI SDK's retry set and carries no `Retry-After` — the cap only clears on cost
+        roll-off or an explicit reset, never on a timer.
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
     Forbidden:
-      description: Request blocked by a guardrail plugin (e.g. prompt-shield, pii-redact).
+      description: Admin credential lacks the required scope (`insufficient_scope`) — an `admin`-only route called with a `read_only` key or session.
       content:
         application/json:
           schema:
@@ -990,8 +1974,58 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+    ModelNotFound:
+      description: No configured target serves the requested model (`model_not_found`). Not retried by OpenAI-compatible SDKs.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    MethodNotAllowed:
+      description: The HTTP method is not supported on this path. The `Allow` response header names the methods that are.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    TooManyRequests:
+      description: >-
+        Per-IP rate limit exceeded, the resolved target's `concurrency` queue is full
+        (`provider_saturated`), or a `rate-limit` plugin denial. A `Retry-After` header is set.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    InternalError:
+      description: A fail-closed plugin (guardrail, auth, rate-limit, or transform) errored before completing its check, or an unclassified internal failure (`plugin_error` / `routing_error`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotImplemented:
+      description: >-
+        The surface is not configured (`batch_target` / `responses_target` unset) or the resolved
+        provider does not support it — including a native-wire provider (e.g. anthropic, bedrock,
+        gemini, vertex-ai) on the `/v1/*` pass-through or the Responses/Files/Batches surfaces.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ServiceUnavailable:
+      description: The resolved target's circuit breaker is open (`upstream_unavailable`) and no other configured target serves the model.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    GatewayTimeout:
+      description: The upstream provider did not respond in time, or the gateway's own `request_timeout` elapsed (`gateway_timeout`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
     ProviderError:
-      description: All configured providers returned errors.
+      description: >-
+        Every attempted target for this request failed upstream — a transport error, a 5xx, or an
+        upstream authentication failure re-attributed to the gateway's own credential
+        (`upstream_error` / `upstream_auth_error`).
       content:
         application/json:
           schema:
@@ -1125,6 +2159,117 @@ components:
         total_tokens:
           type: integer
 
+    RerankRequest:
+      type: object
+      required: [model, query, documents]
+      properties:
+        model:
+          type: string
+          example: rerank-v3.5
+        query:
+          type: string
+        documents:
+          type: array
+          items:
+            type: string
+        top_n:
+          type: integer
+          description: Caps the number of ranked results returned. Omitted returns all, ranked.
+        return_documents:
+          type: boolean
+          default: false
+          description: Echo each ranked document's text back in the result.
+        max_tokens_per_doc:
+          type: integer
+          description: Per-document truncation bound (Cohere v2 default 4096).
+
+    RerankResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        model:
+          type: string
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              index:
+                type: integer
+                description: 0-based position of this document in the original request's `documents` array.
+              relevance_score:
+                type: number
+              document:
+                type: object
+                description: Present only when `return_documents` was true.
+                properties:
+                  text:
+                    type: string
+
+    ModerationRequest:
+      type: object
+      required: [input]
+      properties:
+        model:
+          type: string
+          description: Optional — omitted uses the provider's default moderation model.
+        input:
+          description: A single string or an array of strings to classify.
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: string
+
+    ModerationResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        model:
+          type: string
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              flagged:
+                type: boolean
+              categories:
+                type: object
+                additionalProperties:
+                  type: boolean
+              category_scores:
+                type: object
+                additionalProperties:
+                  type: number
+
+    SpeechRequest:
+      type: object
+      required: [model, input, voice]
+      properties:
+        model:
+          type: string
+        input:
+          type: string
+          description: Text to synthesize. Capped at 4096 characters.
+          maxLength: 4096
+        voice:
+          type: string
+          description: Built-in voice name for OpenAI-style providers, or a provider-specific voice id.
+          example: alloy
+        response_format:
+          type: string
+          enum: [mp3, opus, aac, flac, wav, pcm]
+          default: mp3
+        speed:
+          type: number
+          minimum: 0.25
+          maximum: 4.0
+          default: 1.0
+          description: Not every provider honours this.
+
     Model:
       type: object
       properties:
@@ -1212,30 +2357,43 @@ components:
     RequestLog:
       type: object
       properties:
-        id:
-          type: string
-          format: uuid
         trace_id:
           type: string
+        stage:
+          type: string
+          description: Plugin stage this row was recorded at, or the terminal stage under the default one-row-per-request listing.
         provider:
           type: string
         model:
           type: string
-        status_code:
+        api_key_id:
+          type: string
+          description: Opaque credential id the request was served under. Empty when the request carried no credential.
+          nullable: true
+        prompt_tokens:
           type: integer
-        input_tokens:
+        completion_tokens:
           type: integer
-        output_tokens:
+        total_tokens:
           type: integer
-        latency_ms:
-          type: integer
+        error_message:
+          type: string
+          nullable: true
         created_at:
           type: string
           format: date-time
-        api_key_id:
-          type: string
-          format: uuid
+        duration_ms:
+          type: number
           nullable: true
+          description: End-to-end gateway time, excluding after_request plugins.
+        ttft_ms:
+          type: number
+          nullable: true
+          description: Time to first token. Streaming requests only.
+        cost_usd:
+          type: number
+          nullable: true
+          description: Estimated cost from the model catalog. Null when the catalog does not price the model — not the same as free.
 
     ErrorResponse:
       type: object

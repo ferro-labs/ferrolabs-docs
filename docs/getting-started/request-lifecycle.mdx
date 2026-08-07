@@ -1,162 +1,196 @@
 ---
 title: Request lifecycle
-description: The real ordered path a request takes through the Ferro Labs AI Gateway — HTTP middleware chain, before/after plugins, routing strategy with circuit breaking, provider call with retry and fallback, the MCP agentic loop, and streaming token metering.
-keywords: [AI gateway request lifecycle, LLM proxy request flow, AI middleware pipeline, gateway request processing, plugin pipeline, MCP agentic loop, streaming metering]
+description: How a request moves through Ferro Labs AI Gateway — middleware, model admission, plugin stages, the shared routing pipeline, the MCP loop, and errors.
+keywords: [AI gateway request lifecycle, LLM proxy request flow, AI middleware pipeline, gateway request processing, plugin pipeline, MCP agentic loop, streaming metering, routing pipeline]
 ---
 
-This page traces a request through the gateway exactly as the code runs it. The
-two anchors are the HTTP middleware chain in
-[`internal/httpserver/router.go`](https://github.com/ferro-labs/ai-gateway/blob/main/internal/httpserver/router.go)
-and the routing core in
-[`gateway.go`](https://github.com/ferro-labs/ai-gateway/blob/main/gateway.go)
-(`Route` and `RouteStream`).
+This page traces the ordered path a request takes through the gateway: the HTTP
+middleware chain, model admission, the plugin stages, the single routing
+pipeline shared by chat, streaming, embeddings, and image generation, the
+optional MCP tool-calling loop, and how failures are classified into an HTTP
+status.
 
 ## Overview
 
 ```mermaid
 flowchart TD
-    C([Client]) --> OTel[OpenTelemetry middleware]
-    OTel --> Log["Request logging<br/>assigns / propagates X-Request-ID"]
-    Log --> Rec[Recoverer: panic recovery]
-    Rec --> RIP["RealIP: rewrite RemoteAddr<br/>from X-Forwarded-For / X-Real-IP"]
+    C([Client]) --> MW["Recover → OTel → trace ID/X-Request-ID<br/>→ security headers"]
+    MW --> Probe{"/health /livez /readyz?"}
+    Probe -- yes --> ProbeResp(["200 / 503<br/>no rate limit, no auth"])
+    Probe -- no --> RIP["RealIP: resolve client IP<br/>only from TRUSTED_PROXIES"]
     RIP --> CORS[CORS]
-    CORS --> RL{Per-IP rate limit}
-    RL -- "429 too_many_requests" --> Err1([Error response])
-    RL -- allow --> Auth{Auth: ProxyAuth on /v1/*}
-    Auth -- "401" --> Err2([Error response])
-    Auth -- ok --> H[ChatCompletions handler]
+    CORS --> RL{"Per-IP rate limit<br/>20 rps / burst 40 by default"}
+    RL -- over --> Err1(["429 rate_limit_exceeded"])
+    RL -- ok --> Auth{"Bearer auth<br/>/v1/*, /admin/*, /metrics"}
+    Auth -- none --> Err2(["401"])
+    Auth -- ok --> H[Handler]
 
-    H --> GW[["Gateway.Route /<br/>Gateway.RouteStream"]]
-    GW --> Alias[Resolve model alias]
-    Alias --> Before[before_request plugins]
-    Before -- "plugin sets Skip<br/>e.g. cache hit" --> After
-    Before --> MCPInj["Inject MCP tools<br/>when servers configured"]
-    MCPInj --> Strat["Routing strategy selects target<br/>(circuit breaker wraps provider)"]
-    Strat --> Prov{"Provider call<br/>with retry / fallback"}
-    Prov -- failure --> OnErr[on_error plugins]
-    OnErr --> Err3([Error response + failed event])
-    Prov -- success --> Loop{"MCP tool_calls?"}
-    Loop -- yes --> Tools["Execute tools, append results,<br/>re-call provider (bounded depth)"]
+    H --> Alias[Resolve model alias]
+    Alias --> Admit{"admitModel:<br/>does any target serve this model?"}
+    Admit -- "no (unless a transform plugin is configured)" --> Err3(["404 model_not_found<br/>on_error still runs"])
+    Admit -- yes --> Before["before_request plugins<br/>guardrails, transform, rate-limit, budget"]
+    Before -- reject / error --> Err4(["402 / 429 / 400 / 500<br/>on_error runs"])
+    Before -- "SkipProvider (cache hit)" --> After
+    Before --> MCPInj["Inject MCP tools<br/>only when the caller sent none"]
+    MCPInj --> Walk[["routeTargets: strategy orders targets,<br/>then retry + circuit breaker + concurrency<br/>per target — every mode, every surface"]]
+    Walk -- exhausted --> OnErr[on_error plugins]
+    OnErr --> Err5(["402 / 404 / 429 / 502 / 503 / 504<br/>classified error + failed event"])
+    Walk -- success --> Loop{"tool_calls<br/>pending?"}
+    Loop -- yes --> Tools["Execute tools, append results,<br/>re-run guardrails/budget, re-call provider"]
     Tools --> Loop
     Loop -- no --> After[after_request plugins]
-    After --> Resp(["Response<br/>X-Request-ID trace header + completed event"])
+    After --> Resp(["Response<br/>X-Request-ID header + completed event"])
 ```
 
-## 1. HTTP middleware chain
+## HTTP middleware chain
 
-The chain is assembled in `NewRouter` (`router.go` lines 52–68) and runs in this
-order for every request:
+Every request runs through the root chain in order: panic recovery that still
+returns the gateway's JSON error envelope, an OpenTelemetry layer that extracts
+an inbound W3C `traceparent` (a no-op with no OTLP endpoint configured), a
+logging layer that assigns or propagates the trace ID and sets the
+`X-Request-ID` response header, and baseline security headers (CSP,
+`X-Frame-Options`, HSTS on TLS).
 
-1. **OpenTelemetry** — `gwotel.Middleware` (`router.go:52`). Runs first so any
-   inbound W3C `traceparent` is extracted into the request context before
-   logging needs it. With no OTLP provider configured it is a cheap no-op.
-2. **Request logging** — `logging.Middleware` (`router.go:53`). Resolves a trace
-   ID and sets the `X-Request-ID` response header
-   (`internal/logging/logger.go:94`). Precedence: (1) a trace ID already on the
-   context from the OTel layer, (2) the inbound `X-Request-ID` header, (3) a
-   freshly generated 16-byte hex ID. This is what keeps the OTel `trace_id`, the
-   log trace ID, and the `X-Request-ID` header equal for a request.
-3. **Recoverer** — `chimw.Recoverer` (`router.go:54`). Recovers from panics in
-   downstream handlers and turns them into a 500 instead of crashing the server.
-4. **RealIP** — `chimw.RealIP` (`router.go:62`). Rewrites `RemoteAddr` from
-   `X-Forwarded-For` / `X-Real-IP` so per-IP rate limiting and request logs see
-   the real client IP rather than the load balancer's. Intended for deployment
-   behind a trusted proxy.
-5. **CORS** — `middleware.CORS(corsOrigins...)` (`router.go:63`). Applies the
-   configured allowed origins.
-6. **Per-IP rate limit** — `middleware.RateLimit(rlStore)` (`router.go:67`),
-   mounted only when a rate-limit store is configured. A token-bucket keyed on
-   client IP; over-limit requests get `429` with an OpenAI-shaped
-   `rate_limit_exceeded` error (`internal/middleware/ratelimit.go`).
-7. **Auth** — `middleware.ProxyAuth(store, masterKey)`
-   (`router.go:195`, applied inside `mountOpenAIRoutes`). Guards the `/v1/*`
-   routes with bearer-token auth. It delegates to `admin.AuthMiddleware`, unless
-   `ALLOW_UNAUTHENTICATED_PROXY=true` is set for local dev
-   (`internal/middleware/proxyauth.go`).
+`/health`, `/livez`, and `/readyz` are mounted at this point — deliberately
+**ahead of** IP resolution, rate limiting, and auth, so a traffic burst against
+`/v1/*` that exhausts one IP's bucket can never also 429 an orchestrator's
+liveness probe. Every other route sits behind an additional chain:
 
-The first five run for the whole router; rate limit is conditional; auth is
-scoped to the OpenAI-compatible `/v1/*` group. `/health`, the dashboard, and
-admin routes are mounted separately (`router.go:70–73`).
+1. **Client IP resolution** — `X-Forwarded-For` / `X-Real-IP` are honored only
+   when the direct TCP peer falls inside a `TRUSTED_PROXIES` CIDR (default:
+   loopback only). When trusted, the forwarded chain is read **from the right**
+   — the hop nearest the gateway — so a caller cannot spoof their address by
+   prepending fake entries to the header.
+2. **CORS**, applying the configured allowed origins.
+3. **Per-IP rate limit** — **on by default** (20 requests/sec, burst 40, keyed
+   on the resolved client IP, up to 100,000 tracked IPs). `RATE_LIMIT_RPS=0`
+   removes this middleware entirely.
+4. **Auth** — a bearer token is required on `/v1/*` (unless
+   `ALLOW_UNAUTHENTICATED_PROXY=true`), on every `/admin/*` route, and on
+   `/metrics` (`read_only` or `admin` scope; `/debug/*` needs `admin`).
 
-## 2. Handler and gateway routing
+## Model admission and before_request plugins
 
-`POST /v1/chat/completions` lands in the `ChatCompletions` handler, which calls
-`Gateway.Route` (non-streaming) or `Gateway.RouteStream` (when `stream: true`).
-`Route` (`gateway.go:397`) executes these stages in order:
+`POST /v1/chat/completions` resolves any configured model alias, then the
+gateway asks **admitModel**: does any configured target serve this model at
+all? This runs *before* the plugin stage on purpose — a rate limiter spends a
+token and a budget spends money, so a model no target can ever reach must not
+be allowed to spend either on its way to a 404. A refusal here still runs
+`on_error`, so the denial is recorded like any other. The check is skipped when
+a `before_request` plugin reports itself a transform, since a transform is
+exactly what can turn an unroutable alias into a routable model id.
 
-1. **Alias resolution** — `resolveAlias` (`gateway.go:422`) rewrites `req.Model`
-   to its configured target from `config.Aliases` before any routing decision
-   (`gateway.go:2085`).
-2. **`before_request` plugins** — `runBeforePlugins` (`gateway.go:432`). Runs
-   guardrails, transforms, and rate-limit-style plugins. If a plugin sets
-   `Skip` with a response (for example a cache hit), `after_request` plugins
-   still fire and that early response is returned immediately
-   (`gateway.go:382`). A plugin error increments the `Rejected` metric and
-   aborts.
-3. **Routing strategy selects a target** — `getStrategy` (`gateway.go:427`,
-   built in `gateway.go:890`) constructs the strategy from
-   `config.strategy.mode`: `single`, `fallback`, `loadbalance`, `latency`,
-   `cost-optimized`, `conditional`, `content-based`, or `ab-test`. The provider
-   lookup closure transparently wraps each target in a **circuit breaker**
-   (`cbProvider`, `gateway.go:1030`): an open circuit short-circuits with
-   `ErrCircuitOpen` instead of calling the provider.
-4. **Provider call with retry / fallback** — `s.Execute` (`gateway.go:489`)
-   performs provider selection and the actual upstream call. In `fallback` mode,
-   per-target retry (attempts, status codes, backoff) is applied
-   (`gateway.go:938`) and the strategy advances to the next target on eligible
-   failures.
-5. **`after_request` plugins** or **`on_error` plugins** — on success,
-   `after_request` plugins run (logging, caching) and may rewrite the response
-   (`gateway.go:579`). On failure, `on_error` plugins run, the error is
-   classified (`circuit_open` vs `provider_error`), metrics and a `failed`
-   lifecycle event are emitted, and the error is returned (`gateway.go:495`).
-6. **Response** — `recordSuccess` (`gateway.go:595`) emits Prometheus metrics,
-   computes cost from the model catalog, stamps the trace span, and dispatches
-   the `completed` event. The response carries the `X-Request-ID` trace header
-   set back in the logging middleware.
+`before_request` plugins then run in configured order (guardrails, transforms,
+rate-limit, budget). A `Reject` verdict ends the stage with a 4xx/429/402; a
+plugin **error** fails closed (500) for every type except logging and metrics,
+which fail open.
 
-## 3. MCP agentic loop
+:::note SkipProvider, not Skip
+`Context.Skip` was removed. <!-- accuracy-ok: documenting the v1.4.0 removal --> The response-cache plugin (and anything similar)
+now sets **`Context.SkipProvider`**, which suppresses only the upstream
+provider call. Every remaining `before_request` plugin still runs, and so does
+the whole `after_request` stage — a cache hit can no longer disable a guardrail,
+rate limiter, or budget check behind it.
+:::
 
-When MCP servers are configured, the gateway injects their tool definitions into
-the request before routing (`gateway.go:450`), de-duplicating against any tools
-the caller already supplied. After the first provider response, the agentic loop
-runs (`gateway.go:544`):
+When MCP servers are configured, their tool definitions are added to the
+request — but **only when the caller supplied no `tools` of their own**. A
+request that already carries tools passes through untouched; the gateway never
+merges or de-duplicates against it.
 
-- `ShouldContinueLoop` checks whether the model returned `tool_calls` and the
-  call depth is under the configured limit.
-- `ResolvePendingToolCalls` executes the requested tools and returns the
-  assistant message plus one tool-result message per call.
-- Those messages are appended to `req.Messages` and the provider is called again
-  (`gateway.go:565`).
+## Routing pipeline: one walk for every surface
 
-The loop repeats until the model stops emitting `tool_calls` or the depth limit
-is reached. Intermediate calls are forced non-streaming so each response can be
-inspected for tool calls (`gateway.go:477`).
+Chat, streaming, embeddings, and image generation all route through the same
+walk. A routing strategy (`single`, `fallback`, `loadbalance`,
+`least-latency`, `cost-optimized`, `conditional`, `content-based`, `ab-test`)
+decides target **order** only — retry, circuit breaking, concurrency limiting,
+and error classification live once in the pipeline, so the four surfaces
+cannot drift from each other.
 
-## 4. Streaming path
+For each candidate target the pipeline applies, in this order: the target's
+`retry` policy, its circuit breaker, then its concurrency limiter, then the
+provider call.
 
-`RouteStream` (`gateway.go:1163`) handles `stream: true`:
+**`targets[].retry` is honored under every routing mode** — not only
+`fallback`. It controls how many times the pipeline re-asks the *same* target
+(default: 1 attempt, i.e. no retry, if `attempts` is unset or `0`). Whether the
+walk tries a **different** target after that is a separate question, decided
+by the mode:
 
-- **MCP redirect** — if MCP servers are registered, the request is routed
-  through `Route` so the full agentic loop runs to completion, then the final
-  response is wrapped into a **single final chunk** via `responseStream`
-  (`gateway.go:1200`, `gateway.go:1420`). This is the current Phase 1 behavior:
-  the streaming caller still sees `stream: true` in emitted events, but receives
-  one terminal `chat.completion.chunk`.
-- **Normal streaming** — `before_request` plugins run, then
-  `resolveStreamingProviderLocked` (`gateway.go:1242`) orders targets per
-  strategy mode and picks a circuit-breaker-aware streaming provider.
-  `sp.CompleteStream` opens the upstream channel (`gateway.go:1278`).
-- **Token metering** — the raw channel is wrapped by `streamwrap.Meter`
-  (`gateway.go:1417`), which counts input/output tokens, computes cost from the
-  catalog, records TTFT/TTLT timings, runs `after_request` plugins through its
-  `CompletionFn`, updates circuit-breaker state, and emits Prometheus metrics
-  plus the `completed` or `failed` event once the stream drains.
+| Mode family | Modes | On a failed target |
+|---|---|---|
+| Pool | `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test` | Advances to the next candidate |
+| Named | `single`, `conditional`, `content-based` | Commits to the one target and reports the failure |
+
+Both families skip a target whose circuit breaker is **open** before
+committing to it — including named modes, where the operator picked that
+target specifically. When every eligible candidate's circuit is open, the walk
+still attempts one anyway rather than reporting a false 404, and the breaker
+turns that attempt into a `503`.
+
+## MCP agentic loop
+
+When MCP participates and the provider's response carries `tool_calls`, the
+gateway executes the requested tools, appends the assistant message and the
+tool results to the conversation, and re-calls the provider — repeating until
+no `tool_calls` remain or the configured depth limit is reached. Each
+intermediate call is forced non-streaming so the response can be inspected.
+
+Every loop turn is a real provider call, so every turn faces the plugins that
+bound one: `before_request` guardrails, the rate-limit plugin, and the budget
+plugin all re-run per turn (transform, logging, and metrics plugins are
+skipped, so the model isn't rewritten mid-conversation and nothing is
+double-counted). Budget's per-turn check includes what this request has
+already spent, so a long tool-calling conversation can be cut off by the spend
+cap mid-loop. Token usage and cost accumulate across every turn and are
+reported on the final response.
+
+## Streaming path
+
+When MCP servers are registered, the caller sent no `tools` of its own, and the
+registry has discovered tools, a `stream: true` request is redirected through
+the same non-streaming path described above so the full agentic loop can run
+to completion — the final response is then wrapped into a single terminal
+`chat.completion.chunk`. A request that supplies its own `tools` bypasses MCP
+entirely and streams normally, unaffected by any configured server.
+
+Otherwise: model admission and `before_request` plugins run exactly as above,
+then the pipeline selects and starts a streaming-capable target under the same
+retry, breaker, and concurrency rules. This is the only safe retry window —
+once the provider's stream channel is handed back, nothing is retried or
+replayed. The raw channel is then wrapped by a metering layer that counts
+input/output tokens, computes cost from the model catalog, records
+time-to-first-token and total latency, runs the `after_request` stage once the
+stream completes, updates the circuit breaker's outcome, and emits Prometheus
+metrics plus the `completed` or `failed` event when the stream drains.
+
+## Error classification and on_error
+
+`on_error` plugins always run on a failure — a model-admission refusal, a
+`before_request` rejection or plugin error, an `after_request` plugin error, or
+an exhausted routing walk — so a denied or failed request is never missing from
+the log.
+
+| Status | Code | Cause |
+|---|---|---|
+| 402 | `insufficient_quota` | The budget plugin's spend cap is exhausted |
+| 404 | `model_not_found` | No configured target serves the model |
+| 429 | `rate_limit_exceeded` | A rate-limit-type plugin denial, or the upstream itself returned 429 |
+| 429 | `provider_saturated` | The target's concurrency limit and queue are both full |
+| 503 | `upstream_unavailable` | The target's circuit breaker is open |
+| 504 | `gateway_timeout` | The gateway's `request_timeout` (or the caller's own deadline) elapsed |
+| 502 | `upstream_auth_error` / `upstream_error` | Upstream returned 401/403, or an unclassified 5xx |
+| 400 | `unsupported_parameter` | `compatibility.on_unsupported_param: reject` matched an unsupported field |
+
+An upstream `400`/`422`/`404` passes through with the provider's own message —
+the one case where upstream text reaches the caller — because it describes the
+request's own shape and is the caller's to fix.
 
 ## Related pages
 
 - [Architecture](/getting-started/architecture)
 - [Configuration](/getting-started/configuration)
-- [Routing policies](/guides/routing-policies)
-- [Plugins](/guides/plugins)
+- [Routing](/routing)
+- [Plugins](/plugins)
+- [API errors](/api-reference/errors)
 - [Operations monitoring](/operations/monitoring)

@@ -1,0 +1,25 @@
+---
+title: Ferro Labs Managed Plugins
+description: "Overview of the five Ferro Labs Managed security plugins — PII redaction, secret scanning, prompt shielding, schema guard, regex guard — not in the OSS gateway."
+keywords: [Ferro Labs Managed plugins, PII redaction, secret scanning, prompt injection shield, schema guard, regex guard, AI gateway security]
+---
+
+Ferro Labs Managed adds five security plugins on top of the [6 open-source plugins](/plugins) that ship with the AI Gateway. They slot into the same `before_request`/`after_request` plugin pipeline, but the detection logic (PII models, secret patterns, injection scoring, schema/regex engines) is closed-source and only runs in managed deployments.
+
+| Plugin | What it guards | Typical action |
+|---|---|---|
+| `pii-redact` | Personally identifiable information in request or response content | Redact in place, or block the request |
+| `secret-scan` | Leaked API keys, credentials, and tokens in request content | Block, or warn and pass through |
+| `prompt-shield` | Prompt injection and jailbreak attempts in user messages | Block above a confidence threshold |
+| `schema-guard` | Model output conformance to a JSON Schema | Block non-conforming responses |
+| `regex-guard` | Custom regex-defined patterns (SSNs, business rules) | Block, or warn and pass through |
+
+:::info Ferro Labs Managed
+These five plugins are **not included in the open-source build** — they are only available on [Ferro Labs Managed](/ferrocloud/overview). Join the [waitlist](https://www.ferrolabs.ai/) for access.
+:::
+
+## Related
+
+- [Plugins overview](/plugins) — the 6 OSS plugins and the shared pipeline stages
+- [Ferro Labs Managed overview](/ferrocloud/overview)
+- [OSS vs. Ferro Labs Managed](/guides/oss-vs-ferrocloud)

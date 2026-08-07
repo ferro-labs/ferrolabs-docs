@@ -1,12 +1,12 @@
 ---
 title: "Ferro Labs Managed — Managed AI Gateway"
-description: "Ferro Labs Managed is the managed, multi-tenant version of Ferro Labs AI Gateway. Isolated gateway instances, dashboard, billing, semantic caching, SSO, and enterprise security plugins."
+description: "Ferro Labs Managed is the hosted, multi-tenant AI Gateway: isolated tenants, semantic caching, SSO/SAML, and enterprise security plugins on the OSS engine."
 keywords: [Ferro Labs Managed, managed AI gateway, multi-tenant LLM proxy, hosted AI gateway, enterprise AI gateway SaaS]
 ---
 
 # Ferro Labs Managed — Managed AI Gateway
 
-Ferro Labs Managed is the managed, multi-tenant, hosted version of the Ferro Labs AI Gateway. Built on the same open-source engine that powers the self-hosted gateway, Ferro Labs Managed adds isolated tenant instances, a full-featured dashboard, usage-based billing, semantic caching, SSO/SAML, and enterprise security plugins — all operated by Ferro Labs so you never touch infrastructure.
+Ferro Labs Managed is the hosted, multi-tenant version of the Ferro Labs AI Gateway. Built on the same open-source engine that powers the self-hosted gateway — including its embedded dashboard, per-request cost tracking, and budget enforcement — Ferro Labs Managed adds isolated tenant instances, semantic caching, SSO/SAML, cross-tenant durable billing, and enterprise security plugins, all operated by Ferro Labs so you never touch infrastructure.
 
 ## Architecture
 
@@ -33,10 +33,14 @@ Ferro Labs Managed pricing, plans, and feature tiers will be announced when the 
 
 ## How Ferro Labs Managed Differs from Self-Hosting
 
-1. **Zero ops** — No servers to provision, no containers to update, no TLS certificates to rotate. Ferro Labs handles uptime, scaling, and upgrades.
-2. **Durable billing** — Built-in usage metering, spend tracking, and budget enforcement per team or project. No need to wire up your own billing pipeline.
-3. **Enterprise plugins** — Five additional guardrail plugins (`pii-redact`, `secret-scan`, `prompt-shield`, `schema-guard`, and `regex-guard`) are available exclusively on Ferro Labs Managed Pro and Enterprise plans.
-4. **Team management** — Invite teammates, assign roles, and scope API keys to projects — all from the dashboard.
+The self-hosted OSS gateway already ships an embedded dashboard, persists per-request cost (`cost_usd`) with spend attribution by key/provider/model, and enforces budgets with a `402 insufficient_quota` response when a limit is hit. Ferro Labs Managed builds on top of that engine rather than duplicating it — the differences are about running it hosted, at multi-tenant scale, with capabilities that don't make sense for a single self-hosted instance:
+
+1. **Multi-tenancy and isolation** — Each tenant gets its own isolated gateway instance and credential boundary, rather than the single shared instance a self-hosted deployment runs.
+2. **Zero ops** — No servers to provision, no containers to update, no TLS certificates to rotate. Ferro Labs handles uptime, scaling, and upgrades.
+3. **Semantic caching** — Similarity-based cache hits across paraphrased prompts, beyond the OSS response-cache plugin's exact-match semantics. See [Semantic cache](/ferrocloud/semantic-cache).
+4. **SSO/SAML and enterprise security plugins** — SAML 2.0/OIDC sign-in, directory sync, and five additional guardrail plugins (`pii-redact`, `secret-scan`, `prompt-shield`, `schema-guard`, and `regex-guard`) available exclusively on Ferro Labs Managed Pro and Enterprise plans.
+5. **Cross-tenant durable billing** — Consolidated usage metering and invoicing across teams, projects, and tenants, on top of the per-request cost tracking the OSS gateway already records locally.
+6. **Team management** — Invite teammates, assign roles, and scope API keys to projects — all from the dashboard.
 
 ## Join the Waitlist
 

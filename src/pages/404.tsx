@@ -7,7 +7,7 @@ const POPULAR_LINKS = [
   {to: '/getting-started/quickstart', label: 'Quickstart', desc: 'Run the gateway in 30 seconds'},
   {to: '/getting-started/configuration', label: 'Configuration', desc: 'Full config reference'},
   {to: '/integrations/overview', label: 'Integrations', desc: 'SDKs, frameworks, deployment'},
-  {to: '/guides/providers', label: 'Providers', desc: 'Connect 29 AI providers'},
+  {to: '/providers', label: 'Providers', desc: 'Connect 29 AI providers'},
   {to: '/api', label: 'API Reference', desc: 'OpenAI-compatible endpoints'},
   {to: '/guides/troubleshooting', label: 'Troubleshooting', desc: 'Fix common issues'},
 ];

@@ -1,26 +1,47 @@
 ---
 title: Gateway endpoints
-description: All HTTP endpoints exposed by the Ferro Labs AI Gateway — health checks, Prometheus metrics, OpenAI-compatible inference endpoints, model listing, and admin routes.
-keywords: [AI gateway endpoints, LLM proxy endpoints, OpenAI compatible endpoints, gateway HTTP API, Prometheus metrics endpoint]
+description: "Reference for every gateway HTTP endpoint: health and readiness probes, OpenAI-compatible routes, model listing, and the governed /v1/* pass-through proxy."
+keywords: [AI gateway endpoints, LLM proxy endpoints, OpenAI compatible endpoints, gateway HTTP API, Prometheus metrics endpoint, pass-through proxy]
 ---
 
-## Core endpoints
+The gateway exposes three kinds of routes: unauthenticated orchestrator
+probes, natively-handled OpenAI-compatible inference endpoints, and a
+transparent `/v1/*` pass-through proxy for everything else. Every
+natively-handled route accepts exactly one method (plus `HEAD` on a `GET`
+route) — a wrong method returns **405** with an `Allow` header naming what the
+route supports, never a silent fall-through to the pass-through proxy below
+it. See [Errors](/api-reference/errors) for the full status-code taxonomy.
 
-- `GET /health` - provider availability and model counts
-- `GET /metrics` - Prometheus metrics
-- `GET /dashboard` - minimal admin UI
-- `GET /v1/models` - aggregated model list
+## Health, readiness, and metrics
 
-## Model listing — `GET /v1/models`
+| Endpoint | Method | Auth | Description |
+|---|---|---|---|
+| `/health` | GET | none | Per-provider status, circuit state, and model count. Returns `503` with `status: "no_providers"` when no provider is registered. |
+| `/livez` | GET | none | Liveness — the process is up. Performs no dependency checks and always returns `200`. |
+| `/readyz` | GET | none | Readiness — the gateway can serve traffic. `200` when at least one configured target is routable; `503` with `reason: "no routable targets"` otherwise. The body lists every configured target's `routable` state and, if MCP servers are configured, their readiness. Answers are cached for 1 second so a probe burst costs one evaluation, not one per caller. |
+| `/metrics` | GET | `read_only` or `admin` scope | Prometheus metrics. |
+
+A target's provider can be registered (its credential env var is set) without
+being **routable** — routability also requires the target to appear in
+`targets[]` and its circuit breaker to be closed. `/health` and `/readyz`
+report circuit state per provider name; `/readyz` additionally reports it per
+configured target. See [Server settings](/operations/server-settings) for the
+readiness contract in full.
+
+## Model and capability discovery
+
+### `GET /v1/models`
 
 Returns the standard OpenAI envelope `{ "object": "list", "data": [...] }`. Each
-entry starts from the minimal OpenAI model shape (`id`, `object`, `owned_by`) and
-is enriched from the gateway model catalog. The extra fields are `omitempty`, so
-models without a catalog entry return only the base three and clients that read
-just `id`/`object`/`owned_by` keep working.
+entry starts from the minimal OpenAI model shape (`id`, `object`, `owned_by`,
+`created`) and is enriched from the gateway's model catalog when a catalog
+entry exists. The catalog fields are `omitempty`, so a model with no catalog
+entry returns only the base shape and clients that read just
+`id`/`object`/`owned_by` keep working.
 
 | Field | Type | Meaning |
 |---|---|---|
+| `created` | integer | Unix timestamp from live provider discovery; `0` when the model came from the catalog or an operator declaration instead |
 | `mode` | string | Model class, e.g. `chat`, `embedding`, `image` |
 | `context_window` | integer | Maximum input context in tokens |
 | `max_output_tokens` | integer | Maximum tokens the model can emit |
@@ -41,6 +62,7 @@ just `id`/`object`/`owned_by` keep working.
       "id": "gpt-4o",
       "object": "model",
       "owned_by": "openai",
+      "created": 0,
       "mode": "chat",
       "context_window": 128000,
       "max_output_tokens": 16384,
@@ -52,52 +74,166 @@ just `id`/`object`/`owned_by` keep working.
 }
 ```
 
-## OpenAI compatible endpoints
+The list is **one entry per model id**, owned by the first configured target
+that serves it (target order, not registration order). A model two targets
+both serve is listed once — the OpenAI `/v1/models` contract is keyed by
+`id`, so listing it twice would just mean a client's id-keyed map silently
+keeps whichever entry came last. The listing includes models the catalog and
+live discovery know about *and* any model an operator declared under
+`targets[].models` in config, but excludes anything the active routing
+strategy would refuse outright (for example, `cost-optimized` with
+`unpriced_strategy: skip` omits models the catalog has no price for). See
+[Configuration](/getting-started/configuration) for the `targets[].models`
+contract.
 
-- `POST /v1/chat/completions`
-- `POST /v1/completions` (legacy)
-- `POST /v1/embeddings`
-- `POST /v1/images/generations`
+### `GET /v1/capabilities`
 
-## Proxy pass-through
+Returns, per provider, which OpenAI chat parameters that provider forwards,
+translates, or cannot express — plus, for providers with a restricted
+`response_format` on image generation, the formats they accept.
 
-Any `/v1/*` request that the gateway does not handle natively is transparently
-reverse-proxied to the selected provider. These paths work **only** for
-providers that implement the proxiable-provider contract (they expose an upstream
-base URL and auth headers); for non-proxiable providers the request returns
-`501`. Commonly proxied paths include:
+```json
+{
+  "providers": {
+    "openai": { "temperature": "forward", "logit_bias": "forward" },
+    "anthropic": { "temperature": "forward", "logit_bias": "unsupported" }
+  },
+  "image_response_formats": {
+    "gemini": ["url"]
+  }
+}
+```
 
-- `/v1/files`
-- `/v1/batches`
-- `/v1/fine_tuning`
-- `/v1/responses`
-- `/v1/audio/*`
-- `/v1/images/edits`
-- `/v1/realtime`
+The providers listed are exactly the ones `/v1/models` lists models for — the
+set a configured `targets[]` entry actually routes to — so a parameter marked
+`forward` here is never `404`'d by a routed surface a moment later. See
+[Providers](/providers) for the full per-provider parameter matrix rendered
+as a table.
 
-## Provider selection
+## OpenAI-compatible endpoints
 
-For proxy routes, the gateway resolves the provider in this order:
+These routes are handled natively — request and response bodies are
+translated to and from each provider's own wire format, and every one of
+them goes through the shared routing pipeline (retry, circuit breaker,
+per-target concurrency, plugins, request logging).
 
-1. `X-Provider` header (for example: `openai` or `anthropic`)
-2. top-level `model` field in the JSON body (peeked without consuming the body)
+| Endpoint | Method | Notes |
+|---|---|---|
+| `/v1/chat/completions` | POST | Supports `stream: true`. |
+| `/v1/completions` | POST | Legacy — wrapped as a single-message chat completion and routed identically; no direct pass-through to a provider's own completions route exists. |
+| `/v1/embeddings` | POST | |
+| `/v1/images/generations` | POST | |
+| `/v1/audio/speech` | POST | Text-to-speech; JSON in, raw audio bytes out. |
+| `/v1/audio/transcriptions`, `/v1/audio/translations` | POST | Multipart file upload, capped at 25 MiB. |
+| `/v1/rerank` | POST | Cohere-v2 request/response contract. |
+| `/v1/moderations` | POST | OpenAI contract. |
 
-If neither resolves a provider, the gateway returns **`400`**
-(`provider_not_resolved`). If a provider resolves but does not support
-pass-through, it returns **`501`** (`proxy_not_supported`).
+Not every provider implements every surface — rerank and moderations are
+each supported by only a handful of the 30 providers. See
+[Providers](/providers) for the endpoint-support matrix.
 
-## Proxy request and response contract
+## Files and batches (`/v1/files`, `/v1/batches`)
+
+`/v1/files*` and `/v1/batches*` are a transparent pass-through to a single
+configured backend, `batch_target` — a `targets[].virtual_key` naming a
+provider with a batch-capable OpenAI-compatible surface (`openai`,
+`azure-openai`, `groq`, `novita`, `qwen`). Unlike every routed surface, these
+carry no `model`: a batch job references an uploaded `input_file_id`, and a
+bare `GET /v1/files/{id}` is an opaque provider-scoped id with no routing
+hint. So the gateway's model-based routing does not apply, ids are forwarded
+**native** (never rewritten), and every method the two APIs use (`GET`,
+`POST`, `DELETE`) is forwarded — there is no per-method `405` guard on this
+surface, because it *is* the pass-through to that backend.
+
+`batch_target` is optional. **When it is unset, or names a target whose
+provider is not batch-capable, every route under `/v1/files` and
+`/v1/batches` answers `501`.**
+
+## Responses (`/v1/responses`)
+
+`POST /v1/responses` routes **like chat**: it carries a `model` field, is
+resolved through the routing index, and runs the full governed pipeline
+(plugins, guardrails, circuit breaker, per-target concurrency, request log).
+Unlike the generic `/v1/*` pass-through below, it is also **priced** — the
+Responses API returns a `usage` object (on the JSON body, or on the terminal
+SSE event) that the gateway tees out as the response streams through,
+without altering a byte, so cost accounting and the request log's `cost_usd`
+column are populated rather than left unknown. `openai` and `xai` serve the
+OpenAI Responses contract byte-compatibly.
+
+The stateful **id sub-routes** — `GET`/`DELETE /v1/responses/{id}`,
+`POST /v1/responses/{id}/cancel`, `GET /v1/responses/{id}/input_items` —
+carry no model and reference an opaque, provider-scoped id, so they always
+pin to a single configured `responses_target` (the same native-id, zero-state
+pattern as batch). **They answer `501` when `responses_target` is unset**;
+`POST /v1/responses` (create) is unaffected and still routes by model. A
+provider that is not OpenAI-wire (see below) is refused `501` on this whole
+surface.
+
+## Proxy pass-through (`/v1/*`)
+
+Any `/v1/*` request the gateway does not handle natively — `/v1/fine_tuning`,
+`/v1/images/edits`, `/v1/vector_stores`, `/v1/realtime`, and any other OpenAI
+resource path — is transparently reverse-proxied to a provider. This is
+**not** a bypass: a pass-through request runs the same governance the routed
+surfaces do — `before_request`/`after_request`/`on_error` plugins (tagged
+`surface: "passthrough"`), the target's circuit breaker, its per-target
+concurrency limiter, `request_timeout` (when configured), and request
+logging. It differs from a routed request in two ways: there is **no automatic retry** (the request body has already been
+streamed upstream by the time a failure is known, and most of these endpoints
+are not idempotent — a retried `/v1/files` upload is a second file), and cost
+is recorded as **unpriced** rather than a known zero, since the response body
+is opaque by construction.
+
+### Provider resolution
+
+The gateway resolves a target in this order:
+
+1. `X-Provider` request header (for example `X-Provider: openai`)
+2. the top-level `model` field in the JSON body, resolved through the same
+   routing index `/v1/models` and the routed surfaces use — not a scan of
+   each provider's advisory `SupportsModel`
+
+| Condition | Response |
+|---|---|
+| `X-Provider` names a provider no configured target serves | `404 provider_not_found` <!-- drift-ok --> |
+| Body names a `model` no configured target owns | `404 model_not_found` — the same answer the natively-handled surfaces give for an unroutable model |
+| Neither `X-Provider` nor a `model` field is present | `400 provider_not_resolved` <!-- drift-ok --> |
+| The resolved provider does not implement the pass-through contract, or is a native (non-OpenAI-wire) provider | `501 proxy_not_supported` |
+| The request path contains a traversal segment (`..`, encoded or repeated) | `400 invalid_proxy_path`, refused before any credential is attached |
+
+A model owned by no configured target is **never forwarded** — the gateway
+does not guess. Eight providers are native-wire and always refuse the
+pass-through with `501`, serving the same functionality only through their
+translated native endpoints instead: `anthropic`, `azure-foundry`,
+`azure-openai`, `bedrock`, `cohere`, `gemini`, `replicate`, `vertex-ai`.
+`ollama-cloud` is the one provider with no pass-through support at all (it
+exposes no proxiable base URL or auth headers).
+
+### Request and response contract
 
 When a request is proxied, the gateway rewrites it before forwarding:
 
-- The inbound client `Authorization` header is **stripped** and replaced with the
-  resolved provider's own authentication headers (the gateway injects upstream
-  credentials — clients never send the provider key directly).
+- The inbound client `Authorization` header is **stripped** and replaced with
+  the resolved provider's own authentication headers — clients never send the
+  provider credential directly.
 - The `X-Provider` header is removed before the request leaves the gateway.
 - Standard `X-Forwarded-*` headers are set.
 
-On the response, the gateway adds:
+On the response, the gateway adds `X-Gateway-Provider` (the name of the
+provider that served the request) and scans non-2xx bodies to redact any
+echoed credential before it reaches the client.
 
-- `X-Gateway-Provider` — the name of the provider that served the request.
+An upstream connection failure surfaces as `502 upstream_error`. A
+before-request content guardrail configured on the deployment that cannot
+read the request body (a multipart upload, binary audio, or anything not
+JSON) refuses the request with `400` rather than forwarding it uninspected.
 
-An upstream connection failure surfaces as **`502`** (`proxy error: ...`).
+## Related
+
+- [API overview](/api-reference/overview)
+- [Errors](/api-reference/errors)
+- [Streaming](/api-reference/streaming)
+- [Admin API](/api-reference/admin)
+- [Providers](/providers)
+- [Server settings](/operations/server-settings)

@@ -1,7 +1,7 @@
 ---
 title: Troubleshooting
-description: "Solutions for common Ferro Labs AI Gateway issues — provider keys, circuit breakers, streaming, MCP timeouts, rate limiting, config reload, Docker health checks, and Prometheus scraping."
-keywords: [AI gateway troubleshooting, LLM proxy debugging, gateway error codes, AI gateway FAQ, gateway connection issues]
+description: "Diagnose Ferro Labs AI Gateway errors: model_not_found vs upstream_unavailable, circuit breakers, MCP stdio tool calls, A/B weights, and Prometheus scraping."
+keywords: [AI gateway troubleshooting, LLM proxy debugging, gateway error codes, circuit breaker open, MCP stdio debugging, Prometheus 401, insufficient_quota]
 ---
 
 import Head from '@docusaurus/Head';
@@ -11,12 +11,30 @@ import Head from '@docusaurus/Head';
     "@context": "https://schema.org",
     "@type": "TechArticle",
     "headline": "Ferro Labs AI Gateway Troubleshooting Guide",
-    "description": "Solutions for common Ferro Labs AI Gateway issues — provider keys, circuit breakers, streaming, MCP timeouts, rate limiting, config reload, Docker health checks, and Prometheus scraping.",
+    "description": "Diagnose Ferro Labs AI Gateway errors: model_not_found vs upstream_unavailable, circuit breakers, MCP stdio tool calls, A/B weights, and Prometheus scraping.",
     "url": "https://docs.ferrolabs.ai/guides/troubleshooting/"
   })}</script>
 </Head>
 
 This page covers the most common issues encountered when running the Ferro Labs AI Gateway and how to resolve them.
+
+## Reading the status code first
+
+Before chasing a symptom below, the HTTP status and `error.code` the gateway returned usually says which failure class you're in. All four routed surfaces (chat, streaming, embeddings, images) share one classifier, so the mapping is the same everywhere:
+
+| Status | `error.code` | What actually happened |
+| --- | --- | --- |
+| `404` | `model_not_found` | No configured target names this model. The provider was **never called** — this is a routing/config problem, not an outage. |
+| `503` | `upstream_unavailable` | The target's circuit breaker is **open**. The gateway refused the call without contacting the provider. |
+| `502` | `upstream_error` | The gateway called the provider and got a `5xx`, a connection failure, or another status it doesn't have a more specific answer for. |
+| `502` | `upstream_auth_error` | The provider returned `401`/`403`. This is the gateway's own credential being rejected, not yours — reported as an upstream fault so your key isn't blamed. |
+| `504` | `upstream_timeout` / `gateway_timeout` | The provider didn't respond in time, or the gateway's own `request_timeout` fired first. |
+| `429` | `rate_limit_exceeded` | The per-IP limiter, the `rate-limit` plugin, or the provider's own `429` passed through. |
+| `429` | `provider_saturated` | `targets[].concurrency` is full — this is backpressure, not a failure. |
+| `402` | `insufficient_quota` | The `budget` plugin: this API key is at or over `spend_limit_usd`. |
+| `400` | `request_rejected` | A `before_request` guardrail (word-filter, max-token) denied the request. |
+
+The rest of this page walks through the likely causes behind each of these.
 
 ## Provider key not picked up at startup
 
@@ -30,13 +48,13 @@ Check whether the variable is available inside the running container:
 
 ```bash
 # Docker
-docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' ferrogw | grep OPENAI
+docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' gateway | grep OPENAI
 
 # Local process
 env | grep OPENAI_API_KEY
 ```
 
-Provider credentials are read from environment variables (e.g. `OPENAI_API_KEY`), not from `config.yaml`. Make sure each target's `virtual_key` names a provider whose key env var is set:
+Provider credentials are read from environment variables (e.g. `OPENAI_API_KEY`), not from `config.yaml`. Each target's `virtual_key` names a provider — a provider is only registered when that provider's key env var is present:
 
 ```yaml
 targets:
@@ -44,40 +62,46 @@ targets:
   - virtual_key: anthropic   # requires ANTHROPIC_API_KEY in the environment
 ```
 
+A target naming an unregistered provider is a startup **warning**, not a crash — the gateway keeps serving what it can. Check the startup log for `WARN` lines naming unroutable targets, and `GET /readyz` for `routable: false` on the affected target.
+
 :::warning
-Never hard-code API keys. Provider keys are supplied only via environment variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, …); inject them through your orchestrator or `.env` file.
+Never hard-code API keys. Provider keys are supplied only via environment variables; inject them through your orchestrator or `.env` file.
 :::
 
 ---
 
 ## Circuit breaker opens immediately
 
-**Symptom:** After a single failed request the target is excluded from routing and the gateway returns errors or falls through to the next target.
+**Symptom:** After a handful of failed requests the target is excluded from routing and the gateway returns `503 upstream_unavailable` or silently shifts traffic to another target.
 
-**Likely cause:** `failure_threshold` is set to `1`, so one failure trips the breaker. Alternatively, the upstream provider is genuinely down.
+**Likely cause:** `failure_threshold` is set too low, or the upstream provider is genuinely failing.
 
 **Fix:**
 
-First, check upstream health:
+Check circuit state directly rather than guessing:
 
 ```bash
-curl -s http://localhost:8080/health | jq .
+curl -s http://localhost:8080/health | jq '.providers'
 ```
 
-If the provider is healthy, raise the threshold:
+`gateway_circuit_breaker_state{provider="<target>"}` on `/metrics` is the more precise signal — a series only exists for targets that actually have a breaker configured, so its absence means no breaker is set up at all for that target.
+
+If the provider is genuinely healthy, raise the threshold:
 
 ```yaml
 targets:
   - virtual_key: openai
     circuit_breaker:
-      failure_threshold: 5    # require 5 consecutive failures before opening
-      success_threshold: 2
-      timeout: "30s"
+      failure_threshold: 5    # default; require 5 consecutive failures before opening
+      success_threshold: 2    # default is 1; require 2 successes in half-open to close
+      timeout: "30s"           # default; how long the breaker stays open before probing again
 ```
 
 :::tip
-Set `failure_threshold` to at least `3` in production to avoid flapping on transient errors.
+Not every failure counts toward opening the breaker. A `429`, a client disconnect, an unsupported-parameter rejection, and a request shed by `targets[].concurrency` are all excluded — none of them is evidence the upstream is unhealthy. A `5xx`, a connection failure, and the streaming idle bound elapsing all do count.
 :::
+
+**A breaker is scoped to the `virtual_key`, not to an endpoint.** One breaker per target is shared across chat, streaming, embeddings, and image generation. A provider that only fails `/v1/embeddings` (a moved route, a per-surface auth failure) still trips the shared breaker and takes `/v1/chat/completions` down with it for that target, even though no chat request ever failed. If chat traffic breaks with no visible chat-side errors, check `GET /admin/logs?provider=<target>` across every surface, not just the one you're calling.
 
 ---
 
@@ -85,7 +109,7 @@ Set `failure_threshold` to at least `3` in production to avoid flapping on trans
 
 **Symptom:** Server-sent event (SSE) streams cut off before the model finishes generating. The client receives a partial response.
 
-**Likely cause:** A reverse proxy or load balancer between the client and the gateway is timing out before the stream completes.
+**Likely cause:** A reverse proxy or load balancer between the client and the gateway is timing out before the stream completes. `request_timeout`, if you have one configured, does **not** apply here — streaming is explicitly exempt from it.
 
 **Fix:**
 
@@ -102,44 +126,52 @@ location /v1/ {
 }
 ```
 
-If the gateway itself is timing the request out, check your target-level timeout configuration. Streaming requests to large models can take 60 seconds or more.
+300s is not an arbitrary number here — it matches the gateway's own **stream idle timeout**, a fixed 5-minute bound built into the transport layer (not a `config.yaml` key). If no new chunk arrives from the provider for 5 minutes, the gateway itself cuts the stream and that counts as a failure toward the target's circuit breaker. If you see truncations well under 5 minutes, the timeout is almost always in front of the gateway, not inside it.
 
 ---
 
-## MCP server connection timeout
+## MCP tool calls not firing, or timing out
 
-**Symptom:** Requests that should trigger tool calls return a plain text response, or the gateway logs `mcp connection timeout`.
+**Symptom:** A request that should trigger a tool call returns a plain-text response with no `tool_calls`, or `GET /readyz` reports an MCP server as `ready: false`.
 
-**Likely cause:** The MCP server URL is wrong, the server is not running, or a firewall is blocking the connection.
+MCP has two failure shapes worth telling apart: the gateway never offered the model any tools, or it offered them and a specific server is broken.
+
+### Tools were never offered to the model
+
+**Likely cause:** MCP tools are only injected when the incoming request carries **no `tools` of its own**. If your client SDK attaches even an empty `tools: []`, or its own function-calling definitions, the gateway leaves the request alone and passes it straight through — this is deliberate, so a caller's own tool contract is never silently mixed with the gateway's.
+
+**Fix:** Confirm the request body has no `tools` field, and check `GET /metrics` for `gateway_mcp_server_up{server_name=...}` — a value of `1` means the server itself is fine and the problem is upstream of MCP, in the request shape.
+
+### A specific server won't come up
+
+**Likely cause, stdio (`command:`) servers:** an unresolved `${VAR}` in `env:` or `headers:` fails the client at construction — the server is recorded as unready rather than omitted, and `GET /readyz` shows it under `mcp_servers` with `ready: false`. Since `/readyz` is unauthenticated, it never names the failure; check `GET /admin/health` (bearer token, `read_only` or `admin` scope) for the actual resolution error.
+
+**Likely cause, stdio subprocess crashed after startup:** the gateway drains the subprocess's stderr and treats its close as a death suspicion, confirmed by an MCP ping before withdrawing the server's tools. Set `LOG_LEVEL=debug` to see the drained stderr lines — they log at Debug, not Error, since stderr output is not itself an error per the MCP spec.
+
+**Likely cause, HTTP (`url:`) server unreachable:** post-handshake death is **not detected** for HTTP servers — an unreachable one keeps reporting `ready: true` with its tools still advertised, and every call to it simply fails per request. `required: true` cannot pull an instance out of rotation for a dead HTTP server; it only helps if the server was never reachable in the first place.
 
 **Fix:**
 
-Check the gateway logs for MCP-related errors:
-
-```bash
-docker logs ferrogw 2>&1 | grep -i mcp
-```
-
-Test connectivity from the gateway's network:
-
-```bash
-# From inside the container
-docker exec ferrogw curl -sf http://mcp-server:3001/mcp
-```
-
-Verify the URL and timeout in `config.yaml`:
-
 ```yaml
 mcp_servers:
+  # stdio: launched as a subprocess at gateway startup, lives for the process lifetime
   - name: filesystem
-    url: "http://mcp-server:3001/mcp"   # must be reachable from the gateway
-    timeout_seconds: 15                   # increase if the server is slow to respond
-    max_call_depth: 5
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/data"]
+    env:                        # the subprocess inherits NO gateway environment —
+      SOME_TOKEN: ${SOME_TOKEN} # only PATH/HOME/LANG/TMPDIR plus exactly what's listed here
+    timeout_seconds: 30         # per tool call; default 30
+    required: false             # default; true gates /readyz on THIS server alone
+
+  # Streamable HTTP: the gateway connects to a running endpoint
+  - name: database
+    url: "https://mcp-db.internal/mcp"
+    headers:
+      Authorization: "Bearer ${MCP_DB_TOKEN}"
+    allowed_tools: ["query_readonly", "list_tables"]   # empty = all discovered tools
 ```
 
-:::tip
-If the MCP server runs in a separate Docker Compose service, make sure both services are on the same Docker network.
-:::
+Set `mcp_servers[].required: true` only for a server the deployment genuinely cannot serve without — an unready required server takes `/readyz` to `503`, gating **all** traffic through the instance, including requests that use no tools at all.
 
 ---
 
@@ -147,11 +179,11 @@ If the MCP server runs in a separate Docker Compose service, make sure both serv
 
 **Symptom:** Clients receive `429 Too Many Requests` well below expected traffic levels.
 
-**Likely cause:** The `burst` value is too low, or the global rate limit is being confused with the per-key limit. The global bucket drains across all clients combined.
+**Likely cause:** Two independent limiters exist, and it's easy to tune the wrong one. The per-IP HTTP limiter (`RATE_LIMIT_RPS` / `RATE_LIMIT_BURST` env vars, default 20 rps / burst 40) applies to every request before it reaches any plugin. The `rate-limit` **plugin** is a separate global + per-key + per-user token bucket configured under `plugins:`.
 
 **Fix:**
 
-Review your rate-limit plugin configuration. The global `requests_per_second` applies to **all traffic**, while `key_rpm` applies per API key:
+Review your rate-limit plugin configuration. The global `requests_per_second` applies to **all traffic**, `key_rpm` applies per API key, and `user_rpm` applies per `Request.User`:
 
 ```yaml
 plugins:
@@ -161,55 +193,41 @@ plugins:
     enabled: true
     config:
       requests_per_second: 100   # global: 100 req/s across all clients
-      burst: 200                 # allow short bursts up to 200
+      burst: 100                 # burst capacity; defaults to requests_per_second
       key_rpm: 60                # per-key: max 60 requests per minute
 ```
 
-If you only want per-key limits and no global cap, omit `requests_per_second` and `burst`:
+:::warning
+`0` means the opposite thing on each limiter. `RATE_LIMIT_RPS=0` **disables** the per-IP HTTP limiter. `requests_per_second: 0` on the `rate-limit` plugin is a **load error** — a rate of zero would blackhole all traffic, so `ferrogw validate` rejects it at startup. To turn the plugin off, set `enabled: false` instead of a zero rate.
+:::
 
-```yaml
-plugins:
-  - name: rate-limit
-    type: guardrail
-    stage: before_request
-    enabled: true
-    config:
-      key_rpm: 60
-```
-
-Rate checks execute in order: **global, then per-key, then per-user**. The first exceeded limit triggers the `429`.
+Check order is: global bucket, then per-key, then per-user — the first exceeded limit wins. A gateway-decided `429` (from either limiter) carries a `Retry-After: 1` header; if your client isn't backing off, confirm it reads that header rather than guessing its own schedule.
 
 ---
 
 ## Config reload not taking effect
 
-**Symptom:** You edited `config.yaml` but the gateway behavior has not changed.
+**Symptom:** You edited `config.yaml` and restarted the gateway, but the running behavior hasn't changed.
 
-**Likely cause:** The `GATEWAY_CONFIG` environment variable points to a different file, or the edited file has a YAML syntax error that causes a silent reload failure.
+**Likely cause:** The gateway resolves its active config from **three sources, in order of precedence**: a config previously written through `PUT /admin/config` (kept in `CONFIG_STORE_BACKEND`), then the file at `GATEWAY_CONFIG`, then a built-in default. There is no filesystem watch — editing the file only ever takes effect on the **next process start**, and even then, a persisted store config wins over it every time.
 
 **Fix:**
 
-Confirm which file the gateway is loading:
+Check the startup log line `active config resolved` — it names the winning `source` (`store`, `file`, or `defaults`). If a `CONFIG_STORE_BACKEND` is configured and something was ever pushed via `PUT /admin/config` or the dashboard, that stored config **always** wins over your file, and you'll additionally see a `WARN` log: `config file superseded by the persisted config`.
 
 ```bash
+# Confirm which file GATEWAY_CONFIG points at
 echo $GATEWAY_CONFIG
-# Should print the path to the config file you edited
+
+# Discard the stored config so the file applies again on next restart
+curl -X DELETE http://localhost:8080/admin/config \
+  -H "Authorization: Bearer $MASTER_KEY"
 ```
 
-Validate the YAML before reloading:
+Validate the YAML before restarting — decoding is strict (unknown keys are rejected) and a syntax error or unknown field exits the process rather than falling back silently:
 
 ```bash
-# Quick syntax check (requires yq or python)
-yq eval '.' config.yaml > /dev/null && echo "YAML OK" || echo "YAML ERROR"
-
-# Or with Python
-python3 -c "import yaml; yaml.safe_load(open('config.yaml'))"
-```
-
-After fixing any syntax issues, restart the gateway:
-
-```bash
-docker restart ferrogw
+ferrogw validate config.yaml
 ```
 
 ---
@@ -222,7 +240,7 @@ docker restart ferrogw
 
 **Fix:**
 
-If you use the `response-cache` plugin, set a maximum entry count:
+If you use the `response-cache` plugin, cap its size. It's a **multi-stage** plugin: it must be listed at both `before_request` (serve a hit) and `after_request` (store a new entry) with **byte-for-byte identical config**, or the gateway refuses to start. A single-stage entry silently never stores anything.
 
 ```yaml
 plugins:
@@ -231,15 +249,22 @@ plugins:
     stage: before_request
     enabled: true
     config:
-      max_entries: 5000         # cap the cache to prevent unbounded growth
-      max_age: 300              # entry TTL in seconds
+      max_age: 300          # TTL in seconds; default 300
+      max_entries: 1000     # LRU capacity; default 1000. <= 0 disables storing
+  - name: response-cache
+    type: transform
+    stage: after_request
+    enabled: true
+    config:
+      max_age: 300
+      max_entries: 1000
 ```
 
-Profile the gateway with pprof to identify the source of allocations:
+Profile the gateway with pprof to identify the source of allocations (requires `ENABLE_PPROF=true`; the routes are `admin`-scope only):
 
 ```bash
-# Requires LOG_LEVEL=debug or pprof enabled
-curl -s http://localhost:8080/debug/pprof/heap > heap.out
+curl -s -H "Authorization: Bearer $MASTER_KEY" \
+  http://localhost:8080/debug/pprof/heap > heap.out
 go tool pprof heap.out
 ```
 
@@ -253,135 +278,105 @@ In Docker deployments, set memory limits on the container (`--memory=2g`) so an 
 
 **Symptom:** Docker reports the gateway container as `unhealthy` even though it is processing requests.
 
-**Likely cause:** The healthcheck is hitting the wrong port or path.
+**Likely cause:** The official image (`ghcr.io/ferro-labs/ai-gateway` — a single multi-platform manifest, no separate `-amd64`/`-arm64` tag) ships its own `HEALTHCHECK` **baked in at build time**: `wget -qO- http://localhost:8080/readyz`. It's `/readyz` rather than `/livez` on purpose — a liveness check alone would keep routing traffic to an instance whose targets are all unroutable. If you set `PORT` to anything other than `8080` without also overriding the healthcheck, the baked-in check keeps probing the old port, gets a connection refused, and the container reports `unhealthy` even though the gateway itself is fine on the new port.
 
 **Fix:**
 
-The gateway exposes its health endpoint at `/health` on the configured `PORT` (default `8080`). Make sure your `docker-compose.yml` or `Dockerfile` healthcheck matches:
+If you're not overriding the healthcheck, you don't need to configure one — the image already does the right thing. If you *do* define a `healthcheck:` block (in Compose or a derived `Dockerfile`), it fully replaces the image's built-in one, so keep the port in sync with `PORT`:
 
 ```yaml
 services:
   gateway:
-    image: ghcr.io/ferrolabs/ferrogw:latest
+    image: ghcr.io/ferro-labs/ai-gateway:latest
     ports:
       - "8080:8080"
+    environment:
+      - PORT=8080   # keep this in sync with the healthcheck URL below
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/readyz"]
       interval: 10s
       timeout: 5s
       retries: 3
       start_period: 5s
 ```
 
-If you changed the port via the `PORT` environment variable, update the healthcheck URL to match:
-
-```yaml
-environment:
-  PORT: "9090"
-healthcheck:
-  test: ["CMD", "curl", "-sf", "http://localhost:9090/health"]
-```
+`/health` is a valid alternative if you specifically want the deep diagnostic payload (per-provider circuit state, model counts), but it always answers `200` regardless of whether any target is actually routable — it isn't the "should traffic reach this instance" signal that `/readyz` is.
 
 ---
 
 ## Prometheus scrape returning empty
 
-**Symptom:** Prometheus shows no metrics for the gateway, or `curl` to the metrics endpoint returns an empty body.
+**Symptom:** Prometheus shows no metrics for the gateway (`up == 0`), or `curl` to the metrics endpoint returns `401`.
 
-**Likely cause:** The metrics endpoint is not enabled, or Prometheus is scraping the wrong port.
+**Likely cause:** `/metrics` requires a bearer token carrying the `read_only` or `admin` scope, same as every other admin read route. A scrape config with no `Authorization` header gets `401`, and Prometheus reports the target as down — this, not a disabled endpoint, is by far the most common cause.
 
 **Fix:**
 
-Verify the metrics endpoint is responding:
+Verify the endpoint requires auth:
 
 ```bash
-curl -s http://localhost:8080/metrics | head -20
+curl -i http://localhost:8080/metrics
+# HTTP/1.1 401 Unauthorized — confirms this, not a routing/port problem
 ```
 
-If you get a `404`, confirm that metrics are enabled in your server settings. The gateway exposes Prometheus metrics at `GET /metrics` by default on the same port as the API.
+Mint a dedicated `read_only` key for scraping — don't reuse `MASTER_KEY` in a Prometheus config file that might leak:
 
-Check your `prometheus.yml` targets:
+```bash
+curl -X POST http://localhost:8080/admin/keys \
+  -H "Authorization: Bearer $MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "prometheus-scraper", "scopes": ["read_only"]}'
+# -> {"id": "...", "key": "fgw_...", "scopes": ["read_only"], ...}
+```
 
 ```yaml
 scrape_configs:
-  - job_name: ferrogw
+  - job_name: ferro-ai-gateway
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials: fgw_the_key_returned_above
     static_configs:
-      - targets: ["gateway-host:8080"]   # must match the gateway's PORT
-    scrape_interval: 15s
+      - targets: ["gateway-host:8080"]
 ```
 
-:::tip
-If the gateway runs inside Docker Compose and Prometheus runs in the same stack, use the service name as the host: `targets: ["gateway:8080"]`.
-:::
-
----
-
-## 502 Bad Gateway from all providers
-
-**Symptom:** Every request returns `502 Bad Gateway` regardless of the target provider.
-
-**Likely cause:** All circuit breakers are open because every upstream provider is failing (or was recently failing).
-
-**Fix:**
-
-Check health to see provider status:
-
-```bash
-curl -s http://localhost:8080/health | jq .
-```
-
-If the upstream providers have recovered but circuit breakers are still open, they will close automatically after the configured `timeout` period. You can speed this up by restarting the gateway:
-
-```bash
-docker restart ferrogw
-```
-
-To prevent all breakers from opening simultaneously, stagger your `failure_threshold` and `timeout` values across targets:
-
-```yaml
-targets:
-  - virtual_key: openai
-    circuit_breaker:
-      failure_threshold: 5
-      timeout: "30s"
-  - virtual_key: anthropic
-    circuit_breaker:
-      failure_threshold: 3
-      timeout: "20s"
-  - virtual_key: gemini
-    circuit_breaker:
-      failure_threshold: 5
-      timeout: "45s"
-```
+See [Monitoring and operations](/operations/monitoring) for the full metrics reference and alerting rules.
 
 ---
 
 ## Model not found error
 
-**Symptom:** The gateway returns an error like `model "gpt4o" not found` even though you have an OpenAI target configured.
+**Symptom:** The gateway returns `404` with `error.code: "model_not_found"`, even though you have a target configured for that provider.
 
-**Likely cause:** The model name in the request does not match any entry in the built-in catalog or your configured models list. Model names are exact-match (e.g. `gpt-4o`, not `gpt4o`).
+**Likely cause:** No configured target's routing index (catalog + live discovery + `targets[].models`) contains the exact model id the request named. This check runs **before** any plugin — a request that fails it never spends a rate-limit token or a budget dollar.
 
 **Fix:**
 
-List available models through the gateway:
+List models the gateway currently believes it can route:
 
 ```bash
 curl -s http://localhost:8080/v1/models \
   -H "Authorization: Bearer $API_KEY" | jq '.data[].id'
 ```
 
-If you need to map a custom name to a real model, use model aliases in your config:
+If a name doesn't need mapping — you just want a friendly alias — use `aliases`, resolved before routing:
 
 ```yaml
-model_aliases:
-  - alias: "our-default"
-    model: "gpt-4o-mini"
-    target_key: openai
-  - alias: "our-smart"
-    model: "claude-sonnet-4-20250514"
-    target_key: anthropic
+aliases:
+  our-default: gpt-4o-mini
+  our-smart: claude-sonnet-4-20250514
 ```
+
+If a target genuinely serves a model neither the catalog nor live discovery knows about yet (a brand-new id, a preview name, a self-hosted deployment), declare it on the target instead — this is additive only, and never restricts what a target already serves:
+
+```yaml
+targets:
+  - virtual_key: gemini
+    models:
+      - gemini-2.5-flash-preview   # exact id only; wildcards are rejected at load
+```
+
+Remember that under `single`, `conditional`, and `content-based` modes, only the **named** target is ever attempted — a model owned solely by a *different* configured target is still a 404 under those modes, however many targets the config lists overall.
 
 ---
 
@@ -389,20 +384,11 @@ model_aliases:
 
 **Symptom:** Requests that should match a `prompt_regex` rule are falling through to the default target instead.
 
-**Likely cause:** The regex pattern is not matching due to case sensitivity, or the pattern has a syntax error that prevented compilation.
+**Likely cause:** The regex pattern is not matching due to case sensitivity, or `content_conditions[].type` is not one of the values the gateway accepts.
 
 **Fix:**
 
-Regex patterns are compiled at gateway startup. An invalid regex causes a **startup error** (not a silent failure). Check gateway startup logs for compilation errors.
-
-If the gateway started successfully but routing is wrong, test your regex independently:
-
-```bash
-# Test a Go-compatible regex
-echo "Write a Python function to sort a list" | grep -P '(?i)(code|function|class|def |import )'
-```
-
-Remember that the gateway uses Go regular expressions. Use `(?i)` at the start for case-insensitive matching:
+`content_conditions[].type` is a closed set (`prompt_contains`, `prompt_not_contains`, `prompt_regex`) validated at startup — an unknown type or an uncompilable regex is a **startup error**, not a silent fallback. If the gateway started successfully, the pattern compiled; the issue is what it matches against.
 
 ```yaml
 strategy:
@@ -413,23 +399,23 @@ strategy:
       target_key: deepseek
 ```
 
+The gateway uses Go regular expressions — use `(?i)` at the start for case-insensitive matching, as above.
+
 ---
 
 ## A/B test weights not reflecting expected distribution
 
-**Symptom:** You configured an 80/20 split but after 50 requests you see a 60/40 ratio.
+**Symptom:** You configured an 80/20 split but after 50 requests you see a 60/40 ratio, or a variant seems to get no traffic at all.
 
-**Likely cause:** With small sample sizes, random weighted selection naturally deviates from the configured weights. This is expected statistical variance, not a bug.
+**Likely cause:** Either normal statistical variance at a small sample size, or a misunderstanding of what `weight: 0` does.
 
 **Fix:**
 
-Weight normalization works as follows: weights are relative, so `80` and `20` produce an 80/20 split. Over a large number of requests (1,000+) the actual distribution converges toward the configured ratio.
+Weights are relative: `80` and `20` produce an 80/20 split, converging as request volume grows. A few things to check:
 
-A few things to check:
-
-- **Zero weights**: If a variant has weight `0`, it is treated as weight `1` and receives roughly equal traffic with other zero-weight variants. This is by design to prevent accidentally silencing a variant.
-- **Circuit breakers**: If the target backing one variant has its circuit breaker open, all traffic goes to the remaining variant.
-- **Sample size**: At 100 requests with an 80/20 split, a 70/30 or 90/10 actual split is within normal variance. Collect at least 1,000 requests before evaluating.
+- **`weight: 0` means zero traffic — a hard drain, not "treated as weight 1".** This is the deliberate way to stop routing to a variant without removing it from the config. A **negative** weight, or a variant set with **every** weight at zero, is rejected at startup (`ferrogw validate` catches it) — it never reaches request time.
+- **Circuit breakers**: an open-circuit target is skipped in every routing mode, ab-test included, so its traffic share silently moves to the remaining variant(s).
+- **Sample size**: at 100 requests with an 80/20 configured split, a 70/30 or 90/10 observed split is within normal variance. Collect 1,000+ requests before evaluating.
 
 ```yaml
 strategy:
@@ -447,43 +433,65 @@ strategy:
 
 ## Budget plugin not persisting across restarts
 
-**Symptom:** After restarting the gateway, all API key spend counters reset to zero.
+**Symptom:** After restarting the gateway, all API key spend counters reset to zero. A key that was denied with `402 insufficient_quota` before the restart is admitted again immediately after.
 
-**Likely cause:** This is by design. The budget plugin uses an **in-memory** store that resets on every restart.
+**Likely cause:** This is by design. The `budget` plugin's spend store is **in-memory** and resets on every restart; it's a soft, session-scoped cap, not durable billing enforcement.
 
 **Fix:**
 
-The open-source budget plugin is intended for session-scoped soft limits and development quotas. If you need durable spend tracking that survives restarts:
+Make sure both stage entries exist with byte-identical config — `budget` needs `before_request` (check) *and* `after_request` (record spend), sharing state through `store_id`, or the check side never sees what the record side wrote:
 
-- Use [Ferro Labs Managed](https://ferrolabs.ai) for persistent billing enforcement with database-backed spend tracking.
-- As a workaround, export spend data via the `/metrics` endpoint before restarting and use your monitoring system for budget alerts.
+```yaml
+plugins:
+  - name: budget
+    type: guardrail
+    stage: before_request
+    enabled: true
+    config:
+      store_id: default
+      spend_limit_usd: 10.0
+      input_per_m_tokens: 3.0
+      output_per_m_tokens: 15.0
+  - name: budget
+    type: guardrail
+    stage: after_request
+    enabled: true
+    config:
+      store_id: default
+      spend_limit_usd: 10.0
+      input_per_m_tokens: 3.0
+      output_per_m_tokens: 15.0
+```
+
+Two more things worth knowing: an **unauthenticated** request (`ALLOW_UNAUTHENTICATED_PROXY=true`) is never tracked or capped, since spend keys on the credential's `api_key_id`; and `max_keys` (default 10,000) evicts the **lowest-spend** key when full, silently restarting its counter at `$0`.
+
+If you need durable spend tracking that survives restarts:
+
+- Use [Ferro Labs Managed](https://ferrolabs.ai) for database-backed spend tracking.
+- As a workaround, export `/metrics` before restarting and alert from your monitoring system.
 
 :::warning
-Do not rely on the in-memory budget plugin as your only spend control in production. A restart silently resets all limits. Use it as a safety net alongside durable billing in Ferro Labs Managed.
+Do not rely on the in-memory budget plugin as your only spend control in production. A restart silently resets every limit.
 :::
 
 ---
 
 ## Request logger not writing to Postgres
 
-**Symptom:** The `request-logger` plugin is enabled but no rows appear in the Postgres `request_logs` table.
+**Symptom:** The `request-logger` plugin is enabled but no rows appear in the Postgres request-log table.
 
-**Likely cause:** The connection string (DSN) is wrong, Postgres is not reachable from the gateway, or the database/table does not exist.
+**Likely cause:** Persistence is a **process-level** setting, not a per-plugin one — `backend` and `dsn` inside the plugin's `config:` block are obsolete and silently ignored (with a startup warning). The actual target is `REQUEST_LOG_STORE_BACKEND` / `REQUEST_LOG_STORE_DSN`.
 
 **Fix:**
 
-Test connectivity from the gateway's environment:
+Set the store at the process level:
 
 ```bash
-# From inside the Docker container
-docker exec ferrogw sh -c \
-  'pg_isready -h postgres -p 5432 -U ferro || echo "Postgres unreachable"'
-
-# Or test with curl/psql from the host
-psql "postgres://ferro:ferro_secret@localhost:5432/ferro_logs" -c "SELECT 1;"
+REQUEST_LOG_STORE_BACKEND=postgres
+REQUEST_LOG_STORE_DSN=postgres://ferro:ferro_secret@postgres:5432/ferro_logs?sslmode=disable
 ```
 
-Verify the plugin config matches the actual Postgres host, port, user, and database:
+Then enable `persist: true` on the plugin. `request-logger` is **three-stage** — `before_request`, `after_request`, *and* `on_error` — all with identical config. The `on_error` entry isn't optional: a failed request never reaches `after_request`, so without it, failures vanish from `GET /admin/logs` entirely.
 
 ```yaml
 plugins:
@@ -494,26 +502,41 @@ plugins:
     config:
       level: info
       persist: true
-      backend: postgres
-      dsn: postgres://ferro:ferro_secret@postgres:5432/ferro_logs?sslmode=disable
+  - name: request-logger
+    type: logging
+    stage: after_request
+    enabled: true
+    config:
+      level: info
+      persist: true
+  - name: request-logger
+    type: logging
+    stage: on_error
+    enabled: true
+    config:
+      level: info
+      persist: true
+```
+
+Test connectivity from the gateway's environment, and check gateway logs for a startup warning naming the misconfigured store:
+
+```bash
+docker exec gateway sh -c \
+  'pg_isready -h postgres -p 5432 -U ferro || echo "Postgres unreachable"'
+
+docker logs gateway 2>&1 | grep -i "request log\|postgres"
 ```
 
 :::tip
 If you run both the gateway and Postgres in Docker Compose, use the Compose service name (e.g. `postgres`) as the hostname, not `localhost`.
 :::
 
-Check gateway logs for connection errors:
-
-```bash
-docker logs ferrogw 2>&1 | grep -i postgres
-```
-
 ---
 
 ## Related pages
 
 - [Configuration](/getting-started/configuration)
-- [Plugins](/guides/plugins)
+- [Plugins](/plugins)
 - [MCP integration](/guides/mcp)
-- [Observability](/guides/observability)
+- [Error reference](/api-reference/errors)
 - [Monitoring and operations](/operations/monitoring)
