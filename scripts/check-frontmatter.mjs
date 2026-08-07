@@ -32,30 +32,40 @@ function frontmatterOf(content) {
   return match ? match[1] : null;
 }
 
-function hasDescription(frontmatter) {
-  if (!frontmatter) return false;
+// SERPs truncate around ~160 chars; below ~50 a description is too thin to
+// carry the page's primary term. Enforce bounds so drift fails the build.
+const MIN_LEN = 50;
+const MAX_LEN = 170;
+
+function descriptionOf(frontmatter) {
+  if (!frontmatter) return null;
   const line = frontmatter
     .split('\n')
     .find((l) => l.trimStart().startsWith('description:'));
-  if (!line) return false;
+  if (!line) return null;
   const value = line.slice(line.indexOf('description:') + 'description:'.length).trim();
-  return value.replace(/^["']|["']$/g, '').length > 0;
+  return value.replace(/^["']|["']$/g, '');
 }
 
-const offenders = collectDocs(DOCS_DIR).filter((file) => {
-  const frontmatter = frontmatterOf(readFileSync(file, 'utf8'));
-  return !hasDescription(frontmatter);
-});
+const offenders = [];
+for (const file of collectDocs(DOCS_DIR)) {
+  const desc = descriptionOf(frontmatterOf(readFileSync(file, 'utf8')));
+  if (!desc) {
+    offenders.push({file, problem: 'missing description'});
+  } else if (desc.length < MIN_LEN) {
+    offenders.push({file, problem: `description too short (${desc.length} < ${MIN_LEN} chars)`});
+  } else if (desc.length > MAX_LEN) {
+    offenders.push({file, problem: `description too long (${desc.length} > ${MAX_LEN} chars, SERPs truncate)`});
+  }
+}
 
 if (offenders.length > 0) {
+  console.error(`\n✖ ${offenders.length} doc(s) with a frontmatter \`description:\` problem\n`);
+  for (const {file, problem} of offenders) console.error(`  - ${file}: ${problem}`);
   console.error(
-    `\n✖ ${offenders.length} doc(s) missing a non-empty frontmatter \`description:\`\n`,
-  );
-  for (const file of offenders) console.error(`  - ${file}`);
-  console.error(
-    '\nEvery doc needs a unique 140–160 char description for SEO. Add one and retry.\n',
+    `\nEvery doc needs a unique ${MIN_LEN}–${MAX_LEN} char description (aim ~140–160) for SEO. Fix and retry.\n`,
   );
   process.exit(1);
 }
 
-console.log('✓ All docs have a frontmatter description.');
+console.log(`✓ All docs have a frontmatter description within ${MIN_LEN}–${MAX_LEN} chars.`);
