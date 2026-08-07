@@ -327,8 +327,19 @@ body {
   }
 
   .theme-doc-toc-desktop .table-of-contents__link {
-    font-size: 0.97rem;
-    line-height: 1.55;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: #64748b;
+  }
+  [data-theme='dark'] .theme-doc-toc-desktop .table-of-contents__link {
+    color: #94a3b8;
+  }
+  .theme-doc-toc-desktop .table-of-contents__link:hover {
+    color: var(--ifm-heading-color);
+  }
+  .theme-doc-toc-desktop .table-of-contents__link--active {
+    color: var(--ifm-color-primary);
+    font-weight: 600;
   }
 }
 
@@ -419,6 +430,29 @@ body {
   opacity: 1;
 }
 
+/* Nested (child) links: no leading icon — the parent row carries the icon, and
+   an icon per child is what made the tree read cluttered. Children get a hair
+   less vertical padding and an indent guide instead. */
+/* NB: .theme-doc-sidebar-menu IS the top-level .menu__list UL, so a descendant
+   .menu__list is exactly the nested (child) lists. */
+.theme-doc-sidebar-menu .menu__list .menu__link::before {
+  display: none;
+}
+.theme-doc-sidebar-menu .menu__list .menu__link {
+  font-size: 0.86rem;
+  padding-top: 0.28rem;
+  padding-bottom: 0.28rem;
+}
+
+/* Indent guide: a subtle rule down the left of every expanded child list, so
+   the hierarchy is visible without per-item decoration. */
+.theme-doc-sidebar-menu .menu__list {
+  border-left: 1px solid var(--ifm-toc-border-color);
+  margin-left: 1rem;
+  padding-left: 0.3rem;
+  margin-top: 0.1rem;
+}
+
 /* Intro (root) item */
 .theme-doc-sidebar-menu > .menu__list > .menu__list-item:first-child > .menu__link {
   --ferro-icon: url('/assets/icons/home.svg');
@@ -431,6 +465,13 @@ body {
 .menu__list-item.sbi-code > .menu__list-item-collapsible > .menu__link {
   --ferro-icon: url('/assets/icons/code.svg');
 }
+.menu__list-item.sbi-server > .menu__list-item-collapsible > .menu__link {
+  --ferro-icon: url('/assets/icons/server.svg');
+}
+.menu__list-item.sbi-refresh > .menu__list-item-collapsible > .menu__link {
+  --ferro-icon: url('/assets/icons/refresh.svg');
+}
+.menu__list-item.sbi-brackets > .menu__list-item-collapsible > .menu__link,
 .menu__list-item.sbi-brackets > .menu__link {
   --ferro-icon: url('/assets/icons/brackets.svg');
 }
@@ -509,9 +550,29 @@ body {
 .menu__link[href$='/api-reference/admin/']              { --ferro-icon: url('/assets/icons/gear.svg'); }
 .menu__link[href$='/api-reference/errors/']             { --ferro-icon: url('/assets/icons/shield.svg'); }
 
-/* Hide the default Docusaurus triangle caret — replaced by custom chevron */
+/* Link-categories (label navigates to the overview page) keep their separate
+   caret button — restyled to match the custom '›' chevron instead of the
+   default triangle, so expandable rows are visibly expandable. */
 .menu__caret {
-  display: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.35rem;
+}
+.menu__caret::before {
+  content: '›';
+  background: none;
+  width: auto;
+  height: auto;
+  font-size: 1.15rem;
+  font-weight: 600;
+  line-height: 1;
+  opacity: 0.45;
+  transform: rotate(90deg);
+  transition: transform 0.15s ease;
+}
+.menu__list-item--collapsed .menu__caret::before {
+  transform: none;
 }
 
 .menu__list-item-collapsible > .menu__link {
