@@ -277,32 +277,27 @@ body {
     padding-right: 0;
   }
 
-  /* ── Centered primary nav ──────────────────────────────────────────
-     Pin the brand left and the GitHub/theme/search group right (both out
-     of flow), so the primary links sit centered and balanced in the bar. */
-  .navbar__inner {
-    position: relative;
-  }
-
-  .navbar__brand {
-    position: absolute;
-    left: 0;
-    top: 50%;
-    transform: translateY(-50%);
-    margin: 0;
-  }
-
+  /* ── Balanced primary nav ──────────────────────────────────────────
+     The link run centers in the free space BETWEEN the brand and the
+     right group via auto margins on its two ends, so the gap on each side is
+     equal. (True page-centering looked off: the right group — GitHub +
+     theme + search — is ~2x the brand's width, leaving a huge hole after
+     the logo and a cramped one before GitHub.) */
   .navbar__items:not(.navbar__items--right) {
-    width: 100%;
-    justify-content: center;
     gap: 0.5rem;
   }
-
+  .navbar__brand {
+    /* cancel the container gap between brand and the first link, so the
+       auto margins on the link run are exactly symmetric */
+    margin-right: -0.5rem;
+  }
+  .navbar__brand + .navbar__item {
+    margin-left: auto;
+  }
+  .navbar__items:not(.navbar__items--right) > :last-child {
+    margin-right: auto;
+  }
   .navbar__items--right {
-    position: absolute;
-    right: 0;
-    top: 50%;
-    transform: translateY(-50%);
     padding-right: 0;
   }
 
