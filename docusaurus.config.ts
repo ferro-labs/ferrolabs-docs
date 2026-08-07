@@ -41,6 +41,10 @@ const structuredData = {
       applicationCategory: 'DeveloperApplication',
       operatingSystem: 'Linux, macOS, Windows, Docker, Kubernetes',
       softwareVersion: '1.4.1',
+      // Folded in from the former homepage-local block, so the site keeps ONE
+      // SoftwareApplication entity instead of two conflicting copies.
+      license: 'https://opensource.org/licenses/Apache-2.0',
+      sameAs: ['https://github.com/ferro-labs/ai-gateway'],
       description:
         'Open-source, high-performance AI gateway written in Go. Routes LLM requests across 30 providers and 2,500+ models through a single OpenAI-compatible API, with 6 built-in plugins, 8 routing strategies, MCP tool-calling, and an embedded dashboard.',
       url: SITE_URL,
@@ -53,6 +57,15 @@ const structuredData = {
       url: SITE_URL,
       name: 'Ferro Labs AI Gateway Docs',
       publisher: { '@id': `${SITE_URL}/#organization` },
+      // Sitelinks Search Box: /search/?q= is a real, working endpoint.
+      potentialAction: {
+        '@type': 'SearchAction',
+        target: {
+          '@type': 'EntryPoint',
+          urlTemplate: `${SITE_URL}/search/?q={search_term_string}`,
+        },
+        'query-input': 'required name=search_term_string',
+      },
     },
   ],
 };
@@ -125,6 +138,19 @@ const config: Config = {
         crossorigin: 'anonymous',
       },
     },
+    // @font-face lives here as a raw <style> rather than in custom.css:
+    // webpack rewrites url() in bundled CSS to a hashed /assets/fonts/ copy,
+    // which made browsers download each font twice (preloaded /fonts/ copy +
+    // hashed CSS copy). Raw head CSS keeps the URLs verbatim, so the preload
+    // above and the @font-face below name the same file.
+    {
+      tagName: 'style',
+      attributes: {},
+      innerHTML: [
+        "@font-face{font-family:'Inter Variable';src:url('/fonts/inter-variable-latin.woff2') format('woff2-variations');font-weight:100 900;font-style:normal;font-display:swap}",
+        "@font-face{font-family:'JetBrains Mono Variable';src:url('/fonts/jetbrains-mono-variable-latin.woff2') format('woff2-variations');font-weight:100 800;font-style:normal;font-display:swap}",
+      ].join(''),
+    },
     // Discoverable machine-readable corpus for AI answer engines.
     {
       tagName: 'link',
@@ -154,6 +180,11 @@ const config: Config = {
         label: 'API Reference',
         route: '/api',
         showNavLink: false,
+        // Self-hosted, version-pinned standalone bundle (vendored from
+        // @scalar/api-reference). The plugin's default is UNPINNED jsdelivr
+        // "latest" — a supply-chain risk and uncacheable. Keep the filename
+        // version in sync when upgrading @scalar/docusaurus.
+        cdn: '/js/scalar-api-reference-1.64.0.js',
         configuration: {
           spec: { url: '/openapi.yaml' },
           defaultHttpClient: { targetKey: 'shell', clientKey: 'curl' },
@@ -223,9 +254,9 @@ const config: Config = {
         },
         sitemap: {
           // Google ignores changefreq/priority; lastmod (from git) is the only
-          // field worth emitting. Keep the search page and redirect stubs out.
+          // field worth emitting. Keep the search and 404 pages out.
           lastmod: 'date',
-          ignorePatterns: ['/search/**'],
+          ignorePatterns: ['/search/**', '/404/**'],
           filename: 'sitemap.xml',
         },
         gtag: {

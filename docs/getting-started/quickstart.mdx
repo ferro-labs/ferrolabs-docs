@@ -92,7 +92,7 @@ curl http://localhost:8080/v1/chat/completions \
   -d '{
     "model": "gpt-4o-mini",
     "messages": [
-      {"role": "user", "content": "Hello from Ferro AI Gateway"}
+      {"role": "user", "content": "Hello from Ferro Labs AI Gateway"}
     ]
   }'
 ```
@@ -109,7 +109,7 @@ client = OpenAI(base_url="http://localhost:8080/v1", api_key="fgw_your-master-ke
 
 response = client.chat.completions.create(
     model="gpt-4o-mini",
-    messages=[{"role": "user", "content": "Hello from Ferro AI Gateway"}],
+    messages=[{"role": "user", "content": "Hello from Ferro Labs AI Gateway"}],
 )
 print(response.choices[0].message.content)
 ```
@@ -123,7 +123,7 @@ client = FerroClient(base_url="http://localhost:8080/v1", api_key="fgw_your-mast
 
 response = client.chat.completions.create(
     model="gpt-4o-mini",
-    messages=[{"role": "user", "content": "Hello from Ferro AI Gateway"}],
+    messages=[{"role": "user", "content": "Hello from Ferro Labs AI Gateway"}],
 )
 print(response.content)
 ```
@@ -143,7 +143,7 @@ const client = new OpenAI({
 
 const response = await client.chat.completions.create({
   model: "gpt-4o-mini",
-  messages: [{ role: "user", content: "Hello from Ferro AI Gateway" }],
+  messages: [{ role: "user", content: "Hello from Ferro Labs AI Gateway" }],
 });
 console.log(response.choices[0]?.message.content);
 ```
@@ -160,7 +160,7 @@ const client = new FerroClient({
 
 const response = await client.chat.completions.create({
   model: "gpt-4o-mini",
-  messages: [{ role: "user", content: "Hello from Ferro AI Gateway" }],
+  messages: [{ role: "user", content: "Hello from Ferro Labs AI Gateway" }],
 });
 console.log(response.choices[0]?.message.content);
 ```

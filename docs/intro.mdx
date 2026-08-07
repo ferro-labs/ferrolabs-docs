@@ -79,16 +79,7 @@ The dashboard now ships **embedded** in the OSS binary, all four core surfaces s
 Need multi-tenancy, hosted infrastructure, semantic caching, and enterprise security plugins on top of the OSS engine? [Ferro Labs Managed](/ferrocloud/overview) is in early access — [join the waitlist →](https://www.ferrolabs.ai/).
 :::
 
-<script type="application/ld+json">
-{JSON.stringify({
-  "@context": "https://schema.org",
-  "@type": "SoftwareApplication",
-  "name": "Ferro Labs AI Gateway",
-  "applicationCategory": "DeveloperApplication",
-  "operatingSystem": "Linux, macOS, Windows, Docker, Kubernetes",
-  "softwareVersion": "1.4.1",
-  "license": "https://opensource.org/licenses/Apache-2.0",
-  "url": "https://github.com/ferro-labs/ai-gateway",
-  "description": "Open-source, high-performance AI gateway built in Go. Routes traffic across 30 LLM providers and 2,500+ models through a single OpenAI-compatible API, with 8 routing strategies, 6 plugins, MCP tool-calling, and an embedded dashboard."
-})}
-</script>
+{/* No page-local JSON-LD here: the site-wide graph in docusaurus.config.ts
+    already declares the one canonical SoftwareApplication entity. A second,
+    un-@id'd copy with a different url/description read as a conflicting
+    duplicate entity to consumers. */}

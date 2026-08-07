@@ -13,6 +13,10 @@
 /guides/providers-config/        /providers/configuration/      301
 /guides/admin-auth/              /guides/auth/                  301
 
+# ── Pages deleted in earlier releases that never got a redirect ──
+/guides/workspace-sign-in-domains/  /guides/auth/                      301
+/sdks/overview/                     /integrations/sdk/openai-compatible/  301
+
 # ── Earlier moves (were client-side only; promoted to real 301s) ──
 /guides/deployment/docker-compose/  /integrations/deployment/docker-compose/  301
 /guides/kubernetes/                 /integrations/deployment/kubernetes/      301

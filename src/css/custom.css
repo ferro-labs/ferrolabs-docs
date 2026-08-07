@@ -4,25 +4,11 @@
  * work well for content-centric websites.
  */
 
-/* Inter + JetBrains Mono, self-hosted as single latin variable faces (one file
-   each, full weight axis). The real 100–900 range lets the browser reach true
-   400/500/600/700 rather than synthesizing bold from a single weight. This is
-   the standard enterprise devtools-docs pairing (Inter for prose/UI, JetBrains
-   Mono for code); both are OFL-1.1 licensed and vendored under /fonts/. */
-@font-face {
-  font-family: 'Inter Variable';
-  src: url('/fonts/inter-variable-latin.woff2') format('woff2-variations');
-  font-weight: 100 900;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: 'JetBrains Mono Variable';
-  src: url('/fonts/jetbrains-mono-variable-latin.woff2') format('woff2-variations');
-  font-weight: 100 800;
-  font-style: normal;
-  font-display: swap;
-}
+/* Inter + JetBrains Mono @font-face declarations live in docusaurus.config.ts
+   headTags as a raw <style>, NOT here: webpack rewrites url() in this file to
+   a hashed /assets/fonts/ copy, which made the browser download every font
+   TWICE (the /fonts/ preload copy + the hashed CSS copy). The head <style>
+   keeps the /fonts/ URLs verbatim so preload and @font-face share one file. */
 
 /* You can override the default Infima variables here. */
 :root {

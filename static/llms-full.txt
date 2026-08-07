@@ -2642,7 +2642,7 @@ curl -i http://localhost:8080/v1/chat/completions \
 
 `@ferro-labs-ai/sdk/langchain` will ship a `FerroChatModel` mirroring the Python adapter — typed Ferro extras (`routeTag`, `templateId`, `templateVariables`), `traceId` on `response_metadata`, native LangGraph.js compatibility. The npm scope `@ferro-labs-ai` is already reserved.
 
-Track progress: [Ferro AI Gateway roadmap](https://github.com/ferro-labs/ai-gateway/blob/main/ROADMAP.md).
+Track progress: [Ferro Labs AI Gateway roadmap](https://github.com/ferro-labs/ai-gateway/blob/main/ROADMAP.md).
 
 ## Runnable example
 
@@ -3070,7 +3070,7 @@ curl http://localhost:8080/v1/chat/completions \
 
 [`llama-index-llms-ferrolabsai 0.0.1`](https://pypi.org/project/llama-index-llms-ferrolabsai/) is a reserved PyPI placeholder. The `0.1.0` release will ship a real `FerroLabsAI` LLM class implementing LlamaIndex's `LLM` interface (`complete`, `chat`, `stream_chat`, `achat`), with `trace_id`, `provider`, and `cost_usd` surfaced on every response. It will later be upstreamed into [`run-llama/llama_index`](https://github.com/run-llama/llama_index) for LlamaIndex hub discoverability.
 
-Track progress: [Ferro AI Gateway roadmap](https://github.com/ferro-labs/ai-gateway/blob/main/ROADMAP.md).
+Track progress: [Ferro Labs AI Gateway roadmap](https://github.com/ferro-labs/ai-gateway/blob/main/ROADMAP.md).
 
 ## Runnable example
 
@@ -4284,7 +4284,7 @@ curl http://localhost:8080/v1/chat/completions \
   -d '{
     "model": "gpt-4o-mini",
     "messages": [
-      {"role": "user", "content": "Hello from Ferro AI Gateway"}
+      {"role": "user", "content": "Hello from Ferro Labs AI Gateway"}
     ]
   }'
 ```
@@ -4301,7 +4301,7 @@ client = OpenAI(base_url="http://localhost:8080/v1", api_key="fgw_your-master-ke
 
 response = client.chat.completions.create(
     model="gpt-4o-mini",
-    messages=[{"role": "user", "content": "Hello from Ferro AI Gateway"}],
+    messages=[{"role": "user", "content": "Hello from Ferro Labs AI Gateway"}],
 )
 print(response.choices[0].message.content)
 ```
@@ -4315,7 +4315,7 @@ client = FerroClient(base_url="http://localhost:8080/v1", api_key="fgw_your-mast
 
 response = client.chat.completions.create(
     model="gpt-4o-mini",
-    messages=[{"role": "user", "content": "Hello from Ferro AI Gateway"}],
+    messages=[{"role": "user", "content": "Hello from Ferro Labs AI Gateway"}],
 )
 print(response.content)
 ```
@@ -4334,7 +4334,7 @@ const client = new OpenAI({
 
 const response = await client.chat.completions.create({
   model: "gpt-4o-mini",
-  messages: [{ role: "user", content: "Hello from Ferro AI Gateway" }],
+  messages: [{ role: "user", content: "Hello from Ferro Labs AI Gateway" }],
 });
 console.log(response.choices[0]?.message.content);
 ```
@@ -4350,7 +4350,7 @@ const client = new FerroClient({
 
 const response = await client.chat.completions.create({
   model: "gpt-4o-mini",
-  messages: [{ role: "user", content: "Hello from Ferro AI Gateway" }],
+  messages: [{ role: "user", content: "Hello from Ferro Labs AI Gateway" }],
 });
 console.log(response.choices[0]?.message.content);
 ```
@@ -5584,7 +5584,7 @@ response = client.chat.completions.create(
 # After (Ferro) — plain model ID, provider chosen by routing config
 response = client.chat.completions.create(
     model="gpt-4o",
-    messages=[{"role": "user", "content": "Hello from Ferro AI Gateway"}],
+    messages=[{"role": "user", "content": "Hello from Ferro Labs AI Gateway"}],
 )
 ```
 
@@ -6539,7 +6539,7 @@ Source: https://docs.ferrolabs.ai/guides/troubleshooting/
     "@context": "https://schema.org",
     "@type": "TechArticle",
     "headline": "Ferro Labs AI Gateway Troubleshooting Guide",
-    "description": "Diagnose Ferro AI Gateway errors: model_not_found vs upstream_unavailable, circuit breakers, MCP stdio tool calls, A/B weights, and Prometheus scraping.",
+    "description": "Diagnose Ferro Labs AI Gateway errors: model_not_found vs upstream_unavailable, circuit breakers, MCP stdio tool calls, A/B weights, and Prometheus scraping.",
     "url": "https://docs.ferrolabs.ai/guides/troubleshooting/"
   })}</script>
 </Head>
@@ -8220,22 +8220,6 @@ docker compose down -v
 # Deploy to Fly.io
 Source: https://docs.ferrolabs.ai/integrations/deployment/fly-io/
 ================================================================================
-
-<Head>
-  <script type="application/ld+json">{JSON.stringify({
-    "@context": "https://schema.org",
-    "@type": "HowTo",
-    "name": "Deploy the Ferro Labs AI Gateway to Fly.io",
-    "description": "Deploy the Ferro Labs AI Gateway on Fly.io with secrets, Postgres, and health checks.",
-    "step": [
-      {"@type": "HowToStep", "name": "Initialize the app", "url": "https://docs.ferrolabs.ai/integrations/deployment/fly-io/#step-1-initialize-the-app"},
-      {"@type": "HowToStep", "name": "Set secrets", "url": "https://docs.ferrolabs.ai/integrations/deployment/fly-io/#step-2-set-secrets"},
-      {"@type": "HowToStep", "name": "Attach Fly Postgres", "url": "https://docs.ferrolabs.ai/integrations/deployment/fly-io/#step-3-attach-fly-postgres-optional"},
-      {"@type": "HowToStep", "name": "Deploy", "url": "https://docs.ferrolabs.ai/integrations/deployment/fly-io/#step-4-deploy"},
-      {"@type": "HowToStep", "name": "Verify", "url": "https://docs.ferrolabs.ai/integrations/deployment/fly-io/#step-5-verify"}
-    ]
-  })}</script>
-</Head>
 
 # Deploy to Fly.io
 
@@ -10043,7 +10027,7 @@ Complete API reference for the `ferrolabsai` Python SDK.
 
 ## FerroClient
 
-The synchronous client for interacting with the Ferro AI Gateway. `AsyncFerroClient` has an identical interface but returns coroutines.
+The synchronous client for interacting with the Ferro Labs AI Gateway. `AsyncFerroClient` has an identical interface but returns coroutines.
 
 ```python
 from ferrolabsai import FerroClient
@@ -11279,19 +11263,10 @@ The dashboard now ships **embedded** in the OSS binary, all four core surfaces s
 Need multi-tenancy, hosted infrastructure, semantic caching, and enterprise security plugins on top of the OSS engine? [Ferro Labs Managed](/ferrocloud/overview) is in early access — [join the waitlist →](https://www.ferrolabs.ai/).
 :::
 
-<script type="application/ld+json">
-{JSON.stringify({
-  "@context": "https://schema.org",
-  "@type": "SoftwareApplication",
-  "name": "Ferro Labs AI Gateway",
-  "applicationCategory": "DeveloperApplication",
-  "operatingSystem": "Linux, macOS, Windows, Docker, Kubernetes",
-  "softwareVersion": "1.4.1",
-  "license": "https://opensource.org/licenses/Apache-2.0",
-  "url": "https://github.com/ferro-labs/ai-gateway",
-  "description": "Open-source, high-performance AI gateway built in Go. Routes traffic across 30 LLM providers and 2,500+ models through a single OpenAI-compatible API, with 8 routing strategies, 6 plugins, MCP tool-calling, and an embedded dashboard."
-})}
-</script>
+{/* No page-local JSON-LD here: the site-wide graph in docusaurus.config.ts
+    already declares the one canonical SoftwareApplication entity. A second,
+    un-@id'd copy with a different url/description read as a conflicting
+    duplicate entity to consumers. */}
 
 
 
