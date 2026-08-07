@@ -7871,13 +7871,11 @@ Revoking a session never touches the API key it came from.
 
 
 ================================================================================
-# Why Ferro Labs AI Gateway
+# LiteLLM & Portkey Alternatives — an Honest AI Gateway Comparison
 Source: https://docs.ferrolabs.ai/guides/why-ferro/
 ================================================================================
 
-# Why Ferro Labs AI Gateway
-
-AI gateways differ more than they look. Here's how to think about the choice.
+Looking for a **LiteLLM alternative**, a self-hosted **Portkey replacement**, or just an honest comparison before picking an AI gateway? AI gateways differ more than they look — this page compares Ferro Labs AI Gateway with LiteLLM, Portkey, Bifrost, and Cloudflare AI Gateway on the criteria that actually decide the choice, and tells you when each one is the better fit (including when it isn't us).
 
 ## Decision Table
 
@@ -7921,7 +7919,7 @@ When you need multi-tenant isolation, a dashboard, enterprise plugins, and someo
 
 These are concrete differences, not marketing claims.
 
-### 1. Zero runtime dependencies
+### 1. Single static binary
 
 Ferro Labs AI Gateway compiles to a single Go binary. The Docker image is under 20 MB. There is no interpreter, no virtual environment, no package manager involved at deploy time. This matters when you are running in constrained environments or want reproducible deploys.
 
@@ -7949,11 +7947,14 @@ Ferro Labs OSS is Apache 2.0 licensed. There are no "community" vs. "enterprise"
 Bifrost is MIT-licensed, which is also permissive. LiteLLM is Apache 2.0 as well. Portkey and Cloudflare AI Gateway are proprietary. Pick the license model that matches your organization's requirements.
 :::
 
-## Related pages
+## Ready to switch?
+
+Each migration is a base-URL swap plus a config translation — the guides walk through both:
 
 - [Migrating from LiteLLM](/guides/migration-litellm)
 - [Migrating from Portkey](/guides/migration-portkey)
-- [Benchmarks](/benchmarks)
+- [Migrating from OpenRouter](/guides/migration-openrouter)
+- [Benchmarks](/benchmarks) — the latency numbers behind the table above
 
 
 
@@ -11192,9 +11193,11 @@ Source: https://docs.ferrolabs.ai/
 
 # Ferro Labs AI Gateway
 
-You're calling one LLM provider directly. When they go down, your product goes down. When they raise prices, you scramble. When you want to try a new model, you rewrite integration code. When you need observability, you build it yourself.
+**Ferro Labs AI Gateway** is an **open-source, self-hosted AI gateway**: a single Go binary that sits in front of all your LLM traffic, speaks an OpenAI-compatible API, and routes requests across **30 providers and 2,500+ models** — with safety and cost policies enforced by built-in plugins, production observability, and a React **dashboard embedded in the binary**, served at the gateway's own root. No client code changes required.
 
-**Ferro Labs AI Gateway** is a single Go binary that sits in front of all your LLM traffic. It speaks an OpenAI-compatible API, routes requests across **30 providers and 2,500+ models**, enforces safety and cost policies with built-in plugins, and emits production observability — all without changing your client code. A React **dashboard is embedded in the binary** and served at the gateway's own root.
+Why put a gateway in front at all? Because you're calling one LLM provider directly: when they go down, your product goes down. When they raise prices, you scramble. When you want to try a new model, you rewrite integration code. When you need observability, you build it yourself.
+
+Built for production from the start: sub-millisecond p99 routing overhead ([benchmarks](/benchmarks)), retries and circuit breakers under [every routing strategy](/routing), per-target concurrency limits, and `/livez` + `/readyz` probes for orchestrators.
 
 :::tip Ready to jump in?
 [Quickstart — up and running in a couple of minutes →](/getting-started/quickstart)

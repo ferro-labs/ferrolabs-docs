@@ -175,16 +175,16 @@ const config: Config = {
 
   plugins: [
     [
-      '@scalar/docusaurus',
+      // Local fork of @scalar/docusaurus (src/plugins/scalar-lazy): upstream
+      // injects its ~1 MB standalone bundle into EVERY page; the fork loads it
+      // only when the /api route mounts. The bundle itself is self-hosted and
+      // version-pinned (vendored from @scalar/api-reference — the upstream
+      // default is unpinned jsdelivr "latest"). Keep the filename version in
+      // sync when upgrading @scalar/docusaurus.
+      './src/plugins/scalar-lazy',
       {
-        label: 'API Reference',
         route: '/api',
-        showNavLink: false,
-        // Self-hosted, version-pinned standalone bundle (vendored from
-        // @scalar/api-reference). The plugin's default is UNPINNED jsdelivr
-        // "latest" — a supply-chain risk and uncacheable. Keep the filename
-        // version in sync when upgrading @scalar/docusaurus.
-        cdn: '/js/scalar-api-reference-1.64.0.js',
+        bundle: '/js/scalar-api-reference-1.64.0.js',
         configuration: {
           spec: { url: '/openapi.yaml' },
           defaultHttpClient: { targetKey: 'shell', clientKey: 'curl' },

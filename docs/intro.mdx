@@ -1,6 +1,6 @@
 ---
 title: Ferro Labs AI Gateway
-description: "Open-source Go AI gateway: 30 providers and 2,500+ models behind one OpenAI-compatible API — 8 routing strategies, 6 plugins, MCP, and an embedded dashboard."
+description: "Open-source, self-hosted AI gateway in Go: 30 providers and 2,500+ models behind one OpenAI-compatible API — routing strategies, plugins, MCP, embedded dashboard."
 keywords: [AI gateway, open source AI gateway, LLM proxy, OpenAI compatible, Go LLM proxy, self-hosted LLM gateway, AI middleware, multi-provider AI, LLM routing, AI gateway v1.4]
 slug: /
 hide_table_of_contents: false
@@ -8,9 +8,11 @@ hide_table_of_contents: false
 
 # Ferro Labs AI Gateway
 
-You're calling one LLM provider directly. When they go down, your product goes down. When they raise prices, you scramble. When you want to try a new model, you rewrite integration code. When you need observability, you build it yourself.
+**Ferro Labs AI Gateway** is an **open-source, self-hosted AI gateway**: a single Go binary that sits in front of all your LLM traffic, speaks an OpenAI-compatible API, and routes requests across **30 providers and 2,500+ models** — with safety and cost policies enforced by built-in plugins, production observability, and a React **dashboard embedded in the binary**, served at the gateway's own root. No client code changes required.
 
-**Ferro Labs AI Gateway** is a single Go binary that sits in front of all your LLM traffic. It speaks an OpenAI-compatible API, routes requests across **30 providers and 2,500+ models**, enforces safety and cost policies with built-in plugins, and emits production observability — all without changing your client code. A React **dashboard is embedded in the binary** and served at the gateway's own root.
+Why put a gateway in front at all? Because you're calling one LLM provider directly: when they go down, your product goes down. When they raise prices, you scramble. When you want to try a new model, you rewrite integration code. When you need observability, you build it yourself.
+
+Built for production from the start: sub-millisecond p99 routing overhead ([benchmarks](/benchmarks)), retries and circuit breakers under [every routing strategy](/routing), per-target concurrency limits, and `/livez` + `/readyz` probes for orchestrators.
 
 :::tip Ready to jump in?
 [Quickstart — up and running in a couple of minutes →](/getting-started/quickstart)
