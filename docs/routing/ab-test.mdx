@@ -1,0 +1,65 @@
+---
+title: A/B test routing strategy
+description: "Configure strategy.mode: ab-test in Ferro Labs AI Gateway to weight-split live traffic across labelled variants for model migration or cost comparison."
+keywords: [ab test routing, a/b test, weighted variants, model migration, ai-gateway strategy.mode, ab_variants, traffic split]
+---
+
+A/B test splits live traffic across two or more labelled variants by weighted random draw. It optimizes for **comparing** models or providers under real production traffic — measuring quality, cost, or latency differences during a migration — not for failover order (`fallback`), even load distribution (`loadbalance`), or measured speed (`least-latency`). Every request is answered by one real provider: this is **not** a shadow-traffic or mirroring mode. Set `strategy.mode: ab-test` to use it.
+
+## Behaviour
+
+`ab-test` is a **pool mode**: on a request failure, the pipeline advances to the next configured target rather than reporting the failure back to the caller — but only after the strategy has already committed to a drawn variant (see [Gotchas](#gotchas)).
+
+`ABTest.SelectTargets` (`internal/strategies/abtest.go`) filters `ab_variants[]` down to those whose provider is registered and whose `SupportsModel(req.Model)` returns true, then makes one weighted random draw (`weightedPick`) over that eligible subset. The drawn variant's `target_key` leads the returned order, followed by every configured `targets[].virtual_key` (de-duplicated) as pipeline fallback candidates. `SelectTargets` returns `nil` — the caller reports `404 model_not_found` — when no variant is both eligible for the requested model and positively weighted.
+
+## Config keys
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `strategy.mode` | string | — | Set to `ab-test` (hyphen). |
+| `strategy.ab_variants[].target_key` | string | — | Must name one of the configured `targets[].virtual_key`. |
+| `strategy.ab_variants[].weight` | float64 | — | Relative traffic share = `weight / sum(weights)`. `0` drains the variant (no traffic); negative or an all-zero set is rejected at load. |
+| `strategy.ab_variants[].label` | string | — | Human-readable variant id (e.g. `control`, `challenger`), logged with every routed request. |
+
+## Minimal working YAML
+
+```yaml
+strategy:
+  mode: ab-test
+  ab_variants:
+    - target_key: openai
+      weight: 70
+      label: control
+    - target_key: anthropic
+      weight: 30
+      label: challenger
+
+targets:
+  - virtual_key: openai
+  - virtual_key: anthropic
+```
+
+## When to use
+
+- Comparing model quality or cost across providers under real production traffic before committing fully.
+- A gradual migration: shift weights toward the challenger over successive deploys, then remove the control once satisfied.
+- Draining a variant to zero traffic (`weight: 0`) before removing it from the config, the same pattern `loadbalance` uses for targets.
+
+## Gotchas
+
+- **Not shadow traffic.** Every request is routed to exactly one real provider — the drawn variant. There is no mirrored or duplicated call to compare responses side by side; comparison happens by analyzing labelled logs after the fact.
+- **The draw is over eligible variants, not all configured variants.** Only variants whose provider is registered and that support the requested model are candidates. If `control` serves `gpt-4o` and `challenger` doesn't, every `gpt-4o` request goes to `control` regardless of the configured weight — the effective split differs per model when variants serve different model sets.
+- **The variant label is logged per request** for analytics — this is how you attribute observed outcomes back to `control` vs. `challenger` after the fact.
+- **`weight: 0` drains a variant.** A drained variant is excluded from the draw entirely; it can never win, even if it's technically eligible.
+- **`ab_variants[].weight` is what counts — `targets[].weight` is ignored under this mode.** `targets[].weight` only matters under `loadbalance`; don't expect it to influence the A/B split.
+- **Weights are relative, not percentages.** `weight: 70` and `weight: 30` behave identically to `weight: 7` and `weight: 3` — only the ratio matters.
+- **This is a pool mode, but the draw itself is not retried.** Once a variant is drawn, that variant's target leads; on failure the pipeline advances through the remaining configured targets like any pool mode. There is no re-draw — a failed request does not get a second chance at a different variant within the same routing decision.
+- **A negative weight or an all-zero weight set is a load error**, not a runtime failure — `ferrogw validate` and gateway startup reject it before traffic is served.
+
+## Related
+
+- [Routing overview](/routing)
+- [Load balance](/routing/loadbalance)
+- [Fallback](/routing/fallback)
+- [Cost-optimized](/routing/cost-optimized)
+- [Configuration reference](/getting-started/configuration)

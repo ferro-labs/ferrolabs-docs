@@ -1,13 +1,13 @@
 ---
 title: Server settings
-description: Complete runtime environment-variable reference for the Ferro Labs AI Gateway — config path, listen port, the MASTER_KEY credential, rate limiting, model-catalog override, pprof, and the security-sensitive dev toggles.
-keywords: [AI gateway server settings, environment variables LLM proxy, gateway runtime config, gateway port settings, CORS AI gateway, MASTER_KEY, ALLOW_UNAUTHENTICATED_PROXY, FERRO_MODEL_CATALOG_URL]
+description: Environment-variable reference for the AI Gateway — GATEWAY_ENV production mode, MASTER_KEY, rate limiting, CORS, catalog timeouts, pprof, and OTEL tracing.
+keywords: [AI gateway server settings, environment variables LLM proxy, gateway runtime config, GATEWAY_ENV production mode, MASTER_KEY, RATE_LIMIT_RPS, CORS_ORIGINS, FERRO_MODEL_CATALOG_TIMEOUT]
 ---
 
 The gateway is configured entirely through environment variables (operational settings) and the [config file](/getting-started/configuration) (routing, plugins, tracing). This page is the reference for the environment variables read at startup.
 
 :::warning Security-sensitive settings
-A few variables relax authentication or expose internals and must **never** be enabled in production. They are marked **(security-sensitive)** below: `MASTER_KEY`, `ALLOW_UNAUTHENTICATED_PROXY`, and `ENABLE_PPROF`.
+A few variables relax authentication or expose internals and must **never** be enabled on a network-reachable deployment. They are marked **(security-sensitive)** below: `MASTER_KEY`, `ALLOW_UNAUTHENTICATED_PROXY`, and `ENABLE_PPROF`. Set `GATEWAY_ENV=production` (see [Production mode](#production-mode)) so the two most dangerous misconfigurations — an unauthenticated proxy and a `*` CORS origin — refuse to start instead of shipping silently.
 :::
 
 ## Quick reference
@@ -16,13 +16,18 @@ A few variables relax authentication or expose internals and must **never** be e
 |---|---|---|
 | `GATEWAY_CONFIG` | _(none)_ | Path to the JSON or YAML config file (format auto-detected) |
 | `PORT` | `8080` | HTTP listen port |
-| `MASTER_KEY` | _(none)_ | **(security-sensitive)** Single admin + proxy credential; generate with `ferrogw init` |
+| `GATEWAY_ENV` | _(none)_ | Set to `production` to turn on startup safety checks — see [Production mode](#production-mode) |
+| `MASTER_KEY` | _(none)_ | **(security-sensitive)** Bootstrap/break-glass admin + proxy credential; generate with `ferrogw init` |
 | `ALLOW_UNAUTHENTICATED_PROXY` | `false` | **(security-sensitive)** Disables `/v1` auth — local dev only |
-| `ENABLE_PPROF` | `false` | **(security-sensitive)** Exposes `/debug/pprof` profiling endpoints |
-| `RATE_LIMIT_RPS` | _(off)_ | Per-IP requests/second; enables the rate-limit middleware when set |
-| `RATE_LIMIT_BURST` | `0` | Per-IP burst capacity for the rate-limit middleware |
+| `CORS_ORIGINS` | _(none)_ | Comma-separated allowed origins, matched **literally** (no wildcard) |
+| `TRUSTED_PROXIES` | loopback | Comma-separated CIDRs whose `X-Forwarded-For`/`X-Real-IP` are honored for client-IP resolution |
+| `RATE_LIMIT_RPS` | `20` | Per-IP requests/second; the middleware is **on by default** — `0` disables it |
+| `RATE_LIMIT_BURST` | `40` | Per-IP burst capacity |
+| `ENABLE_PPROF` | `false` | **(security-sensitive)** Exposes `/debug/pprof` profiling endpoints (admin scope required) |
 | `FERRO_MODEL_CATALOG_URL` | GitHub releases | Override the model-catalog source (air-gapped / custom pricing) |
-| `CORS_ORIGINS` | _(none)_ | Comma-separated list of allowed origins |
+| `FERRO_MODEL_CATALOG_TIMEOUT` | `10s` | Bounds the startup catalog fetch; `0` skips the remote fetch entirely |
+| `FERRO_MODEL_DISCOVERY_INTERVAL` | _(off)_ | Opt-in live `/models` refresh interval (Go duration, e.g. `6h`) |
+| `FERRO_OLLAMA_MODELS` | _(none)_ | Comma-separated Ollama model list narrowing `/v1/models` |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 | `LOG_FORMAT` | `json` | `json` or `text` (human-readable for dev) |
 
@@ -30,58 +35,94 @@ A few variables relax authentication or expose internals and must **never** be e
 
 - `GATEWAY_CONFIG` - path to the JSON or YAML config file (format auto-detected). When unset the gateway boots from environment-derived defaults (a fallback strategy over every provider whose key is present).
 - `PORT` - HTTP listen port (default `8080`).
-- `CORS_ORIGINS` - comma-separated list of allowed origins.
 - `LOG_LEVEL` - logging level (`debug`, `info`, `warn`, `error`; default `info`).
 - `LOG_FORMAT` - log output format; set `LOG_FORMAT=text` for human-readable development logs.
 
 ## Credentials and auth
 
-- `MASTER_KEY` - **(security-sensitive)** the single bearer credential the gateway accepts for both admin (`/admin/*`) and proxy (`/v1/*`) requests. Generate one with `ferrogw init`. If unset, the gateway starts but logs a warning and admin routes have no valid credential. Treat it like a root password — never commit it, and rotate it if exposed.
-- `ALLOW_UNAUTHENTICATED_PROXY` - **(security-sensitive)** when set to `true`, the `/v1/*` proxy and inference routes skip authentication entirely. This is a **development-only** convenience; the gateway logs a warning at startup when it is set. Never enable it on a network-reachable deployment.
+- `MASTER_KEY` - **(security-sensitive)** the bootstrap and break-glass admin credential the gateway accepts for both admin (`/admin/*`) and proxy (`/v1/*`) requests. Generate one with `ferrogw init`. It has no key-store row, so unlike a stored key it cannot be revoked or expired without restarting the process — treat it like a root password. If unset, the gateway starts but logs a warning and admin routes have no valid credential.
+- `ALLOW_UNAUTHENTICATED_PROXY` - **(security-sensitive)** when set to `true`, the `/v1/*` proxy and inference routes skip authentication entirely. This is a **development-only** convenience; the gateway logs a warning at startup when it is set, and `GATEWAY_ENV=production` refuses to start with it enabled.
 
-### Admin bootstrap (deprecated)
+`ADMIN_BOOTSTRAP_KEY`, `ADMIN_BOOTSTRAP_READ_ONLY_KEY`, and `ADMIN_BOOTSTRAP_ENABLED` were removed in v1.4.0 <!-- accuracy-ok -->; `MASTER_KEY` is the only bootstrap credential now.
 
-- `ADMIN_BOOTSTRAP_KEY` - first-run admin bearer key. **Deprecated** — use `MASTER_KEY`.
-- `ADMIN_BOOTSTRAP_READ_ONLY_KEY` - first-run read-only bearer key. **Deprecated** — use `MASTER_KEY`.
-- `ADMIN_BOOTSTRAP_ENABLED` - enable or disable bootstrap keys (default enabled).
+:::tip Per-operator keys
+Give each operator their own admin-scoped key via `POST /admin/keys` (or the dashboard) instead of sharing `MASTER_KEY` day to day — a shared key can't be revoked for one person without rotating it for everyone, and credential-change records all name the same key. Reserve `MASTER_KEY` for bootstrap and break-glass recovery. See [Auth](/guides/auth).
+:::
 
-Bootstrap keys are only honored while the API key store is empty.
+## Production mode
 
-## Stores
+`GATEWAY_ENV=production` (case-insensitive) turns on a fixed set of startup checks, reported together so fixing a deployment is one edit rather than one restart per problem:
 
-- `CONFIG_STORE_BACKEND` - `memory`, `sqlite`, `postgres`
-- `CONFIG_STORE_DSN` - SQLite file path or Postgres DSN
-- `API_KEY_STORE_BACKEND` - `memory`, `sqlite`, `postgres`
-- `API_KEY_STORE_DSN` - SQLite file path or Postgres DSN
-- `REQUEST_LOG_STORE_BACKEND` - `sqlite`, `postgres`
-- `REQUEST_LOG_STORE_DSN` - SQLite file path or Postgres DSN
+| Setting | Outcome under `GATEWAY_ENV=production` |
+|---|---|
+| `ALLOW_UNAUTHENTICATED_PROXY=true` | **Refused** — startup exits; every `/v1/*` data-plane endpoint would be unauthenticated |
+| `CORS_ORIGINS` containing `*` | **Refused** — matched literally, so it denies every cross-origin request while reading as an allow-all |
+| `RATE_LIMIT_RPS=0` | **Warned** — startup continues; a normal choice when limits are enforced by an ingress or upstream API gateway |
+| `ENABLE_PPROF=true` | **Warned** — profiling routes stay behind the admin scope; the risk is leaving them mounted past an incident |
+| In-memory `API_KEY_STORE_BACKEND` | **Warned** — operator keys, dashboard sessions, and the audit trail are lost on restart, leaving `MASTER_KEY` as the only way back in |
+
+Outside production (`GATEWAY_ENV` unset or any other value), all five settings are honored with only a startup warning — none of them is refused.
+
+## CORS and trusted proxies
+
+- `CORS_ORIGINS` - comma-separated list of allowed origins, matched **literally** against the request's `Origin` header — there is no wildcard, so a `CORS_ORIGINS=*` entry allows nothing a browser would ever send (quotes are stripped before the check, so `CORS_ORIGINS="*"` is caught too). List each origin explicitly. Unset serves no CORS headers. An unlisted origin is denied by the **absence** of `Access-Control-Allow-Origin`, not by a refused preflight.
+- `TRUSTED_PROXIES` - comma-separated CIDRs of trusted reverse proxies; `X-Forwarded-For`/`X-Real-IP` is honored only from these (default: loopback, `127.0.0.0/8` and `::1/128`). An invalid value exits at startup. This matters for the per-IP rate limiter below — without the real proxy's CIDR listed, every request behind an untrusted proxy resolves to the same client IP and shares one bucket.
 
 ## Rate limiting
 
-- `RATE_LIMIT_RPS` - per-IP requests per second. Setting a positive value enables the per-IP token-bucket rate-limit middleware; leaving it unset (or non-positive) disables it.
-- `RATE_LIMIT_BURST` - per-IP burst capacity (default `0`).
+Per-IP rate limiting is **enabled by default** — it is not opt-in.
+
+- `RATE_LIMIT_RPS` - per-IP requests per second (default `20`). Set to `0` to disable the middleware entirely; an invalid or negative value is ignored with a startup warning and the default is used instead. Setting `RATE_LIMIT_RPS` alone also resets the burst back to the default `40` — pair it with `RATE_LIMIT_BURST` for a custom rate/burst combination.
+- `RATE_LIMIT_BURST` - per-IP burst capacity (default `40`). The limiter tracks at most 100,000 IPs.
 
 Rejected requests are surfaced on the `gateway_rate_limit_rejections_total` metric — see [Monitoring](/operations/monitoring).
 
+:::tip Not the same knob as the rate-limit plugin
+`RATE_LIMIT_RPS=0` disables this per-IP middleware. The **`rate-limit` plugin**'s `requests_per_second: 0` means the opposite — a rate the gateway cannot serve — and is rejected at config load; disable that plugin with `enabled: false` instead. See [Rate limiting](/guides/rate-limiting).
+:::
+
 ## Model catalog
 
-- `FERRO_MODEL_CATALOG_URL` - override the model-catalog source URL. The catalog supplies pricing, capabilities, and lifecycle metadata used for cost estimation and `/v1/models` enrichment. By default the gateway fetches the catalog from the public GitHub releases of `ferro-labs/model-catalog` (with a 1-second timeout and an embedded backup as fallback), so the gateway **never fails to start** if the source is unreachable. Point this at an internal mirror for **air-gapped** deployments, or at a custom catalog for **enterprise/custom pricing**. Each load attempt is recorded on the `gateway_catalog_loads_total` metric (`source`, `result` labels). Any userinfo and query parameters in the URL are stripped from logs, so tokens embedded in the URL are not leaked.
+- `FERRO_MODEL_CATALOG_URL` - override the model-catalog source URL. The catalog supplies pricing, capabilities, and lifecycle metadata used for cost estimation and `/v1/models` enrichment. By default the gateway fetches the catalog from the public GitHub releases of `ferro-labs/model-catalog`, with an embedded catalog as fallback, so the gateway **never fails to start** if the source is unreachable. Point this at an internal mirror for **air-gapped** deployments, or at a custom catalog for **enterprise/custom pricing**. Any userinfo and query parameters in the URL are stripped from logs, so tokens embedded in the URL are not leaked.
+- `FERRO_MODEL_CATALOG_TIMEOUT` - Go duration bounding the startup catalog fetch (default `10s`). The fetch runs before the listener binds, so a blocked-egress deployment waits this long before falling back to the embedded catalog. Set `0` to skip the remote fetch entirely — the way to keep a fully air-gapped gateway from spending any startup time on it.
+- `FERRO_MODEL_DISCOVERY_INTERVAL` - opt-in Go duration (e.g. `6h`) to live-refresh model lists from provider `/models` endpoints after startup. Unset, unparseable, or under `1m` leaves discovery disabled.
+
+Each load attempt is recorded on the `gateway_catalog_loads_total` metric (`source`, `result` labels).
+
+## Ollama model list
+
+- `FERRO_OLLAMA_MODELS` - comma-separated Ollama model list narrowing what `/v1/models` advertises. Neither variable is required — Ollama serves whatever the operator pulled onto it, so an unset list lets the provider serve any model.
+- `OLLAMA_MODELS` - **deprecated**, read for one more release with a startup warning. This is Ollama's own variable for the models *directory*, not a model list; a path-shaped value (`/…`, `~…`, `./…`) with no comma is dropped with a warning rather than registered as a bogus model id. `FERRO_OLLAMA_MODELS` wins when both are set.
 
 ## Profiling
 
-- `ENABLE_PPROF` - **(security-sensitive)** when set to `1`, `true`, or `yes`, mounts the Go `net/http/pprof` handlers under `/debug/pprof` (heap, goroutine, profile, trace, etc.). These endpoints expose runtime internals and can be abused for denial of service; keep them off in production or restrict them to an internal network.
+- `ENABLE_PPROF` - **(security-sensitive)** when set to `true`, mounts the Go `net/http/pprof` handlers under `/debug/pprof` (heap, goroutine, profile, trace, etc.), alongside `/debug/vars` (expvar). Everything under `/debug` requires a bearer token with the **admin** scope — a heap or trace profile is a memory image that can contain request bodies and credentials, and expvar publishes the process command line. `GATEWAY_ENV=production` allows `ENABLE_PPROF` but warns at startup; unmount it once an investigation ends.
 
 ## Bedrock / AWS credentials
 
-AWS Bedrock is registered automatically when `AWS_REGION` or `AWS_ACCESS_KEY_ID` is present.
+AWS Bedrock is registered automatically when `AWS_REGION`, `AWS_ACCESS_KEY_ID`, or `AWS_BEARER_TOKEN_BEDROCK` is present.
 
 - `AWS_REGION` - AWS region for Bedrock.
 - `AWS_ACCESS_KEY_ID` - AWS access key (optional — falls back to the instance role / default credential chain).
 - `AWS_SECRET_ACCESS_KEY` - AWS secret key.
 - `AWS_SESSION_TOKEN` - session token for **temporary credentials** (e.g. STS / assumed-role / SSO sessions). Required alongside the access key and secret when using temporary credentials.
+- `AWS_BEARER_TOKEN_BEDROCK` - a Bedrock bearer token, used instead of SigV4 keys.
 
-For the full list of provider API-key variables (OpenAI, Anthropic, Gemini, and the rest of the 30 supported providers), see the [Providers guide](/guides/providers).
+For the full list of provider API-key variables (OpenAI, Anthropic, Gemini, and the rest of the 30 supported providers), see [Provider configuration](/providers/configuration).
 
 ## Tracing (OTEL_*)
 
-Standard OpenTelemetry environment variables — `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` — configure trace export and **take precedence** over the `observability.tracing` config block. See [Observability](/guides/observability) for details.
+The gateway reads exactly two `OTEL_*` variables — nothing else:
+
+- `OTEL_EXPORTER_OTLP_ENDPOINT` - OTLP collector **base** endpoint. Setting it alone turns tracing on and takes precedence over the config file's `observability.tracing.endpoint`. The base gets `v1/traces` appended under `http/protobuf`.
+- `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` - signal-specific traces endpoint, used verbatim (no path appended). It outranks `OTEL_EXPORTER_OTLP_ENDPOINT` when both are set.
+
+Everything else about tracing — including the sampler — is **config-only**. `observability.tracing.sample_ratio` builds a `ParentBased` head sampler (default `1.0`, so an inbound sampled trace is always followed); `OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG` have **no effect** on this gateway. `OTEL_EXPORTER_OTLP_HEADERS` reaches the exporter through the OTel SDK directly, not through the gateway. See the [config reference](/getting-started/configuration) for the full `observability.tracing` block and [Monitoring](/operations/monitoring) for metrics and the OTLP exporter setup.
+
+## Related
+
+- [Configuration](/getting-started/configuration) — routing, plugins, and the `observability.tracing` config block
+- [Monitoring](/operations/monitoring) — metrics, health checks, and OTLP tracing setup
+- [Auth](/guides/auth) — MASTER_KEY, API keys, and dashboard sessions
+- [Rate limiting](/guides/rate-limiting) — the per-IP middleware vs. the `rate-limit` plugin
+- [Provider configuration](/providers/configuration) — per-provider API keys and `<PROVIDER>_BASE_URL`

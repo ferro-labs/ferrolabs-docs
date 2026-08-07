@@ -98,7 +98,7 @@ response = client.chat.completions.create(
 # After (Ferro) — plain model ID, provider chosen by routing config
 response = client.chat.completions.create(
     model="gpt-4o",
-    messages=[{"role": "user", "content": "Hello from Ferro AI Gateway"}],
+    messages=[{"role": "user", "content": "Hello from Ferro Labs AI Gateway"}],
 )
 ```
 
@@ -211,5 +211,5 @@ plugins:
 
 - **OpenRouter is hosted; Ferro is self-hosted.** You bring your own provider keys and run the gateway yourself. See [getting started](/getting-started/quickstart) for Docker and binary options.
 - **`provider/model` slugs are not supported.** Pass plain model IDs and let `targets`/`strategy` choose the provider, or define `aliases`. This is the only required code change for most apps.
-- **Automatic provider selection** in OpenRouter becomes explicit routing in Ferro — `fallback`, `loadbalance`, `conditional`, and more. See [Routing policies](/guides/routing-policies).
+- **Automatic provider selection** in OpenRouter becomes explicit routing in Ferro — `fallback`, `loadbalance`, `conditional`, and more. See [Routing policies](/routing).
 - **OpenRouter dashboard & analytics**: The OSS gateway exposes structured logs via the `request-logger` plugin and a queryable admin API. Hosted dashboards and durable analytics are in [Ferro Labs Managed](https://ferrolabs.ai). See [OSS vs Ferro Labs Managed](/guides/oss-vs-ferrocloud).

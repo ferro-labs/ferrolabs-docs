@@ -1,0 +1,59 @@
+---
+title: Single routing strategy
+description: "Configure strategy.mode: single, the default AI Gateway routing strategy — every request goes to targets[0], with no failover to any other configured target."
+keywords: [single routing strategy, ai-gateway strategy mode, default routing mode, single provider gateway, no failover routing]
+---
+
+Single routes every request to one target — `targets[0]` — and nothing else. It optimizes for **simplicity and explicit control**: no weight math, no latency tracking, no per-request selection logic, just a provider behind a governance and observability layer. It's also the strategy you get by not choosing one: `strategy.mode: single`, or an empty/omitted `mode`, both build this strategy.
+
+## Behaviour
+
+`single` is a **named mode** — the opposite of a pool mode like `fallback` or `loadbalance`. `Single.SelectTargets` (`internal/strategies/single.go`) returns a one-element slice built once at construction, `[]string{targets[0].VirtualKey}`. It never looks at the request, never checks which model was asked for, and never sees `targets[1:]` at all — `buildStrategy` (`gateway_strategy.go`) constructs `Single` from `targets[0]` alone, so any additional entries in `targets[]` are configured but structurally invisible to this strategy. There is no failover: a failure at `targets[0]` — after `targets[].retry` exhausts its attempts against that same target — is the answer the caller gets.
+
+An open circuit breaker on `targets[0]` behaves differently here than under a pool mode, and it's worth being precise about it. The pipeline's open-circuit filter (`healthyKeys`, `gateway_pipeline.go`) only filters when the strategy handed it **more than one** candidate to choose from — with a single-element list, it returns that element unfiltered, open or not. So under `single`, an open circuit does not divert traffic anywhere: the request is still attempted, the circuit breaker itself refuses the call, and the gateway answers `503 upstream_unavailable`. That's a different outcome from `fallback`/`conditional`/`content-based`, where an open circuit on the lead target *is* passed over in favor of a healthy one in the same `targets[]` list — `single` has no such list to fall back into.
+
+## Config keys
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `strategy.mode` | string | `single` | Selects this strategy. Leaving `mode` empty resolves to `single` too (`Config.Normalize`) — it's the gateway's zero-value default. |
+| `targets[].virtual_key` | string | — (required) | Provider registration name. Only `targets[0].virtual_key` is ever read under this mode. |
+| `targets[0].retry.attempts` | int | `1` (no retry) — omitted or `<= 0` normalizes to `1` | Attempts against `targets[0]` before giving up. Resolved by the pipeline, not the strategy, so it applies here exactly as it does under every other mode. |
+| `targets[0].retry.on_status_codes` | []int | transport errors + `408`, `429`, `5xx` | Restricts retries to these HTTP status codes; other 4xx codes are deterministic client errors and are never retried. |
+| `targets[0].retry.initial_backoff_ms` | int | `100` | Base for full-jitter exponential backoff between attempts against `targets[0]`. |
+| `targets[0].circuit_breaker.*` | object | no breaker unless set (`failure_threshold: 5`, `success_threshold: 1`, `timeout: "30s"` if configured) | See the behaviour note above — with one candidate, an open circuit fails the request rather than routing around it. |
+| `targets[].weight` | float64 | `0` | Ignored under `single`. Only `loadbalance` reads it. |
+
+## Minimal working YAML
+
+```yaml
+strategy:
+  mode: single
+
+targets:
+  - virtual_key: openai
+    retry:
+      attempts: 3
+```
+
+## When to use
+
+- One provider, no routing decisions to make — the gateway is purely a governance/observability layer (auth, plugins, metrics, request logging) in front of a single upstream.
+- You want the simplest possible config while you evaluate the gateway, before adding a second provider.
+- You're intentionally pinning all traffic to one provider for compliance or contractual reasons, and any deviation should be a config change you make on purpose — not something the gateway decides for you.
+
+## Gotchas
+
+- **Only `targets[0]` counts.** A second, third, or further entry in `targets[]` is accepted by `ferrogw validate` but is never selected, never health-checked by the strategy, and never receives traffic. If you meant to fail over to it, use `mode: fallback` instead.
+- **Readiness doesn't know that either.** `/readyz` and startup logging check whether each *configured* target's provider is registered, not which one `single` would actually pick — so a config with a broken `targets[0]` and a perfectly healthy `targets[1]` still reports `200 ready`. Put the target you mean to use first.
+- **No failover, by design.** A failure at `targets[0]` — once `retry.attempts` is exhausted — is the response the caller gets. Add `retry` to absorb transient errors against that one target; switch strategies if a hard outage should move traffic elsewhere.
+- **An open circuit doesn't skip the target — it fails the request.** Because `SelectTargets` always returns exactly one key, the pipeline's open-circuit filter has nothing to filter between and never fires. The call is attempted anyway, the breaker refuses it, and the caller gets `503 upstream_unavailable` — even if another configured target could serve the model. This is easy to assume works like `fallback`'s circuit handling; it doesn't.
+- **`weight` is silently accepted and silently ignored.** Setting `targets[0].weight` (or any other target's) does nothing under `single` — it only affects `loadbalance`.
+
+## Related
+
+- [Routing overview](/routing)
+- [Fallback](/routing/fallback)
+- [Load balance](/routing/loadbalance)
+- [Configuration reference](/getting-started/configuration)
+- [Monitoring](/operations/monitoring)

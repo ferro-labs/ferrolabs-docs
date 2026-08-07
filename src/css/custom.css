@@ -4,16 +4,11 @@
  * work well for content-centric websites.
  */
 
-/* Roobert is a single variable font (one file, full weight axis). Declaring it
-   once with the real 100–900 range lets the browser reach true 400/500/600/700
-   instead of synthesizing fake bold from a 400-only face. */
-@font-face {
-  font-family: 'Roobert';
-  src: url('/fonts/roobert-proportional-vf.woff2') format('woff2-variations');
-  font-weight: 100 900;
-  font-style: normal;
-  font-display: swap;
-}
+/* Inter + JetBrains Mono @font-face declarations live in docusaurus.config.ts
+   headTags as a raw <style>, NOT here: webpack rewrites url() in this file to
+   a hashed /assets/fonts/ copy, which made the browser download every font
+   TWICE (the /fonts/ preload copy + the hashed CSS copy). The head <style>
+   keeps the /fonts/ URLs verbatim so preload and @font-face share one file. */
 
 /* You can override the default Infima variables here. */
 :root {
@@ -24,8 +19,13 @@
   --ifm-color-primary-light: #118179;
   --ifm-color-primary-lighter: #128780;
   --ifm-color-primary-lightest: #16a394;
-  --ifm-font-family-base: Roobert, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  --ifm-font-family-heading: Roobert, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --ifm-font-family-base: 'Inter Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --ifm-font-family-heading: 'Inter Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --ifm-font-family-monospace: 'JetBrains Mono Variable', ui-monospace, 'SFMono-Regular', 'Cascadia Code', Menlo, monospace;
+  /* Inter reads best at docs sizes with a hair of negative tracking and its
+     disambiguated l/I/1 glyphs (cv05/cv08) turned on in code-heavy prose. */
+  font-feature-settings: 'cv05', 'cv08';
+  letter-spacing: -0.005em;
   --ifm-background-color: #ffffff;
   --ifm-background-surface-color: #ffffff;
   --ifm-font-color-base: #101828;
@@ -37,10 +37,10 @@
      panel and match the full-width callouts/tables, while still capping line
      length on very wide viewports. */
   --ferro-prose-measure: 54rem;
-  --ifm-heading-line-height: 1.25;
-  --ifm-h1-font-size: 3rem;
-  --ifm-h2-font-size: 2.1rem;
-  --ifm-h3-font-size: 1.55rem;
+  --ifm-heading-line-height: 1.3;
+  --ifm-h1-font-size: 1.875rem;
+  --ifm-h2-font-size: 1.375rem;
+  --ifm-h3-font-size: 1.15rem;
   --ifm-code-font-size: 95%;
   --ifm-navbar-height: 4.5rem;
   --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
@@ -168,6 +168,21 @@ body {
   margin-bottom: 1rem;
 }
 
+/* Infima scopes LARGER sizes directly onto the markdown page title and section
+   headings (.markdown h1:first-child = 3rem, .markdown > h2 = 2rem, > h3 = 1.5rem).
+   Those live in a stylesheet loaded AFTER this file at equal specificity, so a
+   plain override loses the cascade (and gets dropped as dead code). !important on
+   the custom property forces our compact scale to win at every breakpoint. */
+.markdown h1:first-child {
+  --ifm-h1-font-size: 1.875rem !important;
+}
+.markdown > h2 {
+  --ifm-h2-font-size: 1.375rem !important;
+}
+.markdown > h3 {
+  --ifm-h3-font-size: 1.15rem !important;
+}
+
 .theme-doc-markdown h2,
 .theme-doc-markdown h3 {
   letter-spacing: -0.015em;
@@ -248,32 +263,27 @@ body {
     padding-right: 0;
   }
 
-  /* ── Centered primary nav ──────────────────────────────────────────
-     Pin the brand left and the GitHub/theme/search group right (both out
-     of flow), so the primary links sit centered and balanced in the bar. */
-  .navbar__inner {
-    position: relative;
-  }
-
-  .navbar__brand {
-    position: absolute;
-    left: 0;
-    top: 50%;
-    transform: translateY(-50%);
-    margin: 0;
-  }
-
+  /* ── Balanced primary nav ──────────────────────────────────────────
+     The link run centers in the free space BETWEEN the brand and the
+     right group via auto margins on its two ends, so the gap on each side is
+     equal. (True page-centering looked off: the right group — GitHub +
+     theme + search — is ~2x the brand's width, leaving a huge hole after
+     the logo and a cramped one before GitHub.) */
   .navbar__items:not(.navbar__items--right) {
-    width: 100%;
-    justify-content: center;
     gap: 0.5rem;
   }
-
+  .navbar__brand {
+    /* cancel the container gap between brand and the first link, so the
+       auto margins on the link run are exactly symmetric */
+    margin-right: -0.5rem;
+  }
+  .navbar__brand + .navbar__item {
+    margin-left: auto;
+  }
+  .navbar__items:not(.navbar__items--right) > :last-child {
+    margin-right: auto;
+  }
   .navbar__items--right {
-    position: absolute;
-    right: 0;
-    top: 50%;
-    transform: translateY(-50%);
     padding-right: 0;
   }
 
@@ -298,8 +308,19 @@ body {
   }
 
   .theme-doc-toc-desktop .table-of-contents__link {
-    font-size: 0.97rem;
-    line-height: 1.55;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: #64748b;
+  }
+  [data-theme='dark'] .theme-doc-toc-desktop .table-of-contents__link {
+    color: #94a3b8;
+  }
+  .theme-doc-toc-desktop .table-of-contents__link:hover {
+    color: var(--ifm-heading-color);
+  }
+  .theme-doc-toc-desktop .table-of-contents__link--active {
+    color: var(--ifm-color-primary);
+    font-weight: 600;
   }
 }
 
@@ -310,19 +331,59 @@ body {
   padding-right: 0;
 }
 
+/* ── Sidebar link hierarchy ──────────────────────────────────────────
+   Three tiers so the nav doesn't read flat: section labels (uppercase,
+   muted — styled elsewhere) > parent/collapsible rows (heavier, full ink)
+   > leaf links (softer slate) > the active page (teal, semibold, tinted). */
+
+/* Leaf links: softer slate ink and a hair lighter weight, so they recede
+   and let the active item + section labels lead the eye. */
 .theme-doc-sidebar-menu .menu__link {
   display: flex;
   align-items: center;
-  color: var(--ifm-font-color-base);
-  font-size: 0.96rem;
-  line-height: 1.34;
-  padding-top: 0.36rem;
-  padding-bottom: 0.36rem;
+  color: #4a5567;
+  font-size: 0.9rem;
+  font-weight: 450;
+  line-height: 1.3;
+  padding: 0.34rem 0.6rem;
+  border-radius: 7px;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+[data-theme='dark'] .theme-doc-sidebar-menu .menu__link {
+  color: #98a4b6;
 }
 
-.theme-doc-sidebar-menu .menu__link:hover,
-.theme-doc-sidebar-menu .menu__link--active {
+/* Hover: subtle teal-tinted pill + darker text. */
+.theme-doc-sidebar-menu .menu__link:hover {
+  color: var(--ifm-heading-color);
+  background-color: rgba(15, 118, 110, 0.06);
+}
+[data-theme='dark'] .theme-doc-sidebar-menu .menu__link:hover {
+  color: #e5e7eb;
+  background-color: rgba(45, 212, 191, 0.09);
+}
+
+/* Parent / collapsible rows (categories with sub-pages): full ink + heavier,
+   so structural parents read differently from the leaves under them. */
+.theme-doc-sidebar-menu .menu__list-item-collapsible > .menu__link {
+  color: var(--ifm-heading-color);
+  font-weight: 600;
+}
+[data-theme='dark'] .theme-doc-sidebar-menu .menu__list-item-collapsible > .menu__link {
+  color: #e8edf4;
+}
+
+/* Active page: the strongest signal — teal text, semibold, a tinted pill. */
+.theme-doc-sidebar-menu .menu__link--active,
+.theme-doc-sidebar-menu .menu__link--active:hover {
   color: var(--ifm-color-primary);
+  font-weight: 650;
+  background-color: rgba(15, 118, 110, 0.1);
+}
+[data-theme='dark'] .theme-doc-sidebar-menu .menu__link--active,
+[data-theme='dark'] .theme-doc-sidebar-menu .menu__link--active:hover {
+  color: var(--ifm-color-primary);
+  background-color: rgba(45, 212, 191, 0.13);
 }
 
 /* ── Per-item line icons ───────────────────────────────────────────
@@ -350,6 +411,29 @@ body {
   opacity: 1;
 }
 
+/* Nested (child) links: no leading icon — the parent row carries the icon, and
+   an icon per child is what made the tree read cluttered. Children get a hair
+   less vertical padding and an indent guide instead. */
+/* NB: .theme-doc-sidebar-menu IS the top-level .menu__list UL, so a descendant
+   .menu__list is exactly the nested (child) lists. */
+.theme-doc-sidebar-menu .menu__list .menu__link::before {
+  display: none;
+}
+.theme-doc-sidebar-menu .menu__list .menu__link {
+  font-size: 0.86rem;
+  padding-top: 0.28rem;
+  padding-bottom: 0.28rem;
+}
+
+/* Indent guide: a subtle rule down the left of every expanded child list, so
+   the hierarchy is visible without per-item decoration. */
+.theme-doc-sidebar-menu .menu__list {
+  border-left: 1px solid var(--ifm-toc-border-color);
+  margin-left: 1rem;
+  padding-left: 0.3rem;
+  margin-top: 0.1rem;
+}
+
 /* Intro (root) item */
 .theme-doc-sidebar-menu > .menu__list > .menu__list-item:first-child > .menu__link {
   --ferro-icon: url('/assets/icons/home.svg');
@@ -362,6 +446,13 @@ body {
 .menu__list-item.sbi-code > .menu__list-item-collapsible > .menu__link {
   --ferro-icon: url('/assets/icons/code.svg');
 }
+.menu__list-item.sbi-server > .menu__list-item-collapsible > .menu__link {
+  --ferro-icon: url('/assets/icons/server.svg');
+}
+.menu__list-item.sbi-refresh > .menu__list-item-collapsible > .menu__link {
+  --ferro-icon: url('/assets/icons/refresh.svg');
+}
+.menu__list-item.sbi-brackets > .menu__list-item-collapsible > .menu__link,
 .menu__list-item.sbi-brackets > .menu__link {
   --ferro-icon: url('/assets/icons/brackets.svg');
 }
@@ -386,19 +477,26 @@ body {
 .menu__link[href*='/integrations/deployment/']          { --ferro-icon: url('/assets/icons/server.svg'); }
 
 /* Guides */
-.menu__link[href$='/guides/providers/']                 { --ferro-icon: url('/assets/icons/plug.svg'); }
-.menu__link[href$='/guides/providers-config/']          { --ferro-icon: url('/assets/icons/sliders.svg'); }
-.menu__link[href$='/guides/routing-policies/']          { --ferro-icon: url('/assets/icons/refresh.svg'); }
+.menu__link[href$='/providers/']                 { --ferro-icon: url('/assets/icons/plug.svg'); }
+.menu__link[href$='/providers/configuration/']          { --ferro-icon: url('/assets/icons/sliders.svg'); }
+.menu__link[href$='/routing/']          { --ferro-icon: url('/assets/icons/refresh.svg'); }
 .menu__link[href$='/guides/use-cases/']                 { --ferro-icon: url('/assets/icons/book.svg'); }
-.menu__link[href$='/guides/plugins/']                   { --ferro-icon: url('/assets/icons/sparkle.svg'); }
+.menu__link[href$='/plugins/']                   { --ferro-icon: url('/assets/icons/sparkle.svg'); }
 .menu__link[href$='/guides/mcp/']                       { --ferro-icon: url('/assets/icons/code.svg'); }
 .menu__link[href$='/guides/rate-limiting/']             { --ferro-icon: url('/assets/icons/gauge.svg'); }
 
 /* Auth & Security */
 .menu__link[href$='/guides/auth/']                      { --ferro-icon: url('/assets/icons/lock.svg'); }
-.menu__link[href$='/guides/admin-auth/']                { --ferro-icon: url('/assets/icons/lock.svg'); }
-.menu__link[href$='/guides/workspace-sign-in-domains/'] { --ferro-icon: url('/assets/icons/lock.svg'); }
 .menu__link[href$='/security/data-handling/']           { --ferro-icon: url('/assets/icons/shield.svg'); }
+
+/* New IA sections (v1.4 overhaul): plugins / routing / providers */
+.menu__link[href$='/plugins/']                          { --ferro-icon: url('/assets/icons/sparkle.svg'); }
+.menu__link[href*='/plugins/']                          { --ferro-icon: url('/assets/icons/sparkle.svg'); }
+.menu__link[href$='/routing/']                          { --ferro-icon: url('/assets/icons/refresh.svg'); }
+.menu__link[href*='/routing/']                          { --ferro-icon: url('/assets/icons/refresh.svg'); }
+.menu__link[href$='/providers/']                        { --ferro-icon: url('/assets/icons/plug.svg'); }
+.menu__link[href$='/providers/configuration/']          { --ferro-icon: url('/assets/icons/sliders.svg'); }
+.menu__link[href$='/guides/dashboard/']                 { --ferro-icon: url('/assets/icons/chart.svg'); }
 
 /* Observability */
 .menu__link[href$='/guides/observability/']             { --ferro-icon: url('/assets/icons/chart.svg'); }
@@ -422,7 +520,7 @@ body {
 
 /* Phase 2/3 pages */
 .menu__link[href$='/integrations/sdk/typescript/']      { --ferro-icon: url('/assets/icons/code.svg'); }
-.menu__link[href$='/guides/provider-capabilities/']     { --ferro-icon: url('/assets/icons/layers.svg'); }
+.menu__link[href$='/providers/']     { --ferro-icon: url('/assets/icons/layers.svg'); }
 .menu__link[href$='/guides/virtual-keys/']              { --ferro-icon: url('/assets/icons/lock.svg'); }
 .menu__link[href$='/guides/cost-tracking/']             { --ferro-icon: url('/assets/icons/chart.svg'); }
 .menu__link[href$='/operations/cli-reference/']         { --ferro-icon: url('/assets/icons/code.svg'); }
@@ -433,9 +531,29 @@ body {
 .menu__link[href$='/api-reference/admin/']              { --ferro-icon: url('/assets/icons/gear.svg'); }
 .menu__link[href$='/api-reference/errors/']             { --ferro-icon: url('/assets/icons/shield.svg'); }
 
-/* Hide the default Docusaurus triangle caret — replaced by custom chevron */
+/* Link-categories (label navigates to the overview page) keep their separate
+   caret button — restyled to match the custom '›' chevron instead of the
+   default triangle, so expandable rows are visibly expandable. */
 .menu__caret {
-  display: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.35rem;
+}
+.menu__caret::before {
+  content: '›';
+  background: none;
+  width: auto;
+  height: auto;
+  font-size: 1.15rem;
+  font-weight: 600;
+  line-height: 1;
+  opacity: 0.45;
+  transform: rotate(90deg);
+  transition: transform 0.15s ease;
+}
+.menu__list-item--collapsed .menu__caret::before {
+  transform: none;
 }
 
 .menu__list-item-collapsible > .menu__link {
@@ -478,18 +596,6 @@ body {
   background: rgba(255, 255, 255, 0.03);
 }
 
-/* ── Landing page: make the main wrapper full-width ──────────── */
-.main-wrapper:has(.hero) {
-  padding-top: 0;
-  max-width: 100%;
-}
-/* Ensure landing page content sits flush under nav */
-main:has(.hero),
-main:has(.hero) > .container {
-  padding: 0;
-  max-width: 100%;
-}
-
 /* ── Admonition improvements ─────────────────────────────────── */
 .theme-admonition {
   border-radius: 10px;
@@ -513,6 +619,55 @@ main:has(.hero) > .container {
   font-size: 0.72rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+
+/* ── Provider logo grid (providers page) ─────────────────────────
+   Colored brand SVGs vendored under /img/providers/. The card keeps a neutral
+   surface so both color and monochrome marks read cleanly in either theme. */
+.providerGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.75rem;
+  margin: 1.5rem 0;
+}
+.providerCard {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--ifm-toc-border-color);
+  border-radius: 10px;
+  background: var(--ifm-background-surface-color);
+  color: var(--ifm-font-color-base);
+  text-decoration: none;
+  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+}
+.providerCard:hover {
+  border-color: var(--ifm-color-primary);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.07);
+  text-decoration: none;
+}
+.providerCard img {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  object-fit: contain;
+}
+/* Monochrome marks ship as currentColor fills — keep them legible on dark. */
+[data-theme='dark'] .providerCard img[src$='openai.svg'],
+[data-theme='dark'] .providerCard img[src$='anthropic.svg'],
+[data-theme='dark'] .providerCard img[src$='xai.svg'],
+[data-theme='dark'] .providerCard img[src$='groq.svg'],
+[data-theme='dark'] .providerCard img[src$='ollama.svg'],
+[data-theme='dark'] .providerCard img[src$='replicate.svg'],
+[data-theme='dark'] .providerCard img[src$='moonshot.svg'] {
+  filter: invert(1) brightness(1.6);
+}
+.providerCardName {
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.2;
 }
 
 /* ── Reduced motion ────────────────────────────────────────────── */

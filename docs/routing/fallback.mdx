@@ -1,0 +1,60 @@
+---
+title: Fallback routing strategy
+description: "Configure strategy.mode: fallback in Ferro Labs AI Gateway to try targets in priority order with per-target retry, full-jitter backoff, and Retry-After support."
+keywords: [fallback routing, failover, AI gateway fallback, ai-gateway strategy.mode, retry backoff, priority order routing]
+---
+
+Fallback tries targets in the order you declare them, advancing to the next target when the current one fails. It optimizes for **availability**: a failed request is answered by the next-best provider instead of being reported as a failure — not for spreading load (`loadbalance`), speed (`least-latency`), or cost (`cost-optimized`). Set `strategy.mode: fallback` to use it.
+
+## Behaviour
+
+`fallback` is a **pool mode** — the only mode whose entire purpose is advancing past a failed target in the order you declared. `Fallback.SelectTargets` (`internal/strategies/fallback.go`) returns every `targets[].virtual_key` in declared order, built once at construction; there is no per-request selection logic, no model filtering, and `targets[].weight` is ignored under this mode. The gateway pipeline (`routeTargets`, `gateway_pipeline.go`) walks that order: when the head target fails in a way its retry policy won't absorb, the walk advances to the next declared target rather than reporting the failure back to the caller.
+
+`targets[].retry` governs how many times **one** target is re-asked before the pipeline moves on — it applies under every routing mode, not only `fallback`. Fallback holds no retry policy of its own; advancing to the *next* target is fallback's behaviour alone. An open-circuit or surface-incapable target is skipped over before the pipeline commits to it, under every mode. `SelectTargets` never returns `nil` (declaring at least one target is required to build the strategy), but if every candidate's circuit is open the pipeline still attempts one and answers `503` rather than `404`.
+
+## Config keys
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `strategy.mode` | string | — | Set to `fallback`. |
+| `targets[].retry.attempts` | int | `1` (no retry) — omitted or `<= 0` normalizes to `1` | Maximum attempts against this one target before the pipeline advances to the next. Read per target, honored under every strategy mode. |
+| `targets[].retry.on_status_codes` | []int | transport errors + `408`, `429`, and `5xx` | Restricts retries to these HTTP status codes. Any other 4xx is treated as a deterministic client error and is never retried. |
+| `targets[].retry.initial_backoff_ms` | int | `100` | Base for exponential backoff with full jitter: the wait before attempt *N* is drawn uniformly from `[0, initial_backoff_ms * 2^(N-1))`. An upstream `Retry-After` header, when present, wins over the computed wait. |
+
+## Minimal working YAML
+
+```yaml
+strategy:
+  mode: fallback
+
+targets:
+  - virtual_key: openai
+    retry:
+      attempts: 3
+      on_status_codes: [429, 502, 503]
+      initial_backoff_ms: 100
+  - virtual_key: anthropic
+```
+
+## When to use
+
+- A primary provider plus one or more backups, where getting an answer from *someone* matters more than getting it from the preferred provider every time.
+- Declared priority matters: you want traffic to favor a specific provider (cheapest, fastest, contractually preferred) and spill to the next one only when the preferred provider fails.
+- You want failover without hand-tuning weights (`loadbalance`) or relying on measured latency (`least-latency`).
+
+## Gotchas
+
+- **Fallback holds no retry policy of its own.** `targets[].retry.*` is the pipeline's config, resolved per target and applied identically under every routing mode. What's specific to `fallback` is only the decision to advance to the *next* target once that target's retry budget is spent.
+- **Declared order is priority order — there are no weights.** `targets[].weight` is read only by `loadbalance`; under `fallback`, the first entry in `targets[]` is always tried first.
+- **Retries never burn budget against cancellation, deadline, an open circuit, or saturation.** `context.Canceled`, `context.DeadlineExceeded`, an open-circuit error, and `ErrProviderSaturated` (a full concurrency queue) are never retried — the pipeline treats them as an immediate signal to move to the next target rather than as something a retry could fix.
+- **A `Retry-After` hint longer than 30 seconds abandons the target instead of waiting on it.** The gateway won't hold a request open past that cap; it advances to the next target immediately and logs that the target was abandoned.
+- **Only deterministic-retry statuses are retried by default.** With no `on_status_codes` set, retries apply to transport failures plus `408`, `429`, and `5xx`. Every other 4xx (e.g. `400`, `401`, `404`) is treated as a client error that a retry against the same target cannot fix.
+- **An open-circuit target is skipped before commitment, same as every other mode.** If every declared target's circuit is open, the pipeline still attempts one rather than reporting a routing-level 404 — the caller sees `503`.
+
+## Related
+
+- [Routing overview](/routing)
+- [Load balance](/routing/loadbalance)
+- [Least-latency](/routing/least-latency)
+- [Cost-optimized](/routing/cost-optimized)
+- [Configuration reference](/getting-started/configuration)

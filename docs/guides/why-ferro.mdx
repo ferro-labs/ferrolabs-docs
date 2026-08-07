@@ -1,6 +1,7 @@
 ---
-title: Why Ferro Labs AI Gateway
-description: "Compare Ferro Labs AI Gateway to LiteLLM, Portkey, Bifrost, and Cloudflare. An honest guide to choosing the right open-source AI gateway."
+title: "LiteLLM & Portkey Alternatives — an Honest AI Gateway Comparison"
+sidebar_label: Comparisons & Alternatives
+description: "Looking for a LiteLLM alternative or self-hosted Portkey replacement? An honest comparison of Ferro Labs AI Gateway vs LiteLLM, Portkey, Bifrost, and Cloudflare."
 keywords:
   - LiteLLM alternative
   - Portkey alternative
@@ -9,9 +10,7 @@ keywords:
   - open source AI gateway Go
 ---
 
-# Why Ferro Labs AI Gateway
-
-AI gateways differ more than they look. Here's how to think about the choice.
+Looking for a **LiteLLM alternative**, a self-hosted **Portkey replacement**, or just an honest comparison before picking an AI gateway? AI gateways differ more than they look — this page compares Ferro Labs AI Gateway with LiteLLM, Portkey, Bifrost, and Cloudflare AI Gateway on the criteria that actually decide the choice, and tells you when each one is the better fit (including when it isn't us).
 
 ## Decision Table
 
@@ -55,7 +54,7 @@ When you need multi-tenant isolation, a dashboard, enterprise plugins, and someo
 
 These are concrete differences, not marketing claims.
 
-### 1. Zero runtime dependencies
+### 1. Single static binary
 
 Ferro Labs AI Gateway compiles to a single Go binary. The Docker image is under 20 MB. There is no interpreter, no virtual environment, no package manager involved at deploy time. This matters when you are running in constrained environments or want reproducible deploys.
 
@@ -83,8 +82,11 @@ Ferro Labs OSS is Apache 2.0 licensed. There are no "community" vs. "enterprise"
 Bifrost is MIT-licensed, which is also permissive. LiteLLM is Apache 2.0 as well. Portkey and Cloudflare AI Gateway are proprietary. Pick the license model that matches your organization's requirements.
 :::
 
-## Related pages
+## Ready to switch?
+
+Each migration is a base-URL swap plus a config translation — the guides walk through both:
 
 - [Migrating from LiteLLM](/guides/migration-litellm)
 - [Migrating from Portkey](/guides/migration-portkey)
-- [Benchmarks](/benchmarks)
+- [Migrating from OpenRouter](/guides/migration-openrouter)
+- [Benchmarks](/benchmarks) — the latency numbers behind the table above

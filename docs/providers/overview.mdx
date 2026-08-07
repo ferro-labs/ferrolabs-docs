@@ -1,0 +1,167 @@
+---
+title: Providers
+description: "One OpenAI-compatible API in front of 30 LLM providers: the full provider list, the endpoint-support matrix, and how each provider is declared and activated."
+keywords: [ai gateway providers, openai-compatible api, llm providers, provider endpoint matrix, ferro labs, openai anthropic gemini, provider configuration]
+slug: /providers
+---
+
+The Ferro Labs AI Gateway speaks to **30 LLM providers** behind a single
+OpenAI-compatible API. Point any client written against the OpenAI SDK at the
+gateway and it reaches every provider unchanged — the gateway translates each
+request and response to and from the OpenAI shape, whether the upstream is an
+OpenAI-compatible surface or a native wire (Anthropic Messages, Gemini
+`generateContent`, Cohere v2, Bedrock InvokeModel, Vertex, Replicate).
+
+This page is the provider directory: the logo grid links each provider to its
+per-provider setup, and the [endpoint-support matrix](#endpoint-support-matrix)
+shows which surfaces each one implements. For the catalogue of individual models
+(2,500+ across all providers), browse **[ferrolabs.ai/models](https://www.ferrolabs.ai/models)** — this
+page does not list models.
+
+:::warning `targets` is an allowlist (v1.4.0+)
+Setting a provider's environment variable **registers** it, but registration is
+not routing. A provider only serves traffic when it is listed under `targets[]`
+in your config. A request for a model owned only by an unlisted provider returns
+**404 `model_not_found`**, even though the provider is present in the process and
+healthy. Registration is driven by which credentials the environment holds;
+routing is driven by which names the config lists — the two sets can be disjoint.
+See [Routing](/routing) and [Provider configuration](/providers/configuration).
+:::
+
+## Supported providers
+
+<div className="providerGrid">
+  <a className="providerCard" href="/providers/configuration#ai21"><img src="/img/providers/ai21.svg" alt="AI21 Labs logo" width="26" height="26" /><span className="providerCardName">AI21 Labs</span></a>
+  <a className="providerCard" href="/providers/configuration#anthropic"><img src="/img/providers/anthropic.svg" alt="Anthropic logo" width="26" height="26" /><span className="providerCardName">Anthropic</span></a>
+  <a className="providerCard" href="/providers/configuration#azure-foundry"><img src="/img/providers/azure-foundry.svg" alt="Azure AI Foundry logo" width="26" height="26" /><span className="providerCardName">Azure AI Foundry</span></a>
+  <a className="providerCard" href="/providers/configuration#azure-openai"><img src="/img/providers/azure-openai.svg" alt="Azure OpenAI logo" width="26" height="26" /><span className="providerCardName">Azure OpenAI</span></a>
+  <a className="providerCard" href="/providers/configuration#bedrock"><img src="/img/providers/bedrock.svg" alt="AWS Bedrock logo" width="26" height="26" /><span className="providerCardName">AWS Bedrock</span></a>
+  <a className="providerCard" href="/providers/configuration#cerebras"><img src="/img/providers/cerebras.svg" alt="Cerebras logo" width="26" height="26" /><span className="providerCardName">Cerebras</span></a>
+  <a className="providerCard" href="/providers/configuration#cloudflare"><img src="/img/providers/cloudflare.svg" alt="Cloudflare Workers AI logo" width="26" height="26" /><span className="providerCardName">Cloudflare Workers AI</span></a>
+  <a className="providerCard" href="/providers/configuration#cohere"><img src="/img/providers/cohere.svg" alt="Cohere logo" width="26" height="26" /><span className="providerCardName">Cohere</span></a>
+  <a className="providerCard" href="/providers/configuration#databricks"><img src="/img/providers/databricks.svg" alt="Databricks logo" width="26" height="26" /><span className="providerCardName">Databricks</span></a>
+  <a className="providerCard" href="/providers/configuration#deepinfra"><img src="/img/providers/deepinfra.svg" alt="DeepInfra logo" width="26" height="26" /><span className="providerCardName">DeepInfra</span></a>
+  <a className="providerCard" href="/providers/configuration#deepseek"><img src="/img/providers/deepseek.svg" alt="DeepSeek logo" width="26" height="26" /><span className="providerCardName">DeepSeek</span></a>
+  <a className="providerCard" href="/providers/configuration#fireworks"><img src="/img/providers/fireworks.svg" alt="Fireworks AI logo" width="26" height="26" /><span className="providerCardName">Fireworks AI</span></a>
+  <a className="providerCard" href="/providers/configuration#gemini"><img src="/img/providers/gemini.svg" alt="Google Gemini logo" width="26" height="26" /><span className="providerCardName">Google Gemini</span></a>
+  <a className="providerCard" href="/providers/configuration#groq"><img src="/img/providers/groq.svg" alt="Groq logo" width="26" height="26" /><span className="providerCardName">Groq</span></a>
+  <a className="providerCard" href="/providers/configuration#hugging-face"><img src="/img/providers/hugging-face.svg" alt="Hugging Face logo" width="26" height="26" /><span className="providerCardName">Hugging Face</span></a>
+  <a className="providerCard" href="/providers/configuration#mistral"><img src="/img/providers/mistral.svg" alt="Mistral AI logo" width="26" height="26" /><span className="providerCardName">Mistral AI</span></a>
+  <a className="providerCard" href="/providers/configuration#moonshot"><img src="/img/providers/moonshot.svg" alt="Moonshot AI logo" width="26" height="26" /><span className="providerCardName">Moonshot AI</span></a>
+  <a className="providerCard" href="/providers/configuration#novita"><img src="/img/providers/novita.svg" alt="Novita logo" width="26" height="26" /><span className="providerCardName">Novita</span></a>
+  <a className="providerCard" href="/providers/configuration#nvidia-nim"><img src="/img/providers/nvidia-nim.svg" alt="NVIDIA NIM logo" width="26" height="26" /><span className="providerCardName">NVIDIA NIM</span></a>
+  <a className="providerCard" href="/providers/configuration#ollama"><img src="/img/providers/ollama.svg" alt="Ollama logo" width="26" height="26" /><span className="providerCardName">Ollama</span></a>
+  <a className="providerCard" href="/providers/configuration#ollama-cloud"><img src="/img/providers/ollama-cloud.svg" alt="Ollama Cloud logo" width="26" height="26" /><span className="providerCardName">Ollama Cloud</span></a>
+  <a className="providerCard" href="/providers/configuration#openai"><img src="/img/providers/openai.svg" alt="OpenAI logo" width="26" height="26" /><span className="providerCardName">OpenAI</span></a>
+  <a className="providerCard" href="/providers/configuration#openrouter"><img src="/img/providers/openrouter.svg" alt="OpenRouter logo" width="26" height="26" /><span className="providerCardName">OpenRouter</span></a>
+  <a className="providerCard" href="/providers/configuration#perplexity"><img src="/img/providers/perplexity.svg" alt="Perplexity logo" width="26" height="26" /><span className="providerCardName">Perplexity</span></a>
+  <a className="providerCard" href="/providers/configuration#qwen"><img src="/img/providers/qwen.svg" alt="Qwen logo" width="26" height="26" /><span className="providerCardName">Qwen</span></a>
+  <a className="providerCard" href="/providers/configuration#replicate"><img src="/img/providers/replicate.svg" alt="Replicate logo" width="26" height="26" /><span className="providerCardName">Replicate</span></a>
+  <a className="providerCard" href="/providers/configuration#sambanova"><img src="/img/providers/sambanova.svg" alt="SambaNova logo" width="26" height="26" /><span className="providerCardName">SambaNova</span></a>
+  <a className="providerCard" href="/providers/configuration#together"><img src="/img/providers/together.svg" alt="Together AI logo" width="26" height="26" /><span className="providerCardName">Together AI</span></a>
+  <a className="providerCard" href="/providers/configuration#vertex-ai"><img src="/img/providers/vertex-ai.svg" alt="Google Vertex AI logo" width="26" height="26" /><span className="providerCardName">Google Vertex AI</span></a>
+  <a className="providerCard" href="/providers/configuration#xai"><img src="/img/providers/xai.svg" alt="xAI logo" width="26" height="26" /><span className="providerCardName">xAI</span></a>
+</div>
+
+## Endpoint-support matrix
+
+Which OpenAI-compatible surface each provider implements, as of **v1.4.1**. This
+mirrors the machine-checked matrix in the gateway source (`providers/README.md`),
+which fails the build if a provider's real interface set ever drifts from it.
+
+- **✓** — a typed surface (`Complete`, `Embed`, `Rerank`, …), or a working
+  `/v1/*` pass-through for the **Proxy** column.
+- **—** — not implemented, or (for **Proxy**) a native-wire provider whose raw
+  `/v1/*` pass-through returns **501** by design. Reach those through the
+  translated surfaces to their left.
+
+**Audio** groups transcription (STT) and speech (TTS) — ✓ if a provider serves
+either. **Rerank** uses the Cohere-v2 contract; every other column uses the
+OpenAI contract. Every provider implements **Chat** and **Stream** by definition.
+
+<div style={{overflowX: 'auto'}}>
+
+| Provider | Chat | Stream | Embed | Image | Audio | Rerank | Moder. | Batch | Responses | Proxy |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
+| AI21 Labs | ✓ | ✓ | — | — | — | — | — | — | — | ✓ |
+| Anthropic | ✓ | ✓ | — | — | — | — | — | — | — | — |
+| Azure AI Foundry | ✓ | ✓ | ✓ | — | — | — | — | — | — | — |
+| Azure OpenAI | ✓ | ✓ | ✓ | ✓ | ✓ | — | — | ✓ | — | — |
+| AWS Bedrock | ✓ | ✓ | ✓ | ✓ | — | ✓ | — | — | — | — |
+| Cerebras | ✓ | ✓ | — | — | — | — | — | — | — | ✓ |
+| Cloudflare Workers AI | ✓ | ✓ | ✓ | — | — | — | — | — | — | ✓ |
+| Cohere | ✓ | ✓ | ✓ | — | — | ✓ | — | — | — | — |
+| Databricks | ✓ | ✓ | ✓ | — | — | — | — | — | — | ✓ |
+| DeepInfra | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | — | — | ✓ |
+| DeepSeek | ✓ | ✓ | — | — | — | — | — | — | — | ✓ |
+| Fireworks AI | ✓ | ✓ | ✓ | — | ✓ | — | — | — | — | ✓ |
+| Google Gemini | ✓ | ✓ | ✓ | ✓ | — | — | — | — | — | — |
+| Groq | ✓ | ✓ | — | — | ✓ | — | — | ✓ | — | ✓ |
+| Hugging Face | ✓ | ✓ | ✓ | ✓ | — | — | — | — | — | ✓ |
+| Mistral AI | ✓ | ✓ | ✓ | — | ✓ | — | ✓ | — | — | ✓ |
+| Moonshot AI | ✓ | ✓ | — | — | — | — | — | — | — | ✓ |
+| Novita | ✓ | ✓ | ✓ | — | — | — | — | ✓ | — | ✓ |
+| NVIDIA NIM | ✓ | ✓ | ✓ | — | — | ✓ | — | — | — | ✓ |
+| Ollama | ✓ | ✓ | ✓ | — | — | — | — | — | — | ✓ |
+| Ollama Cloud | ✓ | ✓ | ✓ | — | — | — | — | — | — | — |
+| OpenAI | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ | ✓ |
+| OpenRouter | ✓ | ✓ | ✓ | — | — | — | — | — | — | ✓ |
+| Perplexity | ✓ | ✓ | — | — | — | — | — | — | — | ✓ |
+| Qwen | ✓ | ✓ | ✓ | — | — | — | — | ✓ | — | ✓ |
+| Replicate | ✓ | ✓ | — | ✓ | — | — | — | — | — | — |
+| SambaNova | ✓ | ✓ | ✓ | — | ✓ | — | — | — | — | ✓ |
+| Together AI | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | — | — | ✓ |
+| Google Vertex AI | ✓ | ✓ | ✓ | ✓ | — | — | — | — | — | — |
+| xAI | ✓ | ✓ | — | ✓ | — | — | — | — | ✓ | ✓ |
+
+</div>
+
+**Totals** — Chat / Stream: 30 · Embeddings: 21 · Images: 10 · Audio: 9 · Rerank:
+5 (`bedrock`, `cohere`, `deepinfra`, `nvidia-nim`, `together`) · Moderations: 2
+(`openai`, `mistral`) · Batch: 5 (`openai`, `azure-openai`, `groq`, `novita`,
+`qwen`) · Responses: 2 (`openai`, `xai`) · Proxy pass-through: 21.
+
+Nine providers show **—** for **Proxy**. Eight are native-wire — Anthropic, AWS
+Bedrock, Cohere, Google Gemini, Google Vertex AI, Replicate, and the two Azure
+surfaces — whose raw `/v1/*` pass-through returns **501** by design (reach them
+through the translated columns). Ollama Cloud is the one provider that is not
+proxiable at all. A **—** in a capability column is not a routing limitation:
+those providers still route every model the catalog, live discovery, or
+`targets[].models` names.
+
+## How a provider is declared
+
+A provider has two independent parts: **credentials** (from the environment) and
+a **target** (in your config). Both must be present for the provider to serve.
+
+**Credentials never live in `config.yaml`.** Each provider reads its API key and
+any special settings from environment variables — `OPENAI_API_KEY`,
+`ANTHROPIC_API_KEY`, `AZURE_OPENAI_ENDPOINT`, and so on. A provider is
+auto-registered the moment its required environment variables are present; no
+`main.go` edit and no config entry is needed to register it.
+
+**A target names a provider by `virtual_key`.** In config, a routing target
+refers to a registered provider by its id — that id *is* the whole declaration:
+
+```yaml
+strategy:
+  mode: fallback
+targets:
+  - virtual_key: openai      # the provider id — this is the declaration
+    retry:
+      attempts: 3
+  - virtual_key: anthropic
+```
+
+Only providers listed under `targets[]` route traffic (see the allowlist warning
+above). For every provider's exact environment variables, optional
+`<PROVIDER>_BASE_URL` override, and any special configuration keys, see
+**[Provider configuration](/providers/configuration)**.
+
+## Related
+
+- [Provider configuration](/providers/configuration) — per-provider environment variables and special settings
+- [Routing](/routing) — how `targets[]`, strategies, and failover work
+- [Model catalogue](https://www.ferrolabs.ai/models) — every model across all 30 providers
+- [Quickstart](/getting-started/quickstart) — send your first request through the gateway
+- [API reference](/api-reference/overview) — the OpenAI-compatible endpoints each column maps to

@@ -1,7 +1,7 @@
 ---
 title: Virtual Keys vs API Keys
-description: The two distinct key concepts in the Ferro Labs AI Gateway — the config virtual_key that names a provider credential set, and fgw_ admin API keys for client auth.
-keywords: [virtual key, fgw api key, gateway target, provider credentials, bearer token, admin keys]
+description: virtual_key names a provider credential set in config; fgw_ admin API keys are client bearer credentials for gateway auth. How they differ, where each lives.
+keywords: [virtual key, fgw api key, gateway target, provider credentials, bearer token, admin keys, dashboard session]
 ---
 
 The word "key" shows up in two completely different places in the Ferro Labs AI
@@ -67,11 +67,30 @@ and is safe to commit. The provider's real API key is resolved separately from
 the environment at request time.
 :::
 
+A target can also declare `models[]` alongside its `virtual_key` — model IDs
+the operator asserts that target serves, additive to whatever the model
+catalog and live discovery already report. It's the provider-agnostic way to
+route a model a provider doesn't otherwise advertise (a preview ID, a
+self-hosted deployment, a provider with no `/models` endpoint):
+
+```yaml
+targets:
+  - virtual_key: gemini
+    models:
+      - gemini-2.5-flash   # joins the routing index and /v1/models
+```
+
+See [Configuration](/getting-started/configuration) for the full `targets[]`
+schema.
+
 ## Admin API keys (`fgw_...`) — client credentials
 
 Admin API keys are the credentials **clients use to authenticate to the
 gateway**. They are minted via `POST /admin/keys` and returned as a string with
-an `fgw_` prefix (32 random bytes, hex-encoded — see `internal/admin/keys.go`).
+an `fgw_` prefix. The admin control plane that issues and validates them is
+split across three packages under `internal/admin/` — `model` (the `APIKey`
+type and scope rules), `repository` (the key store), and `handlers` (the HTTP
+surface) — there's no single `keys.go` file to point to.
 
 A client then presents the key as a Bearer token on inference routes:
 
@@ -84,18 +103,41 @@ curl http://localhost:8080/v1/chat/completions \
 
 Each key is a record with a lifecycle:
 
-- **Scopes** — capabilities granted to the key. When none are supplied at
-  creation, the key defaults to the admin scope.
-- **Expiry** — an optional `expires_at`. `ValidateKey` rejects a key once the
-  expiry has passed.
-- **Rotation** — `RotateKey` swaps the key string in place (stamping
-  `rotated_at`) while keeping the same ID, scopes, and usage history.
-- **Revocation** — `Revoke` marks a key inactive so it stops validating, without
-  deleting its record.
+- **Scopes** — `admin` or `read_only`. When none are supplied at creation, the
+  key defaults to **`read_only`** — least privilege, not admin.
+- **Expiry** — an optional `expires_at`. A key past its expiry stops
+  authenticating. `PUT /admin/keys/{id}` can extend it by sending a new
+  `expires_at`, or remove it entirely with `"clear_expiration": true`.
+- **Rotation** — `POST /admin/keys/{id}/rotate` swaps the key string in place
+  (stamping `rotated_at`) while keeping the same ID, scopes, and usage history.
+- **Revocation vs. deletion** — these are not the same operation. `POST
+  /admin/keys/{id}/revoke` marks the key inactive so it immediately stops
+  validating, but keeps the record (and its usage history) in `GET
+  /admin/keys` and in request-log attribution. `DELETE /admin/keys/{id}`
+  removes the record outright — it's irreversible, and existing request-log
+  rows keep the now-orphaned `api_key_id` but can no longer resolve it to a
+  name. Prefer revoke when you want the trail; delete when you don't need it.
 - **Usage** — every successful validation bumps `usage_count` and `last_used_at`.
+
+A key can't delete, revoke, or de-scope itself, and the last remaining `admin`
+key can't be deleted, revoked, or stripped of the `admin` scope — both are
+refused with `409` to prevent a self-inflicted lockout.
 
 When listed, the stored key string is masked to its first 8 characters
 (`fgw_...`) so the full secret is never echoed back by the admin API.
+
+### Dashboard sessions are not API keys
+
+`POST /admin/session` exchanges an API key (or `MASTER_KEY`) for a short-lived
+dashboard **session** token, prefixed `fgws_` — deliberately distinct from an
+API key's `fgw_` prefix so the two can never be confused. A session is a
+separate record from the `APIKey` it was minted from: it carries its own ID,
+inherits the source key's scopes at mint time, and expires on its own clock
+(24h absolute, or 1h after the last request — whichever comes first). Signing
+out (`DELETE /admin/session`) or an admin revoking one (`DELETE
+/admin/sessions/{id}`, or all at once with `DELETE /admin/sessions`) deletes
+the session row rather than marking it, so it stops validating immediately.
+Revoking a session never touches the API key it came from.
 
 ## Side-by-side
 
@@ -115,5 +157,5 @@ When listed, the stored key string is masked to its first 8 characters
   admin API keys.
 - [Configuration](/getting-started/configuration) — full `targets[]` and
   strategy reference.
-- [Providers configuration](/guides/providers-config) — which env var each
+- [Providers configuration](/providers/configuration) — which env var each
   provider's `virtual_key` resolves to.

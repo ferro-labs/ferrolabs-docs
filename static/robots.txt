@@ -1,4 +1,9 @@
 User-agent: *
 Allow: /
+Disallow: /search
+
+# Machine-readable corpus for AI answer engines and agents.
+# llms.txt: https://docs.ferrolabs.ai/llms.txt
+# llms-full.txt: https://docs.ferrolabs.ai/llms-full.txt
 
 Sitemap: https://docs.ferrolabs.ai/sitemap.xml

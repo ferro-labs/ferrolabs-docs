@@ -1,0 +1,66 @@
+---
+title: Response Cache Plugin
+description: Reference for the response-cache plugin — in-memory LRU+TTL caching of identical chat requests scoped per credential, with config keys, YAML, and gotchas.
+keywords: [response cache, AI gateway plugin, LLM response caching, cache hit, SkipProvider, ModelPreserving, in-memory cache]
+---
+
+The `response-cache` plugin serves an identical repeated chat request from an in-memory LRU+TTL store instead of calling the provider, cutting cost and latency on repeated prompts. It runs at both `before_request` (serve a hit) and `after_request` (store a miss), and every cache entry is scoped to the API credential that primed it.
+
+## Facts
+
+| | |
+|---|---|
+| Stages | `before_request` **and** `after_request` — multi-stage, byte-identical config required at both |
+| Reported type | `transform` |
+| Failure policy | Fails **closed** (a plugin error returns `500`) |
+| `ModelPreserving` | Yes — declaring it does **not** disable the gateway's pre-plugin `admitModel` check |
+| External dependencies | None — in-memory (`pkg/cache.Memory`), per-process, not shared across replicas |
+| Surfaces covered | Chat only — stands down on embeddings/images (any request carrying `Metadata[surface]`) |
+
+## Config keys
+
+| Key | Type | Default | Required | Description |
+|---|---|---|---|---|
+| `max_age` | int (seconds) | `300` | No | TTL for a cached entry. |
+| `max_entries` | int | `1000` | No | LRU capacity. `<= 0` disables storing — `after_request` becomes a no-op (cache reads still run, but nothing new is ever written). |
+
+## Minimal config
+
+Both stage entries must carry byte-identical `config` — the gateway resolves them to one shared cache instance by `name` + JSON-encoded config, and refuses to start if the two disagree.
+
+```yaml
+plugins:
+  - name: response-cache
+    type: transform
+    stage: before_request
+    enabled: true
+    config:
+      max_age: 300
+      max_entries: 1000
+
+  - name: response-cache
+    type: transform
+    stage: after_request
+    enabled: true
+    config:
+      max_age: 300
+      max_entries: 1000
+```
+
+## Gotchas
+
+- **Entries are scoped to the credential that primed them, with no opt-out.** The cache key is a SHA-256 hash over the opaque API key ID plus the request fields, so one credential's response is never served to another. There is no config flag to share a cache across keys — running many API keys against identical prompts lowers the effective hit rate, because each key builds its own set of entries. Unauthenticated callers share one bucket among themselves, never with an authenticated caller.
+- **A cache hit only skips the provider call.** `SkipProvider` (not the removed `Context.Skip`) <!-- accuracy-ok: documenting the v1.4.0 removal --> suppresses calling the provider — every remaining `before_request` plugin behind response-cache (guardrails, rate limiting, budget) still runs, and the entire `after_request` stage still runs, including budget's recording step and request-logger. A hit cannot be used to bypass a guardrail or a budget check. Plugins listed *before* response-cache in the config run before the hit is even detected.
+- **What's in the key.** The hash covers `model`, every message (`role`, `name`, `content`, content parts including image URLs and detail, tool calls with function name/arguments, tool call id, reasoning content), plus `temperature`, `top_p`, `n`, `seed`, `max_tokens`/`max_completion_tokens`, penalties, `stop`, `tools`, `tool_choice`, `parallel_tool_calls`, `response_format`, `logprobs`/`top_logprobs`, `stream`, `user`, and `logit_bias`. The provider/target is deliberately **not** in the key — a model id is assumed to name the same model on every target that serves it.
+- **Chat-only.** It stands down entirely on embeddings and image requests (any request carrying `Metadata[surface]`), because those are internally projected onto the chat request shape for routing and would hash identically to a chat request asking the same text — while the response has no `Choices` to serve back.
+- **`ModelPreserving` matters.** Because response-cache implements `plugin.ModelPreserving`, configuring it does not turn off the gateway's pre-plugin `admitModel` check the way an ordinary `transform` plugin would. Without that interface, an unroutable model could spend a rate-limit token and a budget dollar on its way to a 404.
+- **Cached responses cost nothing and are still logged.** A served hit reports `$0` cost but is still recorded by request-logger and still counted by rate-limit/budget — it just adds no spend.
+- **In-memory, per-process.** There is no Redis backend; a multi-replica deployment gets independent caches with independently lower hit rates, and nothing survives a restart.
+- **Re-storing a hit is skipped.** `after_request` is a no-op when `SkipProvider` is set or `Response` is nil, so serving a cached response never refreshes its TTL from that request.
+
+## Related
+
+- [Plugins overview](/plugins)
+- [Budget plugin](/plugins/budget)
+- [Request logger plugin](/plugins/request-logger)
+- [Request lifecycle](/getting-started/request-lifecycle)

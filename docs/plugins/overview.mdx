@@ -1,0 +1,154 @@
+---
+title: Plugin system
+description: "How plugins hook the Ferro Labs AI Gateway pipeline at before_request, after_request and on_error stages, with global config, ordering and failure policy."
+keywords: [AI gateway plugins, plugin pipeline, before_request, after_request, on_error, fail-open fail-closed, response cache, rate limit, budget, request logger]
+slug: /plugins
+---
+
+Plugins are the Ferro Labs AI Gateway's middleware. Each one runs at fixed points in the request lifecycle and can inspect the request, mutate it, deny it, skip the provider call, or record what happened. The six built-in plugins — guardrails, a rate limiter, a spend budget, a response cache, and a request logger — are all built on the same interface an out-of-tree plugin uses, so nothing about the built-ins is privileged.
+
+## What a plugin is
+
+A plugin is a named component implementing `plugin.Plugin` (`Name`, `Type`, `Init`, `Execute`, `Close`). The gateway loads it by name at startup, calls `Init` once with its `config` map, and then calls `Execute` on every request at each stage the plugin is registered for. `Execute` receives a `plugin.Context` carrying the request, the response (once available), per-request metadata, and the current stage — and can set `Reject`, `SkipProvider`, or mutate the request to influence the pipeline.
+
+A plugin's `Type()` — `guardrail`, `ratelimit`, `transform`, `logging`, `metrics`, or `auth` — is what the gateway acts on. It decides the failure policy, whether the plugin re-runs inside an agentic tool loop, and whether an admission check stands down. The `type:` written in your config is documentation only.
+
+## Plugins are global
+
+There is one plugin list, at the top level of the config. There is **no** per-route, per-target, or per-model plugin field — a plugin that is enabled is enabled for every routed request.
+
+```yaml
+plugins:
+  - name: word-filter
+    type: guardrail          # informational; the gateway reads the plugin's own Type()
+    stage: before_request
+    enabled: true            # enabled: false skips registration entirely
+    config:
+      blocked_words: ["password", "secret"]
+      case_sensitive: false
+```
+
+Each entry is `{ name, type, stage, enabled, config }`. `enabled: false` removes the entry from the pipeline — it is never constructed. Unknown keys inside a `config` block are silently ignored (each plugin reads its own map), while the top-level config decoder is strict and rejects an unknown key. Because a mistyped setting does nothing rather than erroring, check the exact keys a plugin reads against the catalog (below) — `requests_per_minute: 1` leaves `rate-limit`'s `100/s` default in place.
+
+## The three stages
+
+A plugin declares which stage it runs in with `stage:`. The gateway runs the plugins of each stage in the order they appear in the config file.
+
+| Stage | When it runs | What it can do | What it can't |
+|---|---|---|---|
+| `before_request` | After authentication, before the provider is called | Inspect and mutate the request; `Reject` it; set `SkipProvider` to serve a cached/synthetic response | — |
+| `after_request` | After the response is produced — **including on a cache hit**, and on streaming **after** every chunk has been delivered | Observe the completed response, cost, and timing; record and measure | Withhold or rewrite streamed content — the client already has it |
+| `on_error` | When a request fails, including a `before_request` rejection or a fail-closed plugin error | Record the failure with the last target attempted | — |
+
+`on_error` **always records.** It runs on a context detached from the request's cancellation, bounded by a 10-second budget, so a client that disconnected mid-stream still produces a terminal record — the failure never vanishes from the logs. This is why a plugin that logs must list itself at `on_error` too: a failed request never reaches `after_request`.
+
+## Execution order
+
+Within a stage, plugins run top-to-bottom in config order. Position matters — a plugin only sees what the plugins above it have already done.
+
+```yaml
+plugins:
+  # before_request runs top-to-bottom:
+  - name: word-filter        # 1. screen the prompt first
+    type: guardrail
+    stage: before_request
+    enabled: true
+    config:
+      blocked_words: ["secret"]
+  - name: rate-limit         # 2. spend a token from the bucket
+    type: ratelimit
+    stage: before_request
+    enabled: true
+    config:
+      requests_per_second: 100
+  - name: response-cache     # 3. a hit sets SkipProvider — steps 1-2 already ran
+    type: transform
+    stage: before_request
+    enabled: true
+    config:
+      max_age: 300
+      max_entries: 1000
+
+  # after_request — a multi-stage plugin repeats with BYTE-IDENTICAL config:
+  - name: response-cache
+    type: transform
+    stage: after_request
+    enabled: true
+    config:
+      max_age: 300
+      max_entries: 1000
+```
+
+Here a cache hit is detected at step 3, so the word filter and the rate limiter have already run — a repeated request is still screened and still spends a token. Listing `response-cache` above the guardrail would not change that: `SkipProvider` skips the provider, not the plugins.
+
+## Failure policy: a verdict is not a bug
+
+The gateway distinguishes a plugin that **decided** to deny a request from one that **broke**.
+
+- **Rejection** — the plugin set `Context.Reject` (with a `Reason`). This is a verdict, honoured for every plugin type, and reaches the client as a client error: `429` for the rate limiter, `402 insufficient_quota` for the budget, a `4xx` for a guardrail.
+- **Failure** — the plugin returned an error or panicked (panics are recovered and treated as errors). It never reached a decision, so:
+  - `guardrail`, `auth`, `ratelimit`, `transform`, and any unknown type **fail closed** — the request aborts with a `500`. A guardrail that could not run has approved nothing; a rate limiter that is down has limited no one, and answering `429` would invite every SDK to retry into the outage.
+  - `logging` and `metrics` **fail open** — the error is logged and the request proceeds. An observer that dies must not take down the request path.
+
+To deny a request in your own plugin, set `pctx.Reject` and return `nil`. Return an error only when the plugin itself broke.
+
+## SkipProvider does not bypass the chain
+
+A `before_request` plugin can set `Context.SkipProvider` to say "do not call the provider; serve `Context.Response` instead" — this is how `response-cache` answers a hit. It skips the provider call **only**. Every remaining `before_request` plugin and the whole `after_request` stage still run, so a cache hit cannot bypass a guardrail, a rate limit, or a budget listed behind it. `SkipProvider` stays set into `after_request` as a fact — `true` means no provider was contacted — which cost recording keys off and the logger deliberately ignores.
+
+:::note Removed in v1.4.0
+The old `Context.Skip` (which abandoned every plugin after it, letting a cache hit bypass guardrails) is gone. `SkipProvider` is its replacement. <!-- accuracy-ok -->
+:::
+
+## Multi-stage plugins
+
+A plugin that acts at more than one stage — `response-cache` (check + store), `budget` (check + record), `request-logger` (log at all three) — needs **one config entry per stage**, and the entries must carry **byte-identical config**. The gateway resolves entries by `name` plus the JSON encoding of the whole `config` block: identical entries share one instance (and its state), disagreeing entries are two instances that never see each other. If the entries for one plugin across stages disagree, `ValidateMultiStagePlugins` rejects the config and **the gateway refuses to start** — the same failure `ferrogw validate` and `ferrogw doctor` report. `request-logger` in particular must be listed at `on_error` as well, or failed requests write no terminal row and disappear from the default `/admin/logs` listing.
+
+## Agentic tool loops
+
+When a request drives an agentic MCP tool loop, the `before_request` plugins re-run on **every** turn — because each turn is a fresh provider call carrying tool results the caller did not write. Two types are excluded: `transform` (re-running it would rewrite the model mid-conversation) and `logging` / `metrics` (re-running would write one row and one metric sample per turn). So guardrails, the rate limiter, and the budget see every turn — the budget's per-turn check adds this request's running spend, so the cap can close mid-loop — while the logger records the loop once.
+
+## Secrets in plugin config
+
+Braced `${VAR}` references inside a plugin's `config` are resolved **at plugin construction**, via the shared env resolver, never at config load. The stored `Config` keeps the reference, so a secret never reaches the config-history store or `GET /admin/config`. A bare `$` is data (`pa$$w0rd` survives); an undefined variable is a startup error.
+
+## Registering an out-of-tree plugin
+
+The built-ins have no special path — write your own the same way:
+
+1. Implement `plugin.Plugin` in your package.
+2. Call `plugin.RegisterFactory("my-plugin", New)` from an `init()` function.
+3. Add a blank import in `cmd/ferrogw/main.go`: `_ "your/module/path/myplugin"`.
+
+Optionally implement `ConfigValidator` (`ValidateConfig(map[string]any) error`) so `ferrogw validate` checks your `config` block before deployment. Its contract is narrow — no I/O, no `${VAR}` resolution, no state — because it runs pre-flight on a build machine with no secrets. Deny requests with `pctx.Reject`; reserve returned errors for the plugin actually breaking.
+
+## Inspecting what is loaded
+
+Two admin endpoints answer different questions:
+
+- `GET /admin/plugins` — the plugins **this instance has configured**, read from the live config.
+- `GET /admin/plugins/catalog` — the plugins **this build ships**: name, type, one-line summary, the `config` settings each reads, and whether it fails open. This is the authority the dashboard reads, so a card can never name a setting no plugin reads.
+
+## Built-in plugins
+
+Six plugins ship with the open-source gateway. Each has its own page for full configuration and gotchas.
+
+| Plugin | Type | Stages | Purpose |
+|---|---|---|---|
+| [`word-filter`](/plugins/word-filter) | guardrail | before_request (+ after_request) | Reject a request — or screen a response — whose text contains a blocked entry as a substring. |
+| [`max-token`](/plugins/max-token) | guardrail | before_request | Reject a request over a completion-token ceiling, message count, or input length; never imposes a ceiling. |
+| [`rate-limit`](/plugins/rate-limit) | ratelimit | before_request | Token-bucket limits globally and per API key or user, independent of the per-IP HTTP limiter. |
+| [`budget`](/plugins/budget) | ratelimit | before_request + after_request | Soft per-API-key USD spend cap computed from token usage; `402 insufficient_quota` once exhausted. |
+| [`response-cache`](/plugins/response-cache) | transform | before_request + after_request | Serve an identical repeated chat request from an in-memory cache, scoped to the credential that primed it. |
+| [`request-logger`](/plugins/request-logger) | logging | before_request + after_request + on_error | Structured per-request logs, optionally persisted to power the dashboard's Request Logs page. |
+
+Advanced guardrails — PII redaction, prompt-injection shielding, secret scanning, schema validation — are available in Ferro Labs Managed. See [Enterprise plugins](/plugins/enterprise).
+
+## Related
+
+- [Configuration](/getting-started/configuration) — where the `plugins:` list lives
+- [Rate limiting](/guides/rate-limiting) — the plugin limiter vs the per-IP HTTP limiter
+- [Cost tracking](/guides/cost-tracking) — pairing `budget` with request-log cost data
+- [Request logging](/operations/request-logging) — persisting `request-logger` output
+- [MCP tool calling](/guides/mcp) — how plugins re-run across agentic loop turns
+- [Enterprise plugins](/plugins/enterprise) — managed guardrails beyond the OSS set

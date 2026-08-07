@@ -1,0 +1,88 @@
+---
+title: Request Logger Plugin
+description: Reference for the request-logger built-in plugin — structured stdout logs plus optional persisted rows powering the dashboard, config keys, YAML, and gotchas.
+keywords: [request logger plugin, AI gateway logging, request log persistence, admin logs, duration_ms, ttft_ms, cost_usd, SQLite Postgres logging]
+---
+
+The `request-logger` plugin records every request, response, and failure as structured stdout log lines and, when `persist: true` plus a configured request-log store, as rows that power the dashboard's Request Logs page. It runs at all three lifecycle stages — `before_request`, `after_request`, and `on_error` — so a request is logged whether it succeeds, fails, or is served from cache.
+
+## Facts
+
+| | |
+|---|---|
+| Stages | `before_request` **and** `after_request` **and** `on_error` — multi-stage, byte-identical config required at all three |
+| Reported type | `logging` (`plugin.TypeLogging`) |
+| Failure policy | Fails **open** — a broken log sink costs a warn line, never the request |
+| Store write failures | Warned, not returned — a down/full store never fails the request, but is logged so the gap is visible |
+| Agentic loops | Does **not** re-run per MCP tool-loop turn (unlike guardrails/ratelimit/budget) — one row per request, not one per turn |
+| Timestamps | UTC (`time.Now().UTC()`) on every logged and persisted entry |
+| External dependencies | Optional: `REQUEST_LOG_STORE_BACKEND` (`sqlite` or `postgres`) + `REQUEST_LOG_STORE_DSN`, set at the process level — not in plugin `config`. The store is gateway-owned; the plugin's `Close` never touches it |
+
+## Config keys
+
+| Key | Type | Default | Required | Description |
+|---|---|---|---|---|
+| `level` | string: `debug`\|`info`\|`warn`\|`error` | `info` | No | Log level for the `before_request`/`after_request` stdout lines. The `on_error` line always logs at `error`, regardless of this setting. |
+| `persist` | bool | `false` | No | Write rows to the shared request-log store. Requires `REQUEST_LOG_STORE_BACKEND` (and `REQUEST_LOG_STORE_DSN`) to be set at the process level; if it isn't, `Init` logs a startup warning and the plugin falls back to stdout-only. |
+| `backend` / `dsn` | — | — | No | **Obsolete.** Ignored with a warning at `Init` — persistence target moved to the process-level `REQUEST_LOG_STORE_BACKEND` / `REQUEST_LOG_STORE_DSN` env vars. Deliberately excluded from `GET /admin/plugins/catalog`'s declared settings (only `level` and `persist` are listed). |
+
+## Minimal config
+
+All three stage entries must carry byte-identical `config` — the gateway resolves them to one shared instance by `name` + JSON-encoded config, and refuses to start if any of the three disagree.
+
+```yaml
+plugins:
+  - name: request-logger
+    type: logging
+    stage: before_request
+    enabled: true
+    config:
+      level: info
+      persist: false
+
+  - name: request-logger
+    type: logging
+    stage: after_request
+    enabled: true
+    config:
+      level: info
+      persist: false
+
+  - name: request-logger
+    type: logging
+    stage: on_error
+    enabled: true
+    config:
+      level: info
+      persist: false
+```
+
+To persist rows for the admin API and dashboard, set `persist: true` on all three entries and configure the store once at the process level:
+
+```bash
+export REQUEST_LOG_STORE_BACKEND=sqlite
+export REQUEST_LOG_STORE_DSN=ferrogw-requests.db
+```
+
+## Gotchas
+
+- **The `on_error` entry is not optional.** A failed request never reaches `after_request`, so without an `on_error` entry a failure produces no terminal row and simply vanishes from the default `GET /admin/logs` listing — the request happened, but nothing says so.
+- **A completed-then-failed request never gets two terminal rows.** If the provider answered, the `after_request` row was written, and a *later* `after_request` plugin then breaks, the failure is annotated onto the row that already exists (`recordLateFailure`) rather than written as a second `on_error` row — otherwise the default listing and every `Stats` figure would double-count that one request.
+- **Cache hits are logged like any other request.** Unlike the budget plugin, `request-logger` deliberately ignores `SkipProvider` — a response served from cache still belongs in the audit trail. Its row carries the real token usage from the cached response paired with the `$0` cost the gateway hands a cache hit; usage and cost are different facts, and a cache hit is where they diverge.
+- **The `after_request` row's `Provider` and `APIKeyID` answer different questions.** `Provider` names whoever originally produced the response (for a cache hit, the provider that answered the very first time); `APIKeyID` names whoever consumed it *this* time. On a cache hit those can be two different credentials.
+- **`on_error` names the provider from the last routing target attempted**, not from a response — there is no response on this path. On a request that never reached routing (denied by a `before_request` plugin, or no target serves the model), that field is empty.
+- **Store-write failures are warned about, never returned as plugin errors.** The framework already treats a plugin error as "the plugin itself broke," and a logging plugin is fail-open by design so a struggling store cannot cost a completed LLM call. If `l.writer.Write` fails, the plugin logs `request log write failed; the persisted request log is incomplete` naming the stage, and moves on — the request is unaffected, but the persisted trail is quietly short a row unless you're watching for that warning.
+- **`on_error` runs on a context detached from request cancellation**, bounded by a 10-second write budget, specifically so a client that disconnected mid-stream still produces a terminal failure row instead of the record vanishing with the connection.
+- **Error text is redacted before it's logged or persisted.** `on_error` runs `pctx.Error.Error()` through the gateway's redactor (emails, JWTs, AWS keys) so an upstream provider error that happened to echo back a credential doesn't land in stdout or the store verbatim.
+- **Does not re-run inside agentic MCP tool loops.** Guardrails, the rate limiter, and the budget re-check on every loop turn; `request-logger` is deliberately excluded (along with metrics plugins) so one multi-turn agentic request produces one row, not one row per turn.
+- **`GET /admin/logs` defaults to one row per request, not one row per stage.** The plugin writes a row at every stage it runs — `before_request`, `after_request` (or the annotated/on_error terminal row), and `on_error` on failure. The default listing returns only the **terminal** stages (`after_request` + `on_error`) so each request appears once; pass `?stage=all` to see the raw per-stage event stream, or `?stage=<name>` to filter to exactly one stage.
+- **`backend`/`dsn` in plugin config are a no-op**, kept only so an operator running an old config gets a warning explaining where the setting moved, rather than a silently ignored key. Set `REQUEST_LOG_STORE_BACKEND`/`REQUEST_LOG_STORE_DSN` instead.
+- **Unknown config keys are silently ignored** — the plugin reads its own map rather than going through the strict top-level config decoder, so a typo like `persists: true` leaves `persist` at its `false` default with no error.
+
+## Related
+
+- [Request logging](/operations/request-logging) — persisting rows, store backends, and admin log filters
+- [Dashboard](/guides/dashboard) — the embedded Request Logs page this plugin's persisted rows power
+- [Plugins overview](/plugins)
+- [Budget plugin](/plugins/budget)
+- [Response cache plugin](/plugins/response-cache)

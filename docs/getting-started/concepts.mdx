@@ -1,56 +1,84 @@
 ---
 title: Concepts
-description: "Core concepts of the Ferro Labs AI Gateway — OpenAI-compatible routing across 30 providers, 8 strategies, plugin pipeline, MCP tool-calling, and the difference between routes, targets, and strategies."
-keywords: [AI gateway concepts, LLM routing strategies, AI plugins, MCP tool calling, OpenAI wire format, gateway routing, content-based routing, ab-test routing]
+description: "Core concepts of the Ferro Labs AI Gateway: the targets allowlist, 8 routing strategies, the plugin pipeline, MCP tool-calling, and the embedded dashboard."
+keywords: [AI gateway concepts, LLM routing strategies, AI plugins, MCP tool calling, OpenAI wire format, capability matrix, plugin pipeline, targets allowlist]
 ---
+
+The gateway sits between your application and 30 LLM providers, speaking one OpenAI-compatible wire format on the way in and translating to each provider's native API on the way out. This page defines the vocabulary the rest of the docs use: providers, targets, strategies, plugins, and MCP servers.
 
 ## OpenAI-compatible API
 
 The gateway speaks the OpenAI wire format for chat completions, embeddings, images, and model listing. Any client that works with OpenAI will work with the gateway after changing only the `base_url`. Provider credentials, model routing, and policy enforcement happen inside the gateway — your application code is unaffected.
 
+## Providers and targets
+
+A **provider** is a registered AI API backend (e.g., OpenAI, Anthropic, Bedrock). The gateway supports [30 providers](/providers). A provider is *registered* when its required environment variable(s) are set — no code changes needed.
+
+A **target** is a config entry (`targets[]`) that references a registered provider by `virtual_key`. `targets` is an **allowlist on every routed surface**: setting a provider's env var only registers it — the provider serves requests only if it also appears in `targets[]`. A model owned solely by a provider that is registered but not listed under `targets` returns `404 model_not_found`.
+
+Each target carries:
+
+| Field | Purpose |
+|---|---|
+| `virtual_key` | Names the registered provider this target routes to (required) |
+| `weight` | Relative share under `loadbalance`; `0` drains the target (ignored by every other mode) |
+| `retry` | `attempts`, `on_status_codes`, `initial_backoff_ms` — honoured under **every** routing mode, not just `fallback` |
+| `circuit_breaker` | `failure_threshold`, `success_threshold`, `timeout` — one breaker per target, shared across chat, streaming, embeddings, and images |
+| `concurrency` | `max_concurrency`, `queue_size` — caps in-flight requests per target; overflow returns `429` |
+| `models` | Operator-declared model IDs this target serves, additive to the model catalog and live discovery; exact IDs only, no wildcards |
+
 ## Routing strategies
 
-The strategy controls which provider target receives each request. Configure it with the `strategy.mode` key in your config file.
+The strategy controls which target(s) a request is offered to, and in what order. Configure it with `strategy.mode`.
 
 | Strategy | Description |
 |---|---|
 | `single` | Always route to the first target. Simplest setup. |
-| `fallback` | Try targets in order; retry the next on failure with exponential backoff. |
+| `fallback` | Try targets in declared order; advance to the next target on failure. |
 | `loadbalance` | Distribute requests across targets by weight. |
-| `conditional` | Evaluate rules (model name, model prefix) to pick a target per request. |
-| `least-latency` | Route to the target with the lowest P50 latency, using a rolling tracker. |
+| `conditional` | Match `model` (exact) or `model_prefix` (prefix) against declared rules; first match wins. |
+| `least-latency` | Route to the compatible target with the lowest observed p50 latency. |
 | `cost-optimized` | Estimate input cost from the model catalog and route to the cheapest compatible target. |
-| `content-based` | Route based on prompt content using substring match or regex. First rule match wins. |
+| `content-based` | Match user-message content by substring or regex; first rule match wins. |
 | `ab-test` | Split traffic across labeled variants by weight for comparison testing. |
 
-See [Routing policies](/guides/routing-policies) for YAML examples of each strategy.
+One pipeline governs chat, streaming, embeddings, and images, so retry and circuit-breaking behave identically across all four. Strategies split into two families:
 
-## Providers and targets
+- **Pool modes** (`fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test`) advance past a failed target to the next candidate.
+- **Named modes** (`single`, `conditional`, `content-based`) commit to their chosen target and report its failure rather than trying another.
 
-A **provider** is a registered AI API backend (e.g., OpenAI, Anthropic). The gateway supports [30 providers](/guides/providers). Providers are enabled by setting environment variables — no code needed.
+Every mode skips a target whose circuit is open; if every candidate's circuit is open, the request is still attempted and returns `503`.
 
-A **target** is a reference to a provider in your config. Targets carry optional fields: `weight` (for load balancing), `retry` (attempts + status codes), and `circuit_breaker` (thresholds + timeout).
+See [Routing](/routing) for per-strategy configuration and YAML examples.
 
 ## Model aliases
 
 Aliases map short names to full model IDs. They are resolved before routing, so `cheap` can map to `gemini-1.5-flash` and every request to `model: cheap` is transparently sent to Gemini.
 
+## Capability matrix
+
+`GET /v1/capabilities` reports, per provider, which OpenAI chat parameters it can express: `forward` (sent as-is), `translate` (mapped to an equivalent), or `unsupported`. When a request sets a parameter a routed provider can't express, `compatibility.on_unsupported_param` decides what happens: `warn` (default — forward it anyway and log), `drop` (remove it and log), or `reject` (`400` naming the parameter).
+
 ## Plugins
 
-Plugins run at three lifecycle stages: `before_request`, `after_request`, and `on_error`.
+Plugins are **global**, configured under a single top-level `plugins:` list — there is no per-route or per-target plugin field. Each entry runs at one of three stages: `before_request`, `after_request`, or `on_error`.
 
 ### OSS plugins
 
-These 6 plugins ship with the open-source gateway:
+These 6 plugins ship with the open-source gateway. Three of them are multi-stage — they must be listed once per stage with **byte-identical config**, or the gateway refuses to start:
 
-| Plugin | Stage | Purpose |
+| Plugin | Stage(s) | Purpose |
 |---|---|---|
-| `word-filter` | before_request | Block requests containing banned words |
-| `max-token` | before_request | Enforce token and message count limits |
-| `response-cache` | before_request | Cache exact-match responses in memory |
-| `request-logger` | before_request | Emit structured logs, optionally persist to SQLite/Postgres |
-| `rate-limit` | before_request | Token-bucket rate limiting (global, per-key, per-user) |
-| `budget` | before_request + after_request | Track and enforce per-key spend limits |
+| `word-filter` | `before_request` (optionally also `after_request`) | Reject request or response text containing a blocked substring |
+| `max-token` | `before_request` | Reject requests exceeding token, message-count, or input-length limits |
+| `rate-limit` | `before_request` | Token-bucket rate limiting (global, per-key, per-user) |
+| `budget` | `before_request` **+** `after_request` | Check and record per-API-key USD spend; over the cap returns `402 insufficient_quota` |
+| `response-cache` | `before_request` **+** `after_request` | Serve identical repeated chat requests from an in-memory cache |
+| `request-logger` | `before_request` **+** `after_request` **+** `on_error` | Emit structured logs, optionally persist to SQLite/Postgres |
+
+**Failure policy**: a plugin's `Reject` verdict is always honoured — it becomes a `4xx`, `429` (rate-limit), or `402` (budget) response. A plugin *error* (the plugin itself broke, not a deliberate rejection) fails **closed** (`500`) for guardrail, auth, ratelimit, and transform plugins, but fails **open** (logged, request continues) for logging and metrics plugins.
+
+**SkipProvider**: when `response-cache` serves a hit, it sets `SkipProvider` on the request, which skips only the call to the upstream provider — every remaining `before_request` plugin and the whole `after_request` stage still run, so rate limiting, budget checks, and logging behave the same whether or not the response came from cache.
 
 ### Ferro Labs Managed plugins
 
@@ -68,24 +96,38 @@ These 5 plugins require [Ferro Labs Managed](https://www.ferrolabs.ai/) because 
 The 5 enterprise plugins require a Ferro Labs Managed account. [Join the waitlist →](https://www.ferrolabs.ai/)
 :::
 
-See [Plugins](/guides/plugins) for full configuration examples.
+See [Plugins](/plugins) for full configuration examples.
 
 ## MCP integration
 
-Model Context Protocol (MCP) lets you connect external tool servers to the gateway. When `mcp_servers` are configured, the gateway injects available tools into every chat completion request and runs an agentic loop when the model returns `tool_calls`. This works transparently — clients receive the final text response without needing to implement the tool loop themselves.
+Model Context Protocol (MCP) lets you connect external tool servers to the gateway. Each `mcp_servers[]` entry sets exactly one of `url` (Streamable HTTP) or `command` (+`args`, a stdio subprocess); a stdio subprocess inherits **no** gateway environment — only `PATH`/`HOME`/`LANG`/`TMPDIR` plus whatever you list explicitly under `env`.
 
-MCP Phase 1 (tool injection + agentic loop) shipped in v0.8.0. Streaming support for MCP requests was added in v1.0.0.
+Tool injection is conditional: the gateway injects available MCP tools into a chat completion **only when the request carries no `tools` array of its own**. A request that already supplies its own tools passes through untouched — the gateway does not merge or de-duplicate. When the model responds with `tool_calls` the gateway owns, it calls the tool over MCP, appends the result as a `tool` message, and re-sends to the model — up to a bounded depth — invisibly to the caller. Guardrails and budget checks run on every loop turn, not just the first.
+
+Setting `required: true` on a server gates `GET /readyz` on that server's initialize handshake — if it isn't ready, the instance stops serving traffic entirely, including requests that need no tools.
 
 See [MCP integration](/guides/mcp) for setup and examples.
 
+## Dashboard
+
+The operations dashboard ships **embedded** in the OSS binary and is served from the gateway's own root — there's no standalone dashboard container or separate image to deploy. It surfaces request logs, API key management, configured plugins, and config history.
+
 ## Ferro Labs Managed
 
-[Ferro Labs Managed](/ferrocloud/overview) is the managed, multi-tenant version of the AI Gateway hosted by Ferro Labs. It wraps the same OSS engine with per-tenant isolation, a management dashboard, durable billing, [semantic caching](/ferrocloud/semantic-cache), SSO/SAML, audit logs, and the 5 enterprise security plugins listed above. See [OSS vs Ferro Labs Managed](/guides/oss-vs-ferrocloud) for a full comparison.
+[Ferro Labs Managed](/ferrocloud/overview) is the managed, multi-tenant version of the AI Gateway hosted by Ferro Labs. It wraps the same OSS engine with per-tenant isolation, durable billing, [semantic caching](/ferrocloud/semantic-cache), SSO/SAML, audit logs, and the 5 enterprise security plugins listed above. See [OSS vs Ferro Labs Managed](/guides/oss-vs-ferrocloud) for a full comparison.
 
 ## Observability
 
-- **Prometheus metrics** — scraped at `/metrics`. Includes request counts, latency histograms, token usage, and cache hit rates.
-- **Structured JSON logs** — emitted to stdout with a per-request `trace_id` for log correlation.
-- **Health endpoint** — `GET /health` returns per-provider availability with latency measurements.
+- **Prometheus metrics** — scraped at `/metrics` (requires a bearer token with `read_only` or `admin` scope). Includes request counts, latency histograms, token usage, and cache hit rates.
+- **Structured JSON logs** — emitted to stdout, correlated by the `X-Request-ID` trace ID also returned on every response.
+- **Health checks are split three ways**: `GET /livez` reports the process is alive; `GET /readyz` reports whether at least one target is routable (`503`, reason `no routable targets`, when none is); `GET /health` returns a deeper diagnostic — per-provider registration and circuit-breaker state.
 
-See [Observability](/guides/observability) and [Monitoring](/operations/monitoring) for details.
+See [Monitoring](/operations/monitoring) for details.
+
+## Related
+
+- [Architecture](/getting-started/architecture)
+- [Request lifecycle](/getting-started/request-lifecycle)
+- [Configuration](/getting-started/configuration)
+- [Routing](/routing)
+- [Plugins](/plugins)

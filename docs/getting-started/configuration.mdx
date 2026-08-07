@@ -1,7 +1,7 @@
 ---
 title: Configuration
-description: "Complete v1.0.0 configuration reference for the Ferro Labs AI Gateway — routes, targets, 8 routing strategies, model aliases, all 6 built-in plugins, MCP servers, and budget controls."
-keywords: [AI gateway configuration, config.yaml, LLM routing config, model aliases, YAML configuration, gateway config reference, content-based routing config, ab-test config]
+description: "Complete v1.4.x config reference for the Ferro Labs AI Gateway — targets, retry, circuit breakers, all 8 routing strategies, plugins, and MCP servers."
+keywords: [AI gateway configuration, config.yaml, LLM routing config, targets concurrency, compatibility on_unsupported_param, MCP servers config, observability tracing config, budget plugin config]
 ---
 
 import Head from '@docusaurus/Head';
@@ -11,13 +11,13 @@ import Head from '@docusaurus/Head';
     "@context": "https://schema.org",
     "@type": "TechArticle",
     "headline": "Ferro Labs AI Gateway Configuration Reference",
-    "description": "Complete v1.0.0 configuration reference for the Ferro Labs AI Gateway — routes, targets, 8 routing strategies, model aliases, all 6 built-in plugins, MCP servers, and budget controls.",
+    "description": "Complete v1.4.x config reference for the Ferro Labs AI Gateway — targets, retry, circuit breakers, all 8 routing strategies, plugins, and MCP servers.",
     "url": "https://docs.ferrolabs.ai/getting-started/configuration/"
   })}</script>
 </Head>
 
-:::info v1.0.0 reference
-This configuration reference covers Ferro Labs AI Gateway v1.0.0 — the first stable release with semver guarantees. All configuration keys documented here are part of the stable API.
+:::info As of v1.4.x
+This page documents the config schema shipped by v1.4.x. `apiVersion` is advisory — an unrecognized value is kept and only logged as a warning, so a newer config file still starts on an older binary.
 :::
 
 The gateway loads configuration from a YAML or JSON file at the path set by `GATEWAY_CONFIG`.
@@ -27,7 +27,24 @@ export GATEWAY_CONFIG=./config.yaml
 ./ferrogw
 ```
 
-Supported extensions: `.yaml`, `.yml`, `.json`.
+Supported extensions: `.yaml`, `.yml`, `.json`. Decoding is **strict** — an unknown key is rejected (with its name and line number) rather than silently ignored, and the same strict decoder validates `PUT`/`POST /admin/config`, so a config pushed through the admin API can't disagree with a file on what's valid. Loading only decodes; a separate validation pass (`ValidateConfig`, also run by `ferrogw validate`) checks the values — an unroutable `target_key`, a negative weight, a duplicate multi-stage plugin — and a failure on either exits the process (`os.Exit(1)`).
+
+## Top-level fields
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `apiVersion` | string | `v1` | Advisory schema version. Never causes a load failure. |
+| `max_request_bytes` | int64 | `10485760` (10 MiB) | Body-size cap for `/v1/*` and admin write endpoints. Over the limit = HTTP 413. Batch/file uploads are exempt. |
+| `request_timeout` | Go duration string | unset (no deadline) | Bounds one non-streaming request end to end — plugin stages, provider call, and every retry/fallback attempt. Streaming requests are exempt, **except** an MCP agentic loop, which is delivered as a single chunk and is treated like any other non-streaming request. |
+| `strategy` | object | mode `single` | Routing configuration — see [Strategy](#strategy). |
+| `targets` | array | — (at least 1 required) | Provider targets — see [Targets](#targets). |
+| `batch_target` | string | unset (surface returns 501) | `virtual_key` of the target that serves `/v1/files*` and `/v1/batches*`. Must name a configured target whose provider supports batch pass-through (`openai`, `azure-openai`, `groq`, `novita`, `qwen`). |
+| `responses_target` | string | unset (id sub-routes return 501) | `virtual_key` of the target that serves the stateful `/v1/responses/{id}` sub-routes (retrieve/delete/cancel/input_items). `POST /v1/responses` (create) still routes by model regardless. |
+| `aliases` | map | — | Friendly model name → concrete model id, resolved before routing and plugins. |
+| `plugins` | array | — | Plugin middleware entries — see [Plugins](#plugins). |
+| `mcp_servers` | array | — | External MCP tool servers — see [MCP servers](#mcp-servers). |
+| `compatibility` | object | `on_unsupported_param: warn` | See [Compatibility](#compatibility). |
+| `observability` | object | NoOp (tracing off) | See [Observability](#observability). |
 
 ## Strategy
 
@@ -38,16 +55,22 @@ strategy:
   mode: fallback  # single | fallback | loadbalance | conditional | least-latency | cost-optimized | content-based | ab-test
 ```
 
-| Mode | Description |
-|---|---|
-| `single` | Route every request to the first target. |
-| `fallback` | Try targets in order; retry on failure with exponential backoff. |
-| `loadbalance` | Weighted random distribution across targets. |
-| `conditional` | Rule-based: match a request field (e.g. model name) to a target. |
-| `least-latency` | Route to the target with the lowest P50 latency (rolling tracker). |
-| `cost-optimized` | Use the built-in model catalog to estimate prompt cost and pick the cheapest compatible target. |
-| `content-based` | Route based on user message content using substring or regex matching. |
-| `ab-test` | Split traffic across labeled variants by weight for comparison testing. |
+| Mode | Family | Description |
+|---|---|---|
+| `single` | Named | Route every request to `targets[0]` only. |
+| `fallback` | Pool | Try targets in declared order; advance to the next on failure. |
+| `loadbalance` | Pool | Weighted random distribution across targets (`targets[].weight`). |
+| `conditional` | Named | Match a request field (`model` or `model_prefix`) to a target; first match wins. |
+| `least-latency` | Pool | Route to the compatible target with the lowest observed p50 wall-clock latency. |
+| `cost-optimized` | Pool | Estimate prompt cost from the model catalog and pick the cheapest compatible target. |
+| `content-based` | Named | Route on user-message content by substring or regex; first match wins. |
+| `ab-test` | Pool | Split traffic across labeled, weighted variants for comparison testing. |
+
+The mode families matter for failure handling: a **pool** mode (`fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test`) advances the request pipeline to the next candidate target when one fails. A **named** mode (`single`, `conditional`, `content-based`) commits to the target it picked and reports that target's failure — it does not fail over to a sibling target just because one exists.
+
+Two rules hold under **every** mode, named or pool:
+- `targets[].retry` is honored regardless of mode — it re-asks the *same* target the number of configured times. Whether a *different* target is asked afterward is the mode's decision alone.
+- A target whose circuit breaker is open is skipped when the routable set is chosen. When every candidate target's circuit is open, the request is still attempted and answered `503` — that's a different signal from `404 model_not_found` ("nothing serves this model" vs. "everything that could serve it is currently down").
 
 ### Conditional rules
 
@@ -56,17 +79,19 @@ strategy:
   mode: conditional
   conditions:
     - key: model
-      value: gpt-4o-mini
+      value: gpt-4o
       target_key: openai
-    - key: model
-      value: claude-3-5-sonnet-20241022
+    - key: model_prefix
+      value: claude-
       target_key: anthropic
-    - key: model
-      value: gemini-1.5-flash
-      target_key: gemini
+targets:
+  - virtual_key: openai   # targets[0] doubles as the no-match fallback
+  - virtual_key: anthropic
 ```
 
-Rules are evaluated in order. `key` names the request field to inspect (e.g. `model`), `value` is the exact value it must match, and `target_key` is the target to route to.
+`key` is one of `model` (exact match) or `model_prefix` (`strings.HasPrefix` match) — a closed set validated at load; anything else is a config error, not a silent no-op. `value` is what `key` is matched against, and `target_key` must name a configured `targets[].virtual_key`.
+
+Rules are evaluated in order; the first match wins and the request commits to that target — a request for a model the matched target doesn't actually serve is `404 model_not_found`, even when another configured target does serve it. Write another rule rather than relying on failover; `conditional` is a named mode. Unmatched requests fall to `targets[0]`.
 
 ### Content-based routing
 
@@ -74,18 +99,24 @@ Rules are evaluated in order. `key` names the request field to inspect (e.g. `mo
 strategy:
   mode: content-based
   content_conditions:
+    - type: prompt_regex
+      value: "(?i)\\b(code|function|class|implement)\\b"
+      target_key: deepseek
     - type: prompt_contains
       value: "translate"
-      target_key: deepl-provider
-    - type: prompt_regex
-      value: "(?i)(code|function|class|def |import )"
+      target_key: gemini
+    - type: prompt_not_contains
+      value: "confidential"
       target_key: openai
-    - type: prompt_contains
-      value: "summarize"
-      target_key: anthropic
+targets:
+  - virtual_key: openai   # no-match fallback
+  - virtual_key: deepseek
+  - virtual_key: gemini
 ```
 
-Three condition types: `prompt_contains` (case-insensitive substring), `prompt_not_contains`, and `prompt_regex` (Go regexp). Regex patterns are compiled at startup — invalid patterns cause a startup error. First match wins; unmatched requests fall to the first target.
+Three condition types, evaluated over **user-role messages only** (system and assistant content is never inspected): `prompt_contains` (case-insensitive substring), `prompt_not_contains` (true when no user message contains the value — matches broadly, so ordering matters), and `prompt_regex` (Go regexp, compiled at startup — an invalid pattern is a startup error). First match wins and the request commits to that target; unmatched requests fall to `targets[0]`.
+
+`content-based` is a named mode, so a failure at the matched target is the request's answer, not a trigger to try another target.
 
 ### A/B test routing
 
@@ -94,57 +125,82 @@ strategy:
   mode: ab-test
   ab_variants:
     - target_key: openai
-      weight: 80
+      weight: 70
       label: control
     - target_key: anthropic
-      weight: 20
+      weight: 30
       label: challenger
 ```
 
-Weights are relative. Each variant carries a `label` field, which is currently emitted only to the gateway's DEBUG logs (not to events or a queryable log column).
+Weights are relative (`weight / sum(weights)`); a zero weight drains a variant to no traffic, a negative weight or an all-zero set is a load error. The draw is over **eligible** variants only — a variant whose provider doesn't serve the requested model never wins that draw. Each variant's `label` is logged with every routed request for analytics. `ab-test` is a pool mode: a failure at the drawn variant advances to the next eligible one.
 
 ## Targets
 
-Targets are provider references. Each `virtual_key` must match a registered provider (see [Provider configuration](/guides/providers-config)).
+Targets are provider references. Each `virtual_key` must name a registered provider (registration comes from setting that provider's env vars — see [Provider configuration](/providers/configuration)). **`targets` is an allowlist on every routed surface**: a provider can be fully registered via its env vars and still serve nothing if it isn't listed here — a model no configured target owns answers `404 model_not_found`.
 
 ```yaml
 targets:
   - virtual_key: openai
-    weight: 70           # used by loadbalance strategy
+    weight: 1.0           # relative share under loadbalance only; ignored elsewhere
     retry:
       attempts: 3
-      on_status_codes: [429, 502, 503]
-      initial_backoff_ms: 100
+      on_status_codes: [429, 502, 503]   # omit for the default policy: transport errors + 408/429/5xx
+      initial_backoff_ms: 100            # base for full-jitter exponential backoff
     circuit_breaker:
-      failure_threshold: 5   # failures before opening
-      success_threshold: 2   # successes before closing
-      timeout: "30s"         # time in open state before half-open probe
+      failure_threshold: 5    # consecutive failures before opening (default 5)
+      success_threshold: 1    # half-open successes needed to close (default 1)
+      max_half_threshold: 1   # concurrent probes allowed while half-open (default 1)
+      timeout: 30s             # time in open state before a half-open probe (default 30s)
+    concurrency:
+      max_concurrency: 32     # simultaneous in-flight requests to this target (1..10000)
+      queue_size: 500         # requests allowed to wait for a slot; overflow => HTTP 429
 
-  - virtual_key: anthropic
-    weight: 30
-    retry:
-      attempts: 2
+  - virtual_key: gemini
+    models:                   # models this target serves, declared by the operator —
+      - gemini-2.5-flash      # ADDITIVE to the model catalog and live discovery
 ```
+
+| Field | Type | Notes |
+|---|---|---|
+| `virtual_key` | string, required | Names a registered provider. |
+| `weight` | float64 | Relative share under `loadbalance` only. `0` drains the target. Negative or all-zero across the target set is a load error. |
+| `models` | []string | Operator-declared model ids this target serves, in addition to whatever the catalog and live discovery already report. Exact ids only — wildcards are rejected at load. Purely additive: it never hides models the target already serves, and declaring one the catalog already knows is a harmless no-op. Advertised on `/v1/models`. |
+| `retry` | object | `attempts` (int, `1` = no retry), `on_status_codes` ([]int), `initial_backoff_ms` (int, default 100). Applies under **every** routing mode — it re-asks this one target; it does not by itself try a different target. |
+| `circuit_breaker` | object | One breaker per `virtual_key`, shared across chat, streaming, embeddings, *and* image generation to that target — a target that fails only on one surface still opens the shared breaker and stops serving all four. |
+| `concurrency` | object | `max_concurrency` (1..10000) and `queue_size`. A streaming request holds its slot until the stream ends, not just until headers arrive. Overflow past the queue is `429`. |
+
+A `429`, a client disconnect, a caller-supplied deadline, an unsupported-parameter rejection, and a concurrency shed do **not** count toward opening the circuit breaker. A redirect, a `5xx`, a connection failure, and the gateway's own `request_timeout` or stream idle bound elapsing all do.
+
+### Declared models (`targets[].models`) {#declared-models}
+
+Reach for `models` when a target serves a model none of the automatic sources can see: an id newer than the catalog, a preview or regional name, a self-hosted deployment behind `<PROVIDER>_BASE_URL`, or a provider with no `/models` endpoint to enumerate. It's provider-agnostic — every target has the field — and strictly additive, so it can never accidentally unroute a model the target already serves.
+
+## Batch and Responses backends
+
+```yaml
+batch_target: openai        # serves /v1/files* and /v1/batches* pass-through
+responses_target: openai    # serves the stateful /v1/responses/{id} sub-routes
+```
+
+Both endpoints carry no `model` — a batch references an opaque, provider-scoped id, so a single named target serves the whole surface with native ids and zero gateway state. `batch_target`'s provider must support batch pass-through (`openai`, `azure-openai`, `groq`, `novita`, `qwen`); `responses_target` is typically `openai` or `xai`. Omitting either leaves the corresponding surface returning `501` — `POST /v1/responses` (create) still routes normally by model even with `responses_target` unset.
 
 ## Model aliases
 
-Aliases resolve before routing. They let you use short names and switch backing models without changing client code.
+Aliases resolve before routing and before plugins run. They let you use short names and swap the backing model without changing client code.
 
 ```yaml
 aliases:
   fast: gpt-4o-mini
-  smart: claude-3-5-sonnet-20241022
-  cheap: gemini-1.5-flash
+  smart: claude-sonnet-4-6
+  cheap: gemini-2.5-flash
   code: deepseek-coder
 ```
 
-A client that requests `model: cheap` will receive a response from Gemini 1.5 Flash.
+No empty names or values, no self-reference, and no chained aliases (an alias pointing at another alias is rejected at load).
 
 ## Plugins
 
-Each plugin entry specifies its `name`, `type`, `stage`, and `config` map. Set `enabled: false` to disable without removing the entry.
-
-### OSS plugins
+Each entry specifies `name`, `type` (a label only — the plugin's own reported type decides fail-open vs. fail-closed, not this field), `stage`, `enabled`, and `config`. Order within a stage is execution order.
 
 ```yaml
 plugins:
@@ -153,7 +209,7 @@ plugins:
     stage: before_request
     enabled: true
     config:
-      blocked_words: ["password", "confidential"]
+      blocked_words: ["password", "secret"]
       case_sensitive: false
 
   - name: max-token
@@ -163,7 +219,27 @@ plugins:
     config:
       max_tokens: 4096
       max_messages: 50
+      max_input_length: 0   # 0 = no limit
 
+  - name: rate-limit
+    type: guardrail
+    stage: before_request
+    enabled: true
+    config:
+      requests_per_second: 100
+      burst: 100
+      key_rpm: 60      # optional per-API-key limit
+      user_rpm: 30     # optional per-user limit (keyed on Request.User)
+```
+
+:::danger Multi-stage plugins need byte-identical config
+`response-cache`, `budget`, and `request-logger` each implement more than one stage — response-cache checks the cache before the provider call and stores after it, budget checks spend before and records after, request-logger writes a row at every stage it's listed at. **Every entry for the same plugin must carry identical config** (checked as JSON-encoded equality of the whole `config` block), or **the gateway refuses to start**. The same `store_id`/`name` alone is not enough — any other key differing between entries is still two disagreeing configs.
+:::
+
+```yaml
+plugins:
+  # response-cache: before_request serves a cache hit (skips only the
+  # provider call — every other before_request plugin still runs); after_request stores it.
   - name: response-cache
     type: transform
     stage: before_request
@@ -171,7 +247,17 @@ plugins:
     config:
       max_age: 300
       max_entries: 1000
+  - name: response-cache
+    type: transform
+    stage: after_request
+    enabled: true
+    config:
+      max_age: 300
+      max_entries: 1000
 
+  # request-logger: register at all three stages it implements, including
+  # on_error — a failed request never reaches after_request, so without the
+  # on_error entry a failure produces no terminal row at all.
   - name: request-logger
     type: logging
     stage: before_request
@@ -179,144 +265,169 @@ plugins:
     config:
       level: info
       persist: true
-      backend: sqlite
-      dsn: ferrogw-requests.db
-
-  - name: rate-limit
-    type: ratelimit
-    stage: before_request
+  - name: request-logger
+    type: logging
+    stage: after_request
     enabled: true
     config:
-      requests_per_second: 100
-      burst: 100
-      key_rpm: 60          # per API key limit (v0.8.5+)
-      user_rpm: 30         # per user ID limit (v0.8.5+)
+      level: info
+      persist: true
+  - name: request-logger
+    type: logging
+    stage: on_error
+    enabled: true
+    config:
+      level: info
+      persist: true
 
+  # budget: before_request checks accumulated spend against the limit;
+  # after_request records what the completed request cost.
   - name: budget
     type: guardrail
-    stage: before_request   # also register at after_request to record costs
-    enabled: true
-    config:
-      spend_limit_usd: 10.00
-      store_id: default     # instances sharing store_id share spend data
-```
-
-:::tip Budget plugin dual registration
-The `budget` plugin should be registered twice — once at `before_request` (to reject over-limit keys) and once at `after_request` (to record token costs). Use the same `store_id` in both entries to share the spend counter.
-```yaml
-plugins:
-  - name: budget
     stage: before_request
     enabled: true
     config:
-      spend_limit_usd: 10.00
-      store_id: default
+      store_id: default            # instances sharing store_id share spend counters
+      spend_limit_usd: 10.0        # 0 = unlimited
+      input_per_m_tokens: 3.0      # USD per 1M prompt tokens
+      output_per_m_tokens: 15.0    # USD per 1M completion tokens
+      cache_read_per_m_tokens: 0.30   # optional: USD per 1M cached-read prompt tokens
+      cache_write_per_m_tokens: 3.75  # optional: USD per 1M cache-write tokens
+      max_keys: 10000               # max tracked API keys; evicts lowest-spend key at cap
   - name: budget
+    type: guardrail
     stage: after_request
     enabled: true
     config:
       store_id: default
-```
-:::
-
-### Ferro Labs Managed plugins
-
-These plugins require a [Ferro Labs Managed](https://www.ferrolabs.ai/) account:
-
-```yaml
-plugins:
-  - name: pii-redact
-    type: guardrail
-    stage: before_request
-    enabled: true
-    config:
-      action: redact       # redact | block
-      redact_mode: replace_type
-      apply_to: input
-
-  - name: secret-scan
-    type: guardrail
-    stage: before_request
-    enabled: true
-    config:
-      action: block
-
-  - name: prompt-shield
-    type: guardrail
-    stage: before_request
-    enabled: true
-    config:
-      action: block
-      threshold: 0.90
-      apply_to: user_messages
-
-  - name: schema-guard
-    type: guardrail
-    stage: after_request
-    enabled: true
-    config:
-      apply_to: output
-      action: block
-      extract_json: true
-      schema:
-        type: object
-        required: [name, confidence]
-        properties:
-          name:
-            type: string
-          confidence:
-            type: number
-            minimum: 0
-            maximum: 1
-
-  - name: regex-guard
-    type: guardrail
-    stage: before_request
-    enabled: true
-    config:
-      action: block
-      patterns:
-        - "(?i)drop\\s+table"
-        - "(?i)delete\\s+from"
+      spend_limit_usd: 10.0
+      input_per_m_tokens: 3.0
+      output_per_m_tokens: 15.0
+      cache_read_per_m_tokens: 0.30
+      cache_write_per_m_tokens: 3.75
+      max_keys: 10000
 ```
 
-:::note Ferro Labs Managed feature
-The 5 enterprise plugins (pii-redact, secret-scan, prompt-shield, schema-guard, regex-guard) require a Ferro Labs Managed account. [Join the waitlist →](https://www.ferrolabs.ai/)
-:::
+An exhausted budget rejects the request with **`402 insufficient_quota`**, not a 429 — explicitly so SDKs don't retry a request that will never succeed. `PromptTokens` from the provider is inclusive of `CacheReadTokens`, so setting `cache_read_per_m_tokens` bills the cached subset at that rate and the remainder at `input_per_m_tokens`; leaving it unset bills the whole prompt at `input_per_m_tokens` as before.
 
-See [Plugins](/guides/plugins) for all 6 built-in plugins and their full config options.
+Plugin `config` string values support `${VAR}` — see [`${VAR}` resolution](#var-resolution) below.
+
+See [Plugins](/plugins) for all 6 built-in OSS plugins (`word-filter`, `max-token`, `response-cache`, `request-logger`, `rate-limit`, `budget`) and their full option sets. The 5 additional guardrails (pii-redact, secret-scan, prompt-shield, schema-guard, regex-guard) are Ferro Labs Managed-only — see [Enterprise plugins](/plugins/enterprise).
 
 ## MCP servers
 
-Configure Model Context Protocol tool servers for agentic tool-calling. Streaming requests are supported as of v1.0.0.
+Configure external MCP tool servers for agentic tool-calling. When `mcp_servers` is configured, the gateway injects the discovered tools into a chat completion request **only when the request itself carries no `tools` of its own** — a caller-supplied `tools` array passes through untouched and MCP sits out entirely for that request.
+
+Each entry sets exactly one of `url` (Streamable HTTP transport) or `command` (+ `args`, stdio subprocess transport).
 
 ```yaml
 mcp_servers:
+  # Streamable HTTP transport
   - name: filesystem
     url: "http://localhost:3001/mcp"
-    timeout_seconds: 10
-    max_call_depth: 3
+    timeout_seconds: 10     # per tool call, both transports; default 30
+    max_call_depth: 3       # agentic loop turn cap; min positive value across servers wins, default 5
 
   - name: database
     url: "https://mcp-db.internal/mcp"
     headers:
       Authorization: "Bearer ${MCP_DB_TOKEN}"
-    allowed_tools:
+    allowed_tools:           # empty = all discovered tools exposed
       - query_readonly
       - list_tables
     timeout_seconds: 15
     max_call_depth: 5
+    required: false          # true gates /readyz on this server's initialize handshake
+
+  # stdio transport — the gateway launches and owns the subprocess.
+  # It does NOT inherit the gateway's environment: only PATH/HOME/LANG/TMPDIR
+  # (when set) plus the explicit `env` map below reach the child process.
+  - name: brave-search
+    command: npx
+    args:
+      - -y
+      - "@modelcontextprotocol/server-brave-search"
+    env:
+      BRAVE_API_KEY: "${BRAVE_API_KEY}"
+    max_call_depth: 3
 ```
 
-When `mcp_servers` is present, the gateway initialises MCP connections in the background on startup (60-second timeout) and injects available tools into every chat completion request. See [MCP integration](/guides/mcp).
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `name` | string, required | — | Unique; used in logs, metrics, and the `/readyz` body. |
+| `url` | string | — | Streamable HTTP endpoint. Set exactly one of `url` / `command`. |
+| `command` / `args` | string / []string | — | stdio subprocess launched at gateway startup, kept for the gateway's lifetime. |
+| `headers` | map[string]string | `{}` | HTTP transport only. `${VAR}` supported. |
+| `env` | map[string]string | `{}` | stdio transport only — the sole credential channel to the subprocess, since it inherits no gateway env. `${VAR}` supported. |
+| `allowed_tools` | []string | all | Restricts which discovered tools are exposed to the LLM. |
+| `timeout_seconds` | int | 30 | Per-tool-call timeout. |
+| `max_call_depth` | int | 5 | Agentic loop depth bound; the minimum positive value across all configured servers applies. |
+| `required` | bool | `false` | When `true`, this server's readiness gates `GET /readyz` (`503`, reason "required mcp server unavailable" when unready). Unready means the initialize handshake hasn't completed. Death *after* a successful handshake is detected for **stdio servers only** — an HTTP server that goes unreachable post-handshake keeps reporting ready. |
+
+Guardrails and the budget plugin run on every turn of the agentic loop, not just the initial request. See [MCP integration](/guides/mcp) for the full tool-execution flow.
+
+## Compatibility
+
+Controls how the gateway treats an OpenAI-shaped request parameter that the routed provider can't express (see `GET /v1/capabilities` for the full matrix).
+
+```yaml
+compatibility:
+  on_unsupported_param: warn   # warn | drop | reject
+```
+
+| Value | Behavior |
+|---|---|
+| `warn` (default) | Forward the parameter anyway and log a warning. |
+| `drop` | Remove the parameter from the upstream request and log. |
+| `reject` | Fail the request with `HTTP 400` naming the parameter. |
+
+`warn` and `drop` differ only for providers reached over an OpenAI-compatible request body — there, `warn` genuinely forwards the parameter. A provider with a native wire format (Anthropic, Bedrock, Gemini, Cohere, AI21, Replicate) builds a payload with nowhere to put an unsupported parameter, so `warn` and `drop` send byte-identical upstream requests there and both log "dropping." Use `reject` when a caller needs to know a parameter wasn't honored rather than silently dropped.
+
+## Observability
+
+OpenTelemetry tracing. Omit the section entirely (or leave `endpoint` empty with no `OTEL_EXPORTER_OTLP_*` env set) and the gateway runs a zero-allocation NoOp provider at no cost.
+
+```yaml
+observability:
+  tracing:
+    enabled: true              # tri-state: omit = infer from endpoint, false = hard off, true = force on
+    endpoint: ""                # URL or bare host:port; blank falls back to OTEL_EXPORTER_OTLP_* env
+    protocol: grpc              # grpc | http/protobuf
+    service_name: ferrogw
+    sample_ratio: 1.0           # head sampler 0.0-1.0, wrapped in ParentBased
+    privacy_level: metadata     # none | metadata | full
+    shutdown_grace: 10s         # per OTel shutdown stage; total shutdown can take up to 2x this
+    headers:                    # OTLP export headers, e.g. vendor API keys
+      dd-api-key: "${DATADOG_API_KEY}"
+
+  exporters:                    # plugin observability exporters — none ship in this repo
+    - name: langsmith
+      enabled: true
+      config:
+        api_key: "${LANGSMITH_API_KEY}"
+```
+
+The gateway itself reads only two `OTEL_*` environment variables — `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` — and either one takes precedence over `observability.tracing.endpoint` when set. Setting either turns tracing on. `OTEL_TRACES_SAMPLER` has no effect; the sampler is config-only (`sample_ratio`, `ParentBased`) — an inbound request that already carries a sampled `traceparent` is followed regardless of `sample_ratio`.
+
+`exporters[]` entries reference exporter plugins registered via `observability.RegisterExporter` in a plugin's `init()`; they ship separately in the `ai-gateway-plugins` repo. An unrecognized `name` logs a warning and is skipped — it isn't fatal.
+
+## `${VAR}` resolution
+
+Config string values in `plugins[].config`, `mcp_servers[].headers`, `mcp_servers[].env`, `observability.tracing.headers`, and `observability.exporters[].config` support environment variable references.
+
+- **Only the braced form is a reference.** `${NAME}` (matching `[A-Za-z_][A-Za-z0-9_]*`) is expanded; a bare `$` is literal data — `$100` and `pa$$w0rd` survive byte-for-byte.
+- **An undefined variable is a hard error** naming every missing variable — never a silent empty-string substitution.
+- **Resolution happens at component construction, not at config load.** The loaded `Config` keeps the literal `${VAR}` text, so a secret never reaches the config-history store, `GET /admin/config`, or a rollback snapshot — and a config pushed through the admin/GitOps API (which never passes through `LoadConfig`) is expanded identically.
+- It does **not** apply to core routing fields (`virtual_key`, `mode`, model ids, aliases) — only the free-form/credential-bearing maps listed above.
 
 ## Complete example
 
-Copy [`config.example.yaml`](https://github.com/ferro-labs/ai-gateway/blob/main/config.example.yaml) from the repository for a full example covering all 30 providers, aliases, and all 6 built-in plugins.
+Copy [`config.example.yaml`](https://github.com/ferro-labs/ai-gateway/blob/main/config.example.yaml) from the repository for a fully annotated example covering all 30 providers, both routing families, all 6 OSS plugins with correct multi-stage registration, MCP (both transports), compatibility, and observability.
 
 ## Related pages
 
-- [Routing policies](/guides/routing-policies) — all 8 strategies with examples
-- [Plugins](/guides/plugins) — detailed plugin documentation
-- [Use cases](/guides/use-cases) — recipe-style configurations
-- [MCP integration](/guides/mcp) — tool server setup
+- [Routing](/routing) — all 8 strategies with examples
+- [Plugins](/plugins) — detailed OSS plugin documentation
+- [Enterprise plugins](/plugins/enterprise) — Ferro Labs Managed guardrails (pii-redact, secret-scan, prompt-shield, schema-guard, regex-guard)
+- [MCP integration](/guides/mcp) — tool server setup and the agentic loop
+- [Provider configuration](/providers/configuration) — per-provider env vars and base URL overrides

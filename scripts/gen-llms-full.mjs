@@ -27,8 +27,9 @@ function collect(dir) {
 /** Map a docs/ file path to its published URL (routeBasePath '/', trailing slash). */
 function toUrl(file) {
   let route = file.slice(DOCS_DIR.length).replace(/\.(md|mdx)$/, '');
-  route = route.replace(/\/index$/, '').replace(/\/intro$/, '/intro');
-  if (route === '/intro') route = '/intro';
+  route = route.replace(/\/index$/, '');
+  // intro.mdx has slug '/', so it is served at the site root, not /intro/.
+  if (route === '/intro') route = '';
   return `${SITE}${route}/`.replace(/\/+$/, '/');
 }
 

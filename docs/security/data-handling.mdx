@@ -1,26 +1,115 @@
 ---
 title: Data handling
-description: Security and data handling in the Ferro Labs AI Gateway — storage backends, secret management, least privilege access, TLS termination, and provider credential isolation.
-keywords: [AI gateway security, LLM data handling, PII protection AI, secure LLM proxy, credential isolation, AI gateway TLS]
+description: "How the AI Gateway protects data: credential redaction by value, config secret withholding, MCP subprocess isolation, audit logging, and proxy path safety."
+keywords: [AI gateway security, LLM data handling, credential redaction, PII protection AI, secure LLM proxy, credential isolation, AI gateway audit log]
 ---
+
+The gateway holds provider credentials, admin keys, and MCP tokens in one process. This page covers how it keeps them out of logs, traces, config reads, and cached responses, and where the guarantees stop.
 
 ## Storage backends
 
-The gateway supports memory, SQLite, and Postgres stores for config, API keys, and request logs.
+Config, admin API keys, and request logs each have their own configurable store. Sessions and the audit trail follow the API key store's backend.
 
 ```bash
-export CONFIG_STORE_BACKEND=sqlite
+export CONFIG_STORE_BACKEND=sqlite       # memory (default) | sqlite | postgres
 export CONFIG_STORE_DSN=./ferrogw-config.db
 
-export API_KEY_STORE_BACKEND=sqlite
+export API_KEY_STORE_BACKEND=sqlite      # memory (default) | sqlite | postgres
 export API_KEY_STORE_DSN=./ferrogw-keys.db
 
-export REQUEST_LOG_STORE_BACKEND=sqlite
+export REQUEST_LOG_STORE_BACKEND=sqlite  # sqlite | postgres (unset = no persistence)
 export REQUEST_LOG_STORE_DSN=./ferrogw-requests.db
 ```
 
+Admin API keys are stored hashed (SHA-256), never in plaintext. The in-memory default is the documented default, but it means operator keys, dashboard sessions, and the audit trail are lost on restart — [`MASTER_KEY`](/guides/auth) is the only way back in when that happens.
+
+## Credential redaction by value
+
+Every credential the gateway holds — provider API keys read from the environment, admin keys, MCP headers and env values — is indexed once and matched **by exact value**, not by shape. Any string the gateway emits (log lines, OTel span attributes, sanitized proxy responses) has each occurrence replaced with a token naming its source, e.g. an upstream `401` body that echoes back the key the gateway presented becomes:
+
+```
+invalid api_key: [REDACTED:MISTRAL_API_KEY]
+```
+
+Only values of at least 12 characters are eligible — long enough to sit above every real provider key (the shortest is an AWS access key ID at 20 characters) and below no plausible placeholder, so ordinary log prose isn't accidentally redacted. Values containing whitespace, unresolved `${VAR}` references, or the literals `true`/`false` are never enrolled.
+
+Value-based redaction is exact but only covers credentials the gateway itself holds. As a backstop, a fixed set of shape-based patterns also runs — email addresses, JWTs, AWS access keys, bearer tokens, and several providers' key formats — to catch a credential the gateway never configured, such as a co-tenant's key echoed by a federated upstream error. This backstop is **best-effort**: it recognizes known, prefix-shaped formats and does not guarantee every credential-like string in arbitrary upstream text is caught. Treat redaction as defense in depth, not a substitute for scoping who can read logs, traces, and admin endpoints.
+
+:::note Where this applies
+Route/embedding failure logs, OTel span error text under the default `observability.tracing.privacy_level: metadata`, and every non-2xx response the `/v1/*` pass-through proxy relays to the client are all filtered through this path before they leave the process. Setting `privacy_level: full` deliberately serves raw, unredacted error text on spans instead — reserve it for deployments where the trace backend is as trusted as the gateway's own logs.
+:::
+
+## Outbound redirects are surfaced, not followed
+
+The gateway's own HTTP clients — used for provider calls, the `/v1/*` pass-through proxy, and AWS Bedrock credential lookups — do not follow `3xx` responses. A redirect is returned to the caller exactly as the upstream sent it, naming only the target's scheme and host (never its userinfo or query string, which could carry a credential).
+
+This exists because following a redirect would replay whatever credential the gateway injected for the original host against wherever the `Location` header points — including an attacker-controlled host on a misconfigured or compromised upstream. If a provider or proxy behind a `<PROVIDER>_BASE_URL` genuinely serves its API at a redirect, point the base URL at the destination directly rather than the redirecting one. The one exception is a Bedrock deployment that also supplies a custom TLS certificate bundle: the AWS SDK refuses a custom client in that case and keeps its own (redirect-following) HTTP client, and the gateway logs this at startup.
+
+MCP's Streamable HTTP transport applies the same policy: a `307` from an MCP server is refused with a hint naming the target rather than followed silently.
+
+## MCP subprocess environment isolation
+
+A `command`-based (stdio) MCP server is launched as a subprocess that does **not** inherit the gateway's environment. It receives only `PATH`, `HOME`, `LANG`, and `TMPDIR` (when set) plus whatever is listed explicitly under its `env:` block — so `OPENAI_API_KEY`, `MASTER_KEY`, and every other gateway credential are unreachable from an MCP subprocess unless deliberately passed through.
+
+```yaml
+mcp_servers:
+  - name: filesystem
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/data"]
+    env:
+      SOME_TOKEN: ${SOME_TOKEN}   # only this token reaches the subprocess
+    required: false
+```
+
+`${VAR}` references in `mcp_servers[].headers` and `mcp_servers[].env` are resolved at client construction, not at config load — so the resolved secret is never written into the config-history store or served back by `GET /admin/config`. See [MCP](/guides/mcp) for the full config surface.
+
+## What `GET /admin/config` withholds
+
+A named field of the config schema (`virtual_key`, `mode`, `command`, `url`) is served intact with only its secret parts scrubbed to `[REDACTED]`. A **free-form map** — a surface the gateway hands to something else without knowing its shape — is withheld key by key instead: each entry comes back as `[REDACTED_KEY_<n>]`, indexed over the sorted original key names so the response is stable across calls. This hides both the value and the key name, because either can carry a credential (`{"sk-...": 60}` is as much a leak as the reverse).
+
+| Map | Shown to a `read_only` caller |
+|---|---|
+| `plugins[].config` | only the keys that plugin's [catalog entry](/plugins) declares as settings — nothing for a plugin registered out of tree |
+| `aliases` | everything — both sides are model names, resolved by the gateway itself |
+| `mcp_servers[].env`, `mcp_servers[].headers` | nothing |
+| `observability.exporters[].config`, `observability.tracing.headers` | nothing |
+
+A `${VAR}` reference inside a withheld entry's value is still served as written — it names a value rather than carrying one.
+
+`PUT`/`POST /admin/config` decode as strictly as a config file and refuse a body carrying a redaction placeholder (`[REDACTED]`, `[REDACTED_KEY_<n>]`, or any other `[REDACTED...]` marker the read path can emit) anywhere in it, so an edit-and-resend of a `GET` response can never overwrite a live credential with placeholder text. Fields inside a withheld map have to be edited in the config file — a `GET` body with those keys removed cannot be edited and sent back.
+
+## Response cache is scoped per credential
+
+The `response-cache` plugin keys each cached entry on the request content **and** the caller's opaque `api_key_id` — never on content alone. Without that, a process-global cache would let a response primed by one credential be served to a different one, skipping the guardrails, rate limit, and budget checks that credential's own call would have triggered. Unauthenticated requests (when `ALLOW_UNAUTHENTICATED_PROXY=true`) share one bucket among themselves and never share with an authenticated caller. See [Response cache](/plugins/response-cache) for TTL and capacity config.
+
+## Audit trail
+
+Sign-ins (accepted and denied), credential changes, and log purges are written to a durable `audit_log` table and logged. The write is best-effort and never blocks or fails the action it records — a down audit store must not break key management, so on a persistently failing store the application log line is the record of what happened.
+
+`GET /admin/audit` (requires `read_only` or `admin` scope) reads the trail back, filterable by `action`, `actor_id`, `outcome`, and `since`, with `limit`/`offset` paging:
+
+```bash
+curl "http://localhost:8080/admin/audit?action=key.create&since=2026-08-01T00:00:00Z" \
+  -H "Authorization: Bearer $MASTER_KEY"
+```
+
+Each entry carries `occurred_at`, `action`, `actor`/`actor_id`, `target_id`, `outcome`, an optional redacted `detail`, `source_ip`, and a `trace_id` tying it to the request logs and OTel span for the same call. The store follows the API key store's backend — the in-memory default keeps only recent entries and does not survive a restart, so a deployment that needs full history configures a SQL backend.
+
+## Proxy path traversal refusal
+
+The `/v1/*` pass-through proxy, and the `/v1/files*`/`/v1/batches*` and `/v1/responses/*` surfaces built on the same forwarder, reject a request path containing a disallowed traversal segment (`400 invalid_proxy_path`) **before** the provider's credential is installed on the outbound request. Go preserves dot-segments (`..`) in `URL.Path` by design, and forwarding one unexamined could let a crafted path escape the configured `<PROVIDER>_BASE_URL` and reach an unintended upstream path carrying the gateway's credential.
+
 ## Least privilege
 
-- Use dedicated credentials for each provider.
-- Restrict database permissions to only the required tables.
-- Prefer TLS for external database connections.
+- Use dedicated credentials for each provider, and a separate admin-scoped key per operator (see [Authentication](/guides/auth)) rather than sharing `MASTER_KEY` day to day.
+- Restrict database permissions for the config, key, and request-log stores to only the required tables.
+- Prefer TLS for external database connections (`CONFIG_STORE_DSN`, `API_KEY_STORE_DSN`, `REQUEST_LOG_STORE_DSN`).
+- Keep `/metrics` and `/debug/*` off the public internet by deployment. `/metrics` needs `read_only` or `admin` scope; everything under `/debug` (`/debug/pprof/*`, `/debug/vars`) needs `admin`, since a profile can capture request bodies and credentials in memory and expvar publishes the process command line.
+
+## Related
+
+- [Authentication](/guides/auth)
+- [MCP](/guides/mcp)
+- [Response cache](/plugins/response-cache)
+- [Admin API reference](/api-reference/admin)
+- [Request logging](/operations/request-logging)
