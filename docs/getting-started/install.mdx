@@ -7,8 +7,10 @@ keywords: [install ferrogw, AI gateway install, get.ferrolabs.ai, install AI gat
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-`ferrogw` is a single static binary with no runtime and no dependencies. Pick the
-line for your platform; every method below installs the same binary.
+Release builds of `ferrogw` are static binaries with no runtime dependencies.
+The one-line installers, Docker image, and release archives deliver those
+builds. `go install` builds the command from source and omits the embedded
+dashboard.
 
 Already have it? Go to the [Quickstart](/getting-started/quickstart) to send your first request.
 
@@ -36,13 +38,15 @@ platform, **verifies its SHA-256 against the published checksums**, and writes
 exactly one file — the binary. It never creates a config file, never generates a
 key, and never edits a shell profile.
 
-Supported: Linux, macOS, and Windows on both x86-64 and arm64.
+The scripts recognize Linux, macOS, and Windows on x86-64 and arm64. The
+selected release must contain the matching archive; releases through `v1.4.3`
+do not contain a Windows arm64 archive.
 
 ### Options
 
-Both scripts take the same options. Because a piped script cannot easily receive
-flags, each one also has an environment variable — which is the form to use with
-`curl | sh` and `irm | iex`.
+The Linux/macOS script supports these options. Because a piped script cannot
+easily receive flags, each option also has an environment variable — use that
+form with `curl | sh`.
 
 | Option | Environment variable | Effect |
 |---|---|---|
@@ -52,8 +56,10 @@ flags, each one also has an environment variable — which is the form to use wi
 | `--no-modify-path` | `FERROGW_NO_MODIFY_PATH=1` | Suppress the PATH advice. |
 | `--help` | — | Show usage. |
 
-On Windows the same options are PowerShell parameters: `-Version`,
-`-InstallDir`, `-NoModifyPath`, `-Help`.
+Windows supports `-Version`, `-InstallDir`, `-NoModifyPath`, and `-Help`,
+with matching `FERROGW_*` environment variables for `irm | iex`. It always
+verifies SHA-256, but it does not expose `-VerifySignature`; mandatory cosign
+verification is currently available only in the Linux/macOS installer.
 
 ```bash title="Pin a version, using the environment form"
 curl -fsSL https://get.ferrolabs.ai/install.sh | FERROGW_VERSION=v1.4.2 sh
@@ -173,14 +179,21 @@ Continue with the [Quickstart](/getting-started/quickstart) for your first reque
 
 ## Package managers
 
-Homebrew, Scoop, winget, npm, and PyPI distribution is in progress. Until those
-land, use the one-line installer above — it covers every platform they will.
+Homebrew, Scoop, npm, and PyPI distribution is in progress. Winget is deferred
+because publishing through
+[Microsoft's community catalog](https://learn.microsoft.com/en-us/windows/package-manager/package/repository)
+has its own validation and review cycle; this does not affect the direct Windows
+installer. Until a method is listed here as available, use a one-line installer
+or an archive that exists on the selected release.
 
 <!-- When phase 2/3/4 of the install-distribution work ships, document here:
      brew install ferro-labs/tap/ferrogw
-     scoop bucket add ferrolabs https://github.com/ferro-labs/scoop-bucket && scoop install ferrogw
-     winget install FerroLabs.ferrogw
+     scoop bucket add ferrolabs https://github.com/ferro-labs/homebrew-tap && scoop install ferrogw
      npx ferrogw / npm i -g ferrogw
      uvx ferrogw / pip install ferrogw
      Do not document any of these before the package is actually published and
      the install-matrix CI job for it is armed and green. -->
+
+<!-- Winget is a later channel. Add `winget install FerroLabs.ferrogw` only
+     after the microsoft/winget-pkgs manifest PR is merged and a live catalog
+     install passes. -->
