@@ -32,6 +32,7 @@ const sidebars: SidebarsConfig = {
 
     divider(ICONS.rocket, 'Get Started'),
     'getting-started/overview',
+    'getting-started/install',
     'getting-started/quickstart',
     'getting-started/architecture',
     'getting-started/request-lifecycle',

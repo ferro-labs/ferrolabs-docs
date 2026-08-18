@@ -1,7 +1,7 @@
 # Ferro Labs AI Gateway — Full Documentation
 
 > Machine-readable corpus of the entire docs site. The curated index is at /llms.txt.
-> Generated from 84 pages. Canonical site: https://docs.ferrolabs.ai
+> Generated from 85 pages. Canonical site: https://docs.ferrolabs.ai
 
 
 
@@ -4136,6 +4136,204 @@ Copy [`config.example.yaml`](https://github.com/ferro-labs/ai-gateway/blob/main/
 - [Enterprise plugins](/plugins/enterprise) — Ferro Labs Managed guardrails (pii-redact, secret-scan, prompt-shield, schema-guard, regex-guard)
 - [MCP integration](/guides/mcp) — tool server setup and the agentic loop
 - [Provider configuration](/providers/configuration) — per-provider env vars and base URL overrides
+
+
+
+================================================================================
+# Install
+Source: https://docs.ferrolabs.ai/getting-started/install/
+================================================================================
+
+Release builds of `ferrogw` are static binaries with no runtime dependencies.
+The one-line installers, Docker image, and release archives deliver those
+builds. `go install` builds the command from source and omits the embedded
+dashboard.
+
+Already have it? Go to the [Quickstart](/getting-started/quickstart) to send your first request.
+
+## One-line install
+
+<Tabs groupId="os">
+<TabItem value="unix" label="Linux / macOS" default>
+
+```bash
+curl -fsSL https://get.ferrolabs.ai/install.sh | sh
+```
+
+</TabItem>
+<TabItem value="windows" label="Windows">
+
+```powershell
+irm https://get.ferrolabs.ai/install.ps1 | iex
+```
+
+</TabItem>
+</Tabs>
+
+The installer resolves the latest release, downloads the archive for your
+platform, **verifies its SHA-256 against the published checksums**, and writes
+exactly one file — the binary. It never creates a config file, never generates a
+key, and never edits a shell profile.
+
+The scripts recognize Linux, macOS, and Windows on x86-64 and arm64. The
+selected release must contain the matching archive; releases through `v1.4.3`
+do not contain a Windows arm64 archive.
+
+### Options
+
+The Linux/macOS script supports these options. Because a piped script cannot
+easily receive flags, each option also has an environment variable — use that
+form with `curl | sh`.
+
+| Option | Environment variable | Effect |
+|---|---|---|
+| `--version <tag>` | `FERROGW_VERSION` | Install a specific release instead of the latest. |
+| `--install-dir <dir>` | `FERROGW_INSTALL_DIR` | Where the binary goes. |
+| `--verify-signature` | `FERROGW_VERIFY_SIGNATURE=1` | Require the cosign signature to be checked, and fail if cosign is missing. |
+| `--no-modify-path` | `FERROGW_NO_MODIFY_PATH=1` | Suppress the PATH advice. |
+| `--help` | — | Show usage. |
+
+Windows supports `-Version`, `-InstallDir`, `-NoModifyPath`, and `-Help`,
+with matching `FERROGW_*` environment variables for `irm | iex`. It always
+verifies SHA-256, but it does not expose `-VerifySignature`; mandatory cosign
+verification is currently available only in the Linux/macOS installer.
+
+```bash title="Pin a version, using the environment form"
+curl -fsSL https://get.ferrolabs.ai/install.sh | FERROGW_VERSION=v1.4.2 sh
+```
+
+```bash title="Or pass flags explicitly"
+curl -fsSL https://get.ferrolabs.ai/install.sh | sh -s -- --version v1.4.2
+```
+
+### Where it installs
+
+On Linux and macOS the binary goes to `/usr/local/bin` when that is writable
+without `sudo`, and to `~/.local/bin` otherwise. **The installer never calls
+`sudo` itself** — if you want a location that needs root, it prints the exact
+command for you to run.
+
+On Windows it goes to `%LOCALAPPDATA%\Programs\ferrogw`, which needs no
+administrator prompt, and the directory is added to your user `PATH`. Open a new
+terminal for that to take effect.
+
+If the chosen directory is not on your `PATH`, the installer prints the line to
+add.
+
+:::tip Reading a script before you run it
+Piping a script to a shell is only as trustworthy as the host serving it. Read
+it first if you prefer — it is the same file either way:
+
+```bash
+curl -fsSL https://get.ferrolabs.ai/install.sh | less
+```
+
+The script is served directly by `get.ferrolabs.ai`, not redirected to a
+third-party host, and its source lives in
+[`scripts/install/`](https://github.com/ferro-labs/ai-gateway/tree/main/scripts/install).
+:::
+
+## Docker
+
+```bash
+docker pull ghcr.io/ferro-labs/ai-gateway:latest
+```
+
+```bash
+docker run --rm -p 8080:8080 \
+  -e OPENAI_API_KEY=sk-your-key \
+  -e MASTER_KEY=fgw_your-master-key \
+  ghcr.io/ferro-labs/ai-gateway:latest
+```
+
+Images are multi-platform (`linux/amd64`, `linux/arm64`), signed with cosign, and
+carry an SBOM attestation.
+
+## Go
+
+```bash
+go install github.com/ferro-labs/ai-gateway/cmd/ferrogw@latest
+```
+
+This builds from source, so it produces a binary without the embedded dashboard
+bundle that release archives carry. Prefer a release build unless you are
+developing against the gateway.
+
+## Release archives
+
+Every release publishes archives for each platform, plus `checksums.txt`, a
+cosign signature over it, and one SPDX SBOM per archive. Download them from the
+[releases page](https://github.com/ferro-labs/ai-gateway/releases).
+
+Archives are named `ferrogw_<version>_<os>_<arch>.tar.gz` — `.zip` on Windows.
+Note the version in the filename carries **no `v` prefix**: tag `v1.4.2` produces
+`ferrogw_1.4.2_linux_amd64.tar.gz`.
+
+### Verifying a download
+
+The checksum proves the archive is intact. The signature proves it came from this
+repository's release workflow.
+
+```bash title="Checksum"
+sha256sum --ignore-missing -c checksums.txt
+```
+
+```bash title="Signature (keyless — no key to distribute)"
+cosign verify-blob \
+  --certificate checksums.txt.pem \
+  --signature checksums.txt.sig \
+  --certificate-identity-regexp '^https://github\.com/ferro-labs/ai-gateway/\.github/workflows/.+@refs/tags/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums.txt
+```
+
+Because `checksums.txt` covers every archive and SBOM, verifying that one
+signature and then checking an archive's hash against it authenticates the whole
+release. Full details are in
+[SECURITY.md](https://github.com/ferro-labs/ai-gateway/blob/main/SECURITY.md#verifying-releases).
+
+## After installing
+
+`ferrogw init` writes a starter `config.yaml` and prints a master key. The server
+only reads a config file when `GATEWAY_CONFIG` names one — this is the step most
+people miss:
+
+```bash
+ferrogw init                        # writes config.yaml, prints your master key
+export GATEWAY_CONFIG=./config.yaml # the server ignores the file without this
+export OPENAI_API_KEY=sk-your-key   # providers register at startup
+ferrogw serve
+```
+
+Then check it is up:
+
+```bash
+curl http://localhost:8080/readyz
+```
+
+Continue with the [Quickstart](/getting-started/quickstart) for your first request, or
+[Configuration](/getting-started/configuration) for the full config schema.
+
+## Package managers
+
+Homebrew, Scoop, npm, and PyPI distribution is in progress. Winget is deferred
+because publishing through
+[Microsoft's community catalog](https://learn.microsoft.com/en-us/windows/package-manager/package/repository)
+has its own validation and review cycle; this does not affect the direct Windows
+installer. Until a method is listed here as available, use a one-line installer
+or an archive that exists on the selected release.
+
+<!-- When phase 2/3/4 of the install-distribution work ships, document here:
+     brew install ferro-labs/tap/ferrogw
+     scoop bucket add ferrolabs https://github.com/ferro-labs/homebrew-tap && scoop install ferrogw
+     npx ferrogw / npm i -g ferrogw
+     uvx ferrogw / pip install ferrogw
+     Do not document any of these before the package is actually published and
+     the install-matrix CI job for it is armed and green. -->
+
+<!-- Winget is a later channel. Add `winget install FerroLabs.ferrogw` only
+     after the microsoft/winget-pkgs manifest PR is merged and a live catalog
+     install passes. -->
 
 
 
