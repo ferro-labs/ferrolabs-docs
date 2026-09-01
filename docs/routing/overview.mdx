@@ -165,7 +165,7 @@ Regardless of family:
 
 Three things an operator may notice after upgrading from 1.5.0 or earlier:
 
-- **Pool modes no longer cover a client error.** Before 1.5.1 they advanced after *any* failure, so a target answering `400`, `401`, `404` or `422` was silently replaced by a sibling — a revoked key on the primary was invisible. Those responses now reach the client; only failover-safe failures advance ([table above](#which-failures-fail-over)).
+- **Pool modes no longer cover a client error.** Before 1.5.1 they advanced after *any* failure, so a target answering any other `4xx` — `400`, `401`, `403`, `404`, `422` — was silently replaced by a sibling — a revoked key on the primary was invisible. Those responses now reach the client; only failover-safe failures advance ([table above](#which-failures-fail-over)).
 - **The response `model` is the routed name.** Responses used to echo whatever identifier the provider reported, such as a dated snapshot like `gpt-4o-2024-08-06`; they now carry the name the client asked for, after alias resolution, on streamed chunks too.
 - **Ambiguous configs are rejected at load.** Two targets sharing a `virtual_key`, an empty `virtual_key`, two `ab_variants` naming the same target, or a duplicated key in a JSON config used to load silently, collapsing retry, weight and breaker state for the pair. `ferrogw validate` and startup now refuse them.
 

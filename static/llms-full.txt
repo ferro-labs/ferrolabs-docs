@@ -1950,7 +1950,7 @@ On routed surfaces — chat completions, streaming, embeddings, images — `X-Pr
 <summary className={styles.q}>What happens if a provider is down?</summary>
 <div className={styles.a}>
 
-Depends on the strategy. Pool modes — `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test` — advance to the next target in the pool after a failover-safe failure — the provider was unreachable, timed out, returned `408`/`429`/`5xx`, or is circuit-open or saturated; a `400`, `401`, `404` or `422` is returned to the caller instead. Named modes — `single`, `conditional`, `content-based` — report the failure back to the caller instead, since something specifically chose that target. Every mode skips a target whose circuit breaker is open; if every target for a model is open, the request gets `503`. `targets[].retry` is honored under every mode, so set `attempts: 1` to keep single-attempt behavior even in a pool.
+Depends on the strategy. Pool modes — `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test` — advance to the next target in the pool after a failover-safe failure — the provider was unreachable, timed out, returned `408`/`429`/`5xx`, or is circuit-open or saturated; any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the caller instead. Named modes — `single`, `conditional`, `content-based` — report the failure back to the caller instead, since something specifically chose that target. Every mode skips a target whose circuit breaker is open; if every target for a model is open, the request gets `503`. `targets[].retry` is honored under every mode, so set `attempts: 1` to keep single-attempt behavior even in a pool.
 
 </div>
 </details>
@@ -3506,7 +3506,7 @@ routing mode makes it **happen** (decides whether to try a sibling at all).
 
 | | Modes | On a target failure |
 |---|---|---|
-| **Pool** | `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test` | the walk advances to the next candidate |
+| **Pool** | `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test` | the walk advances to the next candidate after a failover-safe failure; any other `4xx` is returned |
 | **Named** | `single`, `conditional`, `content-based` | the walk stops and reports the failure |
 
 A pool mode picks its head target for a reason that's about the *pool* —
@@ -3837,7 +3837,7 @@ strategy:
       label: challenger
 ```
 
-Weights are relative (`weight / sum(weights)`); a zero weight drains a variant to no traffic, a negative weight or an all-zero set is a load error. The draw is over **eligible** variants only — a variant whose provider doesn't serve the requested model never wins that draw. Each variant's `label` is logged with every routed request for analytics. `ab-test` is a pool mode: a failure at the drawn variant advances to the next eligible one.
+Weights are relative (`weight / sum(weights)`); a zero weight drains a variant to no traffic, a negative weight or an all-zero set is a load error. The draw is over **eligible** variants only — a variant whose provider doesn't serve the requested model never wins that draw. Each variant's `label` travels as `ferro.routing.ab_variant_label` on the request's observability events (delivered to registered exporters and custom providers — not a `request-logger` column or a span attribute). `ab-test` is a pool mode: a failover-safe failure at the drawn variant advances to the next configured target, while any other `4xx` is returned to the client; the label stays the drawn variant's either way.
 
 ## Targets
 
@@ -6302,7 +6302,7 @@ Not every declared constant is wired into a live span yet — the **Status** col
 | `ferro.stream.time_to_last_token_ms` | Emitted | Streaming time-to-last-token |
 | `ferro.gateway.version` | Planned | Gateway build version |
 | `ferro.routing.attempt` | Planned | Attempt number within the strategy |
-| `ferro.routing.ab_variant_label` | Planned | A/B variant label — not yet on the span; today the A/B variant only shows up in `DEBUG`-level logs |
+| `ferro.routing.ab_variant_label` | Planned (span) | A/B variant label — not on the span. Since v1.5.1 it is carried as an attribute of the `gateway.request.completed` / `failed` events (and of `gateway.routing.attempt` events where enabled) delivered to exporters and custom providers |
 | `ferro.cache.hit` / `ferro.cache.kind` | Planned | Response-cache hit and cache kind |
 | `ferro.mcp.depth` | Planned | MCP call depth |
 | `ferro.circuit_breaker.state` / `ferro.circuit_breaker.opened` | Planned | Circuit-breaker state and whether it opened during the request |
@@ -6325,7 +6325,7 @@ No prompt or response content is exported at any privacy level.
 
 ### Exporters
 
-Beyond raw OTLP, the gateway exposes an exporter event seam: registered exporters receive `gateway.request.completed` / `gateway.request.failed` events for bridging to backends like LangSmith or Langfuse. No exporters ship in the core gateway — they live in the separate [`ai-gateway-plugins`](https://github.com/ferro-labs/ai-gateway-plugins) repo. List enabled exporters under `observability.exporters`; an unregistered `name`, or one whose `config` carries an undefined `${VAR}` reference, is logged and skipped without stopping the gateway (non-fatal) — the rest of the exporters and the OTLP pipeline keep running.
+Beyond raw OTLP, the gateway exposes an exporter event seam: registered exporters receive `gateway.request.completed` / `gateway.request.failed` events for bridging to backends like LangSmith or Langfuse. Since v1.5.1 an exporter can also opt into one `gateway.routing.attempt` event per provider call or local refusal (retries and failovers included); exporters that do not opt in keep receiving exactly one event per request. No exporters ship in the core gateway — they live in the separate [`ai-gateway-plugins`](https://github.com/ferro-labs/ai-gateway-plugins) repo. List enabled exporters under `observability.exporters`; an unregistered `name`, or one whose `config` carries an undefined `${VAR}` reference, is logged and skipped without stopping the gateway (non-fatal) — the rest of the exporters and the OTLP pipeline keep running.
 
 To see traces end to end without wiring your own collector, run the bundled demo stack — gateway, Prometheus, Grafana, Jaeger, and a traffic generator — with `make up-fullstack`, then open the dashboard's **Tracing** page. See [The embedded dashboard](/guides/dashboard).
 
@@ -7423,7 +7423,7 @@ curl -s http://localhost:8080/v1/chat/completions \
   }'
 ```
 
-The `label` field (`control`/`challenger`) is a config-time identifier — it's used in validation error messages and to line up `target_key` with a variant — but it is not currently written to logs, metrics, or trace spans. (`ferro.routing.ab_variant_label` exists as a planned tracing attribute but isn't wired into emitted spans as of v1.4.1.) Because each variant here maps to a distinct provider, group by the `provider` column that `request-logger` persists to recover the split:
+The `label` field (`control`/`challenger`) is a config-time identifier — it's used in validation error messages and to line up `target_key` with a variant — and, since v1.5.1, it travels as `ferro.routing.ab_variant_label` on the request's `gateway.request.completed` / `failed` observability events (and on `gateway.routing.attempt` events where enabled), so an exporter such as the LangSmith or Langfuse plugin, or a custom observability provider, can split results by variant. It is still not a trace-span attribute, a metric label, or a `request-logger` column, so with only `request-logger` and each variant on a distinct provider, group by the `provider` column it persists to recover the split:
 
 ```sql
 SELECT
@@ -13399,7 +13399,7 @@ Source: https://docs.ferrolabs.ai/routing/ab-test/
 A/B test splits live traffic across two or more labelled variants by weighted random draw. It optimizes for **comparing** models or providers under real production traffic — measuring quality, cost, or latency differences during a migration — not for failover order (`fallback`), even load distribution (`loadbalance`), or measured speed (`least-latency`). Every request is answered by one real provider: this is **not** a shadow-traffic or mirroring mode. Set `strategy.mode: ab-test` to use it.
 
 :::tip In plain words
-Send a share of live traffic to a challenger and the rest to your control, label each request, and compare the labelled results later. Every request is answered by one variant only — nothing is duplicated. If the drawn variant is down or overloaded, another target in the pool answers, but the request keeps its original label so the experiment stays honest.
+Send a share of live traffic to a challenger and the rest to your control, label each request, and compare the labelled results later. Every request is answered by one variant only — nothing is duplicated. If the drawn variant is unreachable, times out or is overloaded, another target in the pool answers, but the request keeps its original label so the experiment stays honest.
 :::
 
 ## What happens to a request
@@ -13478,13 +13478,13 @@ targets:
 
 ## Gotchas
 
-- **Not shadow traffic.** Every request is routed to exactly one real provider — the drawn variant. There is no mirrored or duplicated call to compare responses side by side; comparison happens by analyzing labelled logs after the fact.
+- **Not shadow traffic.** Every request is routed to exactly one real provider — the drawn variant. There is no mirrored or duplicated call to compare responses side by side; comparison happens after the fact, on the labelled events your exporter received (see the label gotcha below).
 - **The draw is over eligible variants, not all configured variants.** Only variants whose provider is registered and that support the requested model are candidates. If `control` serves `gpt-4o` and `challenger` doesn't, every `gpt-4o` request goes to `control` regardless of the configured weight — the effective split differs per model when variants serve different model sets.
-- **The variant label travels with the request** as `ferro.routing.ab_variant_label` on the request's observability events — the terminal event and, where attempt events are enabled, each routing attempt. It is the label of the variant that was *drawn*, even when a failover meant another target produced the answer: an intent-to-treat record, so a challenger is charged for its failures rather than hidden behind the control. This is how you attribute observed outcomes back to `control` vs. `challenger` after the fact.
+- **The variant label travels with the request** as `ferro.routing.ab_variant_label` on the request's observability events — the `gateway.request.completed` / `gateway.request.failed` event and, where attempt events are enabled, each `gateway.routing.attempt` event. Those events reach registered exporters (the LangSmith and Langfuse plugins, or your own) and a custom observability provider; the label is not a span attribute, a metric label, or a `request-logger` column. It is the label of the variant that was *drawn*, even when a failover meant another target produced the answer: an intent-to-treat record, so a challenger is charged for its failures rather than hidden behind the control. This is how you attribute observed outcomes back to `control` vs. `challenger` after the fact.
 - **`weight: 0` drains a variant.** A drained variant is excluded from the draw entirely; it can never win, even if it's technically eligible.
 - **`ab_variants[].weight` is what counts — `targets[].weight` is ignored under this mode.** `targets[].weight` only matters under `loadbalance`; don't expect it to influence the A/B split.
 - **Weights are relative, not percentages.** `weight: 70` and `weight: 30` behave identically to `weight: 7` and `weight: 3` — only the ratio matters.
-- **This is a pool mode, but the draw itself is not retried.** Once a variant is drawn, that variant's target leads; after a failover-safe failure the pipeline advances through the remaining configured targets like any pool mode, while a `400`, `401`, `404` or `422` is returned to the client. There is no re-draw — a failed request does not get a second chance at a different variant within the same routing decision.
+- **This is a pool mode, but the draw itself is not retried.** Once a variant is drawn, that variant's target leads; after a failover-safe failure the pipeline advances through the remaining configured targets like any pool mode, while any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the client. There is no re-draw — a failed request does not get a second chance at a different variant within the same routing decision.
 - **A negative weight or an all-zero weight set is a load error**, not a runtime failure — `ferrogw validate` and gateway startup reject it before traffic is served.
 
 ## Related
@@ -13505,7 +13505,7 @@ Source: https://docs.ferrolabs.ai/routing/conditional/
 Conditional routes each request by matching its declared `model` field against rules you write, not by weight, latency, or cost. It optimizes for **deterministic model-to-provider pinning** — "this model always goes to this backend, no exceptions" — the shape a compliance or contractual requirement needs, where a pool mode's willingness to substitute a different provider is the wrong behavior, not a convenience. Set `strategy.mode: conditional` to use it.
 
 :::tip In plain words
-Write rules like "model X goes to provider Y". The first matching rule wins; anything unmatched goes to the first target. The chosen provider's answer — success or failure — is what the client gets. The gateway never swaps in another provider for a matched rule, except to skip one whose circuit breaker is already open.
+Write rules like "model X goes to provider Y". The first matching rule wins; anything unmatched goes to the first target. The chosen provider's answer — success or failure — is what the client gets. The gateway swaps in another target for a matched rule only *before* the call — when the matched one has an open circuit breaker or cannot handle that kind of request (embeddings or images, say) — never after a failure.
 :::
 
 ## What happens to a request
@@ -13583,7 +13583,7 @@ Source: https://docs.ferrolabs.ai/routing/content-based/
 Content-based routes each request by inspecting the text of its **user-role** prompt messages, not its declared `model` field. It optimizes for **prompt-aware model selection** — code-shaped prompts to a coding model, prompts mentioning "translate" to a translation-tuned model, everything else to a general default — a decision `conditional` routing can't make because it only ever sees the model name. Set `strategy.mode: content-based` to use it.
 
 :::tip In plain words
-Look at what the user wrote, not which model they asked for. "Write a function that…" goes to a coding model; "translate this…" to a cheap one; everything else to your default. Rules are checked in order, the first match wins, and the matched provider's answer is final.
+Look at what the user wrote, not which model they asked for. "Write a function that…" goes to a coding model; "translate this…" to a cheap one; everything else to your default. Rules are checked in order, the first match wins, and the matched provider's answer is final: the gateway swaps in another target only *before* the call — when the matched one has an open circuit breaker or cannot handle that kind of request (embeddings or images, say) — never after a failure.
 :::
 
 ## What happens to a request
@@ -13666,7 +13666,7 @@ Source: https://docs.ferrolabs.ai/routing/cost-optimized/
 Cost-optimized routes each request to the cheapest model-compatible target, ranked by **estimated input cost** from the built-in model catalog. It optimizes for **spend** — not failover order (`fallback`), distribution (`loadbalance`), or latency (`least-latency`). Set `strategy.mode: cost-optimized` to use it.
 
 :::tip In plain words
-Each request goes to the cheapest provider that serves the model, using the built-in price list and a rough guess at how many tokens the prompt is. If the cheapest one is down, slow or overloaded, the next-cheapest takes over. A provider with no known price is used last (the default), skipped, or treated as free — your choice.
+Each request goes to the cheapest provider that serves the model, using the built-in price list and a rough guess at how many tokens the prompt is. If the cheapest one is unreachable, times out or is overloaded, the next-cheapest takes over. A provider with no known price is used last (the default), skipped, or treated as free — your choice.
 :::
 
 ## What happens to a request
@@ -13741,7 +13741,7 @@ targets:
 - **`allow` makes unpriced look free.** Under `unpriced_strategy: allow`, any compatible target the catalog has no price for is treated as `$0` and wins the draw over every priced target, every time. This is useful for a self-hosted/local target you always want preferred, but a surprise for one you didn't intend to be prioritized.
 - **`skip` narrows what `/v1/models` advertises.** Under `unpriced_strategy: skip`, targets with no catalog price are excluded from ranking entirely; if a request's model has no priced target, the request errors rather than falling through. `targets[].models` entries are unpriced by construction (they're operator-declared, not catalog data), so they're excluded here too.
 - **Default (`fallback`) only reaches unpriced targets as a last resort.** A self-hosted or otherwise-unpriced target under the default strategy is used only when **no** compatible target in `targets[]` has any catalog price at all — not merely when it's cheaper.
-- **This is a pool mode.** The pipeline advances past an open-circuit target, or one that failed in a failover-safe way, to the next one in the ranked order; a `400`, `401`, `404` or `422` is returned to the client. `cost-optimized` gets failover "for free" as a side effect of the mode family, not because of anything cost-specific.
+- **This is a pool mode.** The pipeline advances past an open-circuit target, or one that failed in a failover-safe way, to the next one in the ranked order; any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the client. `cost-optimized` gets failover "for free" as a side effect of the mode family, not because of anything cost-specific.
 - **Only model-compatible targets are eligible.** A target whose provider isn't registered, or that doesn't serve the requested model, is filtered out before pricing is even looked up.
 - **Ranking is per-request.** Because it depends on the requested model and that request's estimated prompt size, the effective order can differ from one request to the next through the same config — it is not a static, once-computed target list.
 
@@ -13761,10 +13761,10 @@ targets:
 Source: https://docs.ferrolabs.ai/routing/fallback/
 ================================================================================
 
-Fallback tries targets in the order you declare them, advancing to the next target when the current one fails in a way another provider can fix. It optimizes for **availability**: a request that failed because a provider was unreachable, slow or overloaded is answered by the next-best provider instead of being reported as a failure — not for spreading load (`loadbalance`), speed (`least-latency`), or cost (`cost-optimized`). Set `strategy.mode: fallback` to use it.
+Fallback tries targets in the order you declare them, advancing to the next target when the current one fails in a way another provider can fix. It optimizes for **availability**: a request that failed because a provider was unreachable, timed out or overloaded is answered by the next-best provider instead of being reported as a failure — not for spreading load (`loadbalance`), speed (`least-latency`), or cost (`cost-optimized`). Set `strategy.mode: fallback` to use it.
 
 :::tip In plain words
-List your providers in the order you trust them. If the first is down, slow or overloaded, the same request goes to the next one and the client never sees the failure. If the first says the *request* is wrong — bad key, unknown model, invalid input — the client gets that answer, because another provider cannot fix it.
+List your providers in the order you trust them. If the first is unreachable, times out or is overloaded, the same request goes to the next one and the client never sees the failure. If the first says the *request* is wrong — bad key, unknown model, invalid input — the client gets that answer, because another provider cannot fix it.
 :::
 
 ## What happens to a request
@@ -13841,7 +13841,7 @@ A request for `smart` is served by OpenAI as `gpt-4o` and, on failover, by Anthr
 
 - **Fallback holds no retry policy of its own.** `targets[].retry.*` is the pipeline's config, resolved per target and applied identically under every routing mode. What's specific to `fallback` is only the decision to advance to the *next* target once that target's retry budget is spent.
 - **Declared order is priority order — there are no weights.** `targets[].weight` is read only by `loadbalance`; under `fallback`, the first entry in `targets[]` is always tried first.
-- **Not every failure fails over.** A `400`, `401`, `403`, `404` or `422` from a target is returned to the client — another provider cannot fix a malformed request or a revoked key. An attempt that timed out waiting on the target, an open circuit and a full concurrency queue advance to the next target at once, without spending a retry; a transport failure, `408`, `429` and `5xx` advance once the retry budget is spent. The client's own cancellation or deadline stops routing entirely — nothing is retried or advanced on the caller's behalf.
+- **Not every failure fails over.** Any other `4xx` from a target — `400`, `401`, `403`, `404`, `422`, and the rest — is returned to the client; another provider cannot fix a malformed request or a revoked key. An attempt that timed out waiting on the target, an open circuit and a full concurrency queue advance to the next target at once, without spending a retry; a transport failure, `408`, `429` and `5xx` advance once the retry budget is spent. The client's own cancellation or deadline stops routing entirely — nothing is retried or advanced on the caller's behalf.
 - **A `Retry-After` hint longer than 30 seconds abandons the target instead of waiting on it.** The gateway won't hold a request open past that cap; it advances to the next target immediately and logs that the target was abandoned.
 - **Only deterministic-retry statuses are retried by default.** With no `on_status_codes` set, retries apply to transport failures plus `408`, `429`, and `5xx`. Every other 4xx (e.g. `400`, `401`, `404`) is treated as a client error that a retry against the same target cannot fix.
 - **An open-circuit target is skipped before commitment, same as every other mode.** If every declared target's circuit is open, the pipeline still attempts one rather than reporting a routing-level 404 — the caller sees `503`.
@@ -13918,7 +13918,7 @@ targets:
 - **Unseen targets jump the queue by design.** A target with no recorded samples is shuffled to the front ahead of every sampled target, so adding a new target to the pool means it briefly absorbs traffic while it's profiled — this is intentional cold-start behaviour, not a bug.
 - **Samples reset with the process.** The tracker is in-memory only; a restart, redeploy, or rolling update wipes all latency history, so every target starts "unseen" again and cold-start shuffling kicks back in.
 - **`weight` is ignored.** `targets[].weight` has no effect under this mode — it is read only by `loadbalance`.
-- **This is a pool mode.** The pipeline advances past an open-circuit target, or one that failed in a failover-safe way, to the next one in p50 order; a `400`, `401`, `404` or `422` is returned to the client. Failover falls out of the mode family, not out of anything latency-specific.
+- **This is a pool mode.** The pipeline advances past an open-circuit target, or one that failed in a failover-safe way, to the next one in p50 order; any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the client. Failover falls out of the mode family, not out of anything latency-specific.
 - **Only model-compatible targets are eligible.** A target whose provider isn't registered, or that doesn't serve the requested model, is filtered out before latency ordering is applied.
 
 ## Related
@@ -13939,7 +13939,7 @@ Source: https://docs.ferrolabs.ai/routing/loadbalance/
 Load balance spreads traffic across two or more targets by weighted random selection. It optimizes for **distributing** load across interchangeable providers — not for failover order (`fallback`), latency (`least-latency`), or cost (`cost-optimized`). Set `strategy.mode: loadbalance` to use it.
 
 :::tip In plain words
-Split traffic between providers by weight — `weight: 7` and `weight: 3` means roughly 70/30 over time. A request whose chosen provider is down, slow or overloaded is handed to another provider in the pool; one the provider rejected as a bad request comes back as-is. `weight: 0` stops new traffic to a provider without deleting it.
+Split traffic between providers by weight — `weight: 7` and `weight: 3` means roughly 70/30 over time. A request whose chosen provider is unreachable, times out or is overloaded is handed to another provider in the pool; one the provider rejected as a bad request comes back as-is. `weight: 0` stops new traffic to a provider without deleting it.
 :::
 
 ## What happens to a request
@@ -14006,7 +14006,7 @@ Every response still says `"model": "smart"`. See [One model name, different ups
 - **Weights are relative, not percentages.** `weight: 0.7` and `weight: 0.3` behave identically to `weight: 7` and `weight: 3` — only the ratio between targets matters.
 - **Omitting `weight` yields `0`, not an even split.** Because `weight` uses YAML `omitempty`, a target with no `weight` key defaults to `0.0` — silent zero traffic. This is an easy foot-gun: set `weight` explicitly on every target under `loadbalance`.
 - **An all-zero or negative weight set is rejected at load.** `ferrogw validate` (and gateway startup) reject a negative weight outright and reject a config where every target's weight sums to zero — but one *forgotten* weight on an otherwise-valid config passes validation and silently drains just that target.
-- **This is a pool mode.** The pipeline advances past an open-circuit target, or one that failed in a failover-safe way, to the next one in the rotated order; a `400`, `401`, `404` or `422` is returned to the client. A `loadbalance` config gets failover "for free" as a side effect of the mode family, not because of anything weight-specific.
+- **This is a pool mode.** The pipeline advances past an open-circuit target, or one that failed in a failover-safe way, to the next one in the rotated order; any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the client. A `loadbalance` config gets failover "for free" as a side effect of the mode family, not because of anything weight-specific.
 - **Only model-compatible targets are eligible.** A target whose provider isn't registered, or that doesn't serve the requested model, is filtered out before weighting is applied — it never wins the draw regardless of its configured weight.
 - Selection uses `math/rand`, deliberately — this is a load-shaping decision, not a security-sensitive one.
 
@@ -14186,7 +14186,7 @@ Regardless of family:
 
 Three things an operator may notice after upgrading from 1.5.0 or earlier:
 
-- **Pool modes no longer cover a client error.** Before 1.5.1 they advanced after *any* failure, so a target answering `400`, `401`, `404` or `422` was silently replaced by a sibling — a revoked key on the primary was invisible. Those responses now reach the client; only failover-safe failures advance ([table above](#which-failures-fail-over)).
+- **Pool modes no longer cover a client error.** Before 1.5.1 they advanced after *any* failure, so a target answering any other `4xx` — `400`, `401`, `403`, `404`, `422` — was silently replaced by a sibling — a revoked key on the primary was invisible. Those responses now reach the client; only failover-safe failures advance ([table above](#which-failures-fail-over)).
 - **The response `model` is the routed name.** Responses used to echo whatever identifier the provider reported, such as a dated snapshot like `gpt-4o-2024-08-06`; they now carry the name the client asked for, after alias resolution, on streamed chunks too.
 - **Ambiguous configs are rejected at load.** Two targets sharing a `virtual_key`, an empty `virtual_key`, two `ab_variants` naming the same target, or a duplicated key in a JSON config used to load silently, collapsing retry, weight and breaker state for the pair. `ferrogw validate` and startup now refuse them.
 

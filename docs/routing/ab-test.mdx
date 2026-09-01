@@ -7,7 +7,7 @@ keywords: [ab test routing, a/b test, weighted variants, model migration, ai-gat
 A/B test splits live traffic across two or more labelled variants by weighted random draw. It optimizes for **comparing** models or providers under real production traffic — measuring quality, cost, or latency differences during a migration — not for failover order (`fallback`), even load distribution (`loadbalance`), or measured speed (`least-latency`). Every request is answered by one real provider: this is **not** a shadow-traffic or mirroring mode. Set `strategy.mode: ab-test` to use it.
 
 :::tip In plain words
-Send a share of live traffic to a challenger and the rest to your control, label each request, and compare the labelled results later. Every request is answered by one variant only — nothing is duplicated. If the drawn variant is down or overloaded, another target in the pool answers, but the request keeps its original label so the experiment stays honest.
+Send a share of live traffic to a challenger and the rest to your control, label each request, and compare the labelled results later. Every request is answered by one variant only — nothing is duplicated. If the drawn variant is unreachable, times out or is overloaded, another target in the pool answers, but the request keeps its original label so the experiment stays honest.
 :::
 
 ## What happens to a request
@@ -86,13 +86,13 @@ targets:
 
 ## Gotchas
 
-- **Not shadow traffic.** Every request is routed to exactly one real provider — the drawn variant. There is no mirrored or duplicated call to compare responses side by side; comparison happens by analyzing labelled logs after the fact.
+- **Not shadow traffic.** Every request is routed to exactly one real provider — the drawn variant. There is no mirrored or duplicated call to compare responses side by side; comparison happens after the fact, on the labelled events your exporter received (see the label gotcha below).
 - **The draw is over eligible variants, not all configured variants.** Only variants whose provider is registered and that support the requested model are candidates. If `control` serves `gpt-4o` and `challenger` doesn't, every `gpt-4o` request goes to `control` regardless of the configured weight — the effective split differs per model when variants serve different model sets.
-- **The variant label travels with the request** as `ferro.routing.ab_variant_label` on the request's observability events — the terminal event and, where attempt events are enabled, each routing attempt. It is the label of the variant that was *drawn*, even when a failover meant another target produced the answer: an intent-to-treat record, so a challenger is charged for its failures rather than hidden behind the control. This is how you attribute observed outcomes back to `control` vs. `challenger` after the fact.
+- **The variant label travels with the request** as `ferro.routing.ab_variant_label` on the request's observability events — the `gateway.request.completed` / `gateway.request.failed` event and, where attempt events are enabled, each `gateway.routing.attempt` event. Those events reach registered exporters (the LangSmith and Langfuse plugins, or your own) and a custom observability provider; the label is not a span attribute, a metric label, or a `request-logger` column. It is the label of the variant that was *drawn*, even when a failover meant another target produced the answer: an intent-to-treat record, so a challenger is charged for its failures rather than hidden behind the control. This is how you attribute observed outcomes back to `control` vs. `challenger` after the fact.
 - **`weight: 0` drains a variant.** A drained variant is excluded from the draw entirely; it can never win, even if it's technically eligible.
 - **`ab_variants[].weight` is what counts — `targets[].weight` is ignored under this mode.** `targets[].weight` only matters under `loadbalance`; don't expect it to influence the A/B split.
 - **Weights are relative, not percentages.** `weight: 70` and `weight: 30` behave identically to `weight: 7` and `weight: 3` — only the ratio matters.
-- **This is a pool mode, but the draw itself is not retried.** Once a variant is drawn, that variant's target leads; after a failover-safe failure the pipeline advances through the remaining configured targets like any pool mode, while a `400`, `401`, `404` or `422` is returned to the client. There is no re-draw — a failed request does not get a second chance at a different variant within the same routing decision.
+- **This is a pool mode, but the draw itself is not retried.** Once a variant is drawn, that variant's target leads; after a failover-safe failure the pipeline advances through the remaining configured targets like any pool mode, while any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the client. There is no re-draw — a failed request does not get a second chance at a different variant within the same routing decision.
 - **A negative weight or an all-zero weight set is a load error**, not a runtime failure — `ferrogw validate` and gateway startup reject it before traffic is served.
 
 ## Related

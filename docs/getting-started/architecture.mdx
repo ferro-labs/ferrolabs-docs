@@ -168,7 +168,7 @@ routing mode makes it **happen** (decides whether to try a sibling at all).
 
 | | Modes | On a target failure |
 |---|---|---|
-| **Pool** | `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test` | the walk advances to the next candidate |
+| **Pool** | `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test` | the walk advances to the next candidate after a failover-safe failure; any other `4xx` is returned |
 | **Named** | `single`, `conditional`, `content-based` | the walk stops and reports the failure |
 
 A pool mode picks its head target for a reason that's about the *pool* —

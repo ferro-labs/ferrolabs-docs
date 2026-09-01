@@ -7,7 +7,7 @@ keywords: [content-based routing, prompt-based routing, prompt_contains, prompt_
 Content-based routes each request by inspecting the text of its **user-role** prompt messages, not its declared `model` field. It optimizes for **prompt-aware model selection** — code-shaped prompts to a coding model, prompts mentioning "translate" to a translation-tuned model, everything else to a general default — a decision `conditional` routing can't make because it only ever sees the model name. Set `strategy.mode: content-based` to use it.
 
 :::tip In plain words
-Look at what the user wrote, not which model they asked for. "Write a function that…" goes to a coding model; "translate this…" to a cheap one; everything else to your default. Rules are checked in order, the first match wins, and the matched provider's answer is final.
+Look at what the user wrote, not which model they asked for. "Write a function that…" goes to a coding model; "translate this…" to a cheap one; everything else to your default. Rules are checked in order, the first match wins, and the matched provider's answer is final: the gateway swaps in another target only *before* the call — when the matched one has an open circuit breaker or cannot handle that kind of request (embeddings or images, say) — never after a failure.
 :::
 
 ## What happens to a request

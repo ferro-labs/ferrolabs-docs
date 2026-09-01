@@ -4,10 +4,10 @@ description: "Configure strategy.mode: fallback in Ferro Labs AI Gateway to try 
 keywords: [fallback routing, failover, AI gateway fallback, ai-gateway strategy.mode, retry backoff, priority order routing]
 ---
 
-Fallback tries targets in the order you declare them, advancing to the next target when the current one fails in a way another provider can fix. It optimizes for **availability**: a request that failed because a provider was unreachable, slow or overloaded is answered by the next-best provider instead of being reported as a failure — not for spreading load (`loadbalance`), speed (`least-latency`), or cost (`cost-optimized`). Set `strategy.mode: fallback` to use it.
+Fallback tries targets in the order you declare them, advancing to the next target when the current one fails in a way another provider can fix. It optimizes for **availability**: a request that failed because a provider was unreachable, timed out or overloaded is answered by the next-best provider instead of being reported as a failure — not for spreading load (`loadbalance`), speed (`least-latency`), or cost (`cost-optimized`). Set `strategy.mode: fallback` to use it.
 
 :::tip In plain words
-List your providers in the order you trust them. If the first is down, slow or overloaded, the same request goes to the next one and the client never sees the failure. If the first says the *request* is wrong — bad key, unknown model, invalid input — the client gets that answer, because another provider cannot fix it.
+List your providers in the order you trust them. If the first is unreachable, times out or is overloaded, the same request goes to the next one and the client never sees the failure. If the first says the *request* is wrong — bad key, unknown model, invalid input — the client gets that answer, because another provider cannot fix it.
 :::
 
 ## What happens to a request
@@ -84,7 +84,7 @@ A request for `smart` is served by OpenAI as `gpt-4o` and, on failover, by Anthr
 
 - **Fallback holds no retry policy of its own.** `targets[].retry.*` is the pipeline's config, resolved per target and applied identically under every routing mode. What's specific to `fallback` is only the decision to advance to the *next* target once that target's retry budget is spent.
 - **Declared order is priority order — there are no weights.** `targets[].weight` is read only by `loadbalance`; under `fallback`, the first entry in `targets[]` is always tried first.
-- **Not every failure fails over.** A `400`, `401`, `403`, `404` or `422` from a target is returned to the client — another provider cannot fix a malformed request or a revoked key. An attempt that timed out waiting on the target, an open circuit and a full concurrency queue advance to the next target at once, without spending a retry; a transport failure, `408`, `429` and `5xx` advance once the retry budget is spent. The client's own cancellation or deadline stops routing entirely — nothing is retried or advanced on the caller's behalf.
+- **Not every failure fails over.** Any other `4xx` from a target — `400`, `401`, `403`, `404`, `422`, and the rest — is returned to the client; another provider cannot fix a malformed request or a revoked key. An attempt that timed out waiting on the target, an open circuit and a full concurrency queue advance to the next target at once, without spending a retry; a transport failure, `408`, `429` and `5xx` advance once the retry budget is spent. The client's own cancellation or deadline stops routing entirely — nothing is retried or advanced on the caller's behalf.
 - **A `Retry-After` hint longer than 30 seconds abandons the target instead of waiting on it.** The gateway won't hold a request open past that cap; it advances to the next target immediately and logs that the target was abandoned.
 - **Only deterministic-retry statuses are retried by default.** With no `on_status_codes` set, retries apply to transport failures plus `408`, `429`, and `5xx`. Every other 4xx (e.g. `400`, `401`, `404`) is treated as a client error that a retry against the same target cannot fix.
 - **An open-circuit target is skipped before commitment, same as every other mode.** If every declared target's circuit is open, the pipeline still attempts one rather than reporting a routing-level 404 — the caller sees `503`.

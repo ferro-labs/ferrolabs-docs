@@ -132,7 +132,7 @@ strategy:
       label: challenger
 ```
 
-Weights are relative (`weight / sum(weights)`); a zero weight drains a variant to no traffic, a negative weight or an all-zero set is a load error. The draw is over **eligible** variants only — a variant whose provider doesn't serve the requested model never wins that draw. Each variant's `label` is logged with every routed request for analytics. `ab-test` is a pool mode: a failure at the drawn variant advances to the next eligible one.
+Weights are relative (`weight / sum(weights)`); a zero weight drains a variant to no traffic, a negative weight or an all-zero set is a load error. The draw is over **eligible** variants only — a variant whose provider doesn't serve the requested model never wins that draw. Each variant's `label` travels as `ferro.routing.ab_variant_label` on the request's observability events (delivered to registered exporters and custom providers — not a `request-logger` column or a span attribute). `ab-test` is a pool mode: a failover-safe failure at the drawn variant advances to the next configured target, while any other `4xx` is returned to the client; the label stays the drawn variant's either way.
 
 ## Targets
 
