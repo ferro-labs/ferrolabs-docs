@@ -6,11 +6,39 @@ keywords: [cost-optimized routing, AI gateway cost routing, LLM cost optimizatio
 
 Cost-optimized routes each request to the cheapest model-compatible target, ranked by **estimated input cost** from the built-in model catalog. It optimizes for **spend** — not failover order (`fallback`), distribution (`loadbalance`), or latency (`least-latency`). Set `strategy.mode: cost-optimized` to use it.
 
+:::tip In plain words
+Each request goes to the cheapest provider that serves the model, using the built-in price list and a rough guess at how many tokens the prompt is. If the cheapest one is unreachable, times out or is overloaded, the next-cheapest takes over. A provider with no known price is used last (the default), skipped, or treated as free — your choice.
+:::
+
+## What happens to a request
+
+Two providers serve the same small model under one name, with catalog prices at the time of writing:
+
+```yaml
+strategy:
+  mode: cost-optimized
+
+targets:
+  - virtual_key: groq
+    model_map:
+      llama-8b: llama-3.1-8b-instant                            # $0.05 per 1M input tokens
+  - virtual_key: together
+    model_map:
+      llama-8b: meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo     # $0.18 per 1M input tokens
+```
+
+| Request for `llama-8b` | The gateway… | The client gets |
+|---|---|---|
+| normal | asks Groq, the cheaper one | Groq's answer, `"model": "llama-8b"` |
+| Groq returns `429` | retries per Groq's `retry`, then asks Together | Together's answer, still `"model": "llama-8b"` |
+| Groq returns `400` | stops | `400` |
+| a third target with no catalog price is added | under the default `unpriced_strategy: fallback` it is tried only when no priced target is compatible | — |
+
 ## Behaviour
 
-`cost-optimized` is a **pool mode**: on a request failure, the pipeline advances to the next candidate in the ranked order rather than reporting the failure back to the caller. `targets[].retry` still governs how many times any one target is retried before the pipeline moves on.
+`cost-optimized` is a **pool mode**: after a failover-safe failure (a transport failure, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, an open circuit, or a full concurrency queue) the pipeline advances to the next candidate in the ranked order rather than reporting the failure back to the caller; any other `4xx` is returned to the client. `targets[].retry` still governs how many times any one target is retried before the pipeline moves on.
 
-On each request, `CostOptimized.SelectTargets` (`internal/strategies/costoptimized.go`) filters `targets[]` down to those whose provider is registered and whose `SupportsModel(req.Model)` returns true, then estimates the prompt token count at roughly **4 characters per token** (a routing heuristic, not a billing figure) and prices `<virtual_key>/<req.Model>` for each compatible target through the model catalog. Candidates are ranked by ascending estimated input cost — the cheapest target leads. `strategy.unpriced_strategy` decides which cataloged-but-unpriced candidates are allowed to rank at all (see below). Candidates the catalog doesn't recognize as that model (`ModelFound: false`) never rank, regardless of `unpriced_strategy`.
+On each request, `CostOptimized.SelectTargets` (`internal/strategies/costoptimized.go`) filters `targets[]` down to those whose provider is registered and whose `SupportsModel(req.Model)` returns true, then estimates the prompt token count at roughly **4 characters per token** (a routing heuristic, not a billing figure) and prices each compatible target's upstream model — the `model_map` translation when the target has one, otherwise the requested model — through the model catalog. Candidates are ranked by ascending estimated input cost — the cheapest target leads. `strategy.unpriced_strategy` decides which cataloged-but-unpriced candidates are allowed to rank at all (see below). Candidates the catalog doesn't recognize as that model (`ModelFound: false`) never rank, regardless of `unpriced_strategy`.
 
 ## Config keys
 
@@ -54,7 +82,7 @@ targets:
 - **`allow` makes unpriced look free.** Under `unpriced_strategy: allow`, any compatible target the catalog has no price for is treated as `$0` and wins the draw over every priced target, every time. This is useful for a self-hosted/local target you always want preferred, but a surprise for one you didn't intend to be prioritized.
 - **`skip` narrows what `/v1/models` advertises.** Under `unpriced_strategy: skip`, targets with no catalog price are excluded from ranking entirely; if a request's model has no priced target, the request errors rather than falling through. `targets[].models` entries are unpriced by construction (they're operator-declared, not catalog data), so they're excluded here too.
 - **Default (`fallback`) only reaches unpriced targets as a last resort.** A self-hosted or otherwise-unpriced target under the default strategy is used only when **no** compatible target in `targets[]` has any catalog price at all — not merely when it's cheaper.
-- **This is a pool mode.** The pipeline advances past a failed or open-circuit target to the next one in the ranked order — `cost-optimized` gets failover "for free" as a side effect of the mode family, not because of anything cost-specific.
+- **This is a pool mode.** The pipeline advances past an open-circuit target, or one that failed in a failover-safe way, to the next one in the ranked order; any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the client. `cost-optimized` gets failover "for free" as a side effect of the mode family, not because of anything cost-specific.
 - **Only model-compatible targets are eligible.** A target whose provider isn't registered, or that doesn't serve the requested model, is filtered out before pricing is even looked up.
 - **Ranking is per-request.** Because it depends on the requested model and that request's estimated prompt size, the effective order can differ from one request to the next through the same config — it is not a static, once-computed target list.
 

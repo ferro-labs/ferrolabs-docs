@@ -6,9 +6,25 @@ keywords: [least-latency routing, p50 latency routing, AI gateway latency-based 
 
 Least-latency routes to the compatible target with the lowest observed **p50** latency. It optimizes for **total response time** across interchangeable providers — not for cost (`cost-optimized`), declared failover order (`fallback`), or an even traffic split (`loadbalance`). Set `strategy.mode: least-latency` to use it.
 
+:::tip In plain words
+Every completed request is timed, and each new request goes to the provider with the lowest median time so far. A provider nobody has timed yet is tried first so it gets measured. "Time" is the whole response, so a model that writes longer answers looks slower than a terse one on the same hardware.
+:::
+
+## What happens to a request
+
+Three targets serve the model. Groq's median so far is 0.8 s, OpenAI's 1.6 s, and Anthropic was just added and has no samples:
+
+| Request | Order tried | Why |
+|---|---|---|
+| first after adding Anthropic | Anthropic, Groq, OpenAI | unmeasured targets go first so they get a sample |
+| once Anthropic measures 2.1 s | Groq, OpenAI, Anthropic | ascending median |
+| Groq returns `503` | OpenAI answers it | failover-safe failure, next in order |
+| Groq returns `422` | the client gets the `422` | the request was the problem |
+| after a restart | all three unmeasured again | samples live in memory only |
+
 ## Behaviour
 
-`least-latency` is a **pool mode**: on a request failure, the pipeline advances to the next candidate in the ordered list rather than reporting the failure back to the caller. `targets[].retry` still governs how many times any one target is retried before the pipeline moves on.
+`least-latency` is a **pool mode**: after a failover-safe failure (a transport failure, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, an open circuit, or a full concurrency queue) the pipeline advances to the next candidate in the ordered list rather than reporting the failure back to the caller; any other `4xx` is returned to the client. `targets[].retry` still governs how many times any one target is retried before the pipeline moves on.
 
 On each request, `LeastLatency.SelectTargets` (`internal/strategies/leastlatency.go`) filters `targets[]` down to those whose provider is registered and whose `SupportsModel(req.Model)` returns true, then splits them by whether the in-process `latency.Tracker` holds any samples for that target. Targets with **no recorded samples are shuffled to the front** — cold-start profiling, so a newly added target gets tried rather than starved by an established leader — followed by sampled targets sorted **ascending by p50**, followed by any remaining declared targets. The pipeline commits to the head of that order first; the rest stand in as substitutes before committing (an open circuit, for example) and, because this is a pool mode, as the next attempt if the head fails. `SelectTargets` returns `nil` (the caller reports 404 `model_not_found`) when no configured target serves the requested model.
 
@@ -45,7 +61,7 @@ targets:
 - **Unseen targets jump the queue by design.** A target with no recorded samples is shuffled to the front ahead of every sampled target, so adding a new target to the pool means it briefly absorbs traffic while it's profiled — this is intentional cold-start behaviour, not a bug.
 - **Samples reset with the process.** The tracker is in-memory only; a restart, redeploy, or rolling update wipes all latency history, so every target starts "unseen" again and cold-start shuffling kicks back in.
 - **`weight` is ignored.** `targets[].weight` has no effect under this mode — it is read only by `loadbalance`.
-- **This is a pool mode.** The pipeline advances past a failed or open-circuit target to the next one in p50 order; failover falls out of the mode family, not out of anything latency-specific.
+- **This is a pool mode.** The pipeline advances past an open-circuit target, or one that failed in a failover-safe way, to the next one in p50 order; any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the client. Failover falls out of the mode family, not out of anything latency-specific.
 - **Only model-compatible targets are eligible.** A target whose provider isn't registered, or that doesn't serve the requested model, is filtered out before latency ordering is applied.
 
 ## Related

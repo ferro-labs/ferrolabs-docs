@@ -152,7 +152,7 @@ curl -s http://localhost:8080/v1/chat/completions \
   }'
 ```
 
-The `label` field (`control`/`challenger`) is a config-time identifier — it's used in validation error messages and to line up `target_key` with a variant — but it is not currently written to logs, metrics, or trace spans. (`ferro.routing.ab_variant_label` exists as a planned tracing attribute but isn't wired into emitted spans as of v1.4.1.) Because each variant here maps to a distinct provider, group by the `provider` column that `request-logger` persists to recover the split:
+The `label` field (`control`/`challenger`) is a config-time identifier — it's used in validation error messages and to line up `target_key` with a variant — and, since v1.5.1, it travels as `ferro.routing.ab_variant_label` on the request's `gateway.request.completed` / `failed` observability events (and on `gateway.routing.attempt` events where enabled), so an exporter such as the LangSmith or Langfuse plugin, or a custom observability provider, can split results by variant. It is still not a trace-span attribute, a metric label, or a `request-logger` column, so with only `request-logger` and each variant on a distinct provider, group by the `provider` column it persists to recover the split:
 
 ```sql
 SELECT

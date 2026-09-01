@@ -189,7 +189,7 @@ On routed surfaces — chat completions, streaming, embeddings, images — `X-Pr
 <summary className={styles.q}>What happens if a provider is down?</summary>
 <div className={styles.a}>
 
-Depends on the strategy. Pool modes — `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test` — advance to the next target in the pool on a failure. Named modes — `single`, `conditional`, `content-based` — report the failure back to the caller instead, since something specifically chose that target. Every mode skips a target whose circuit breaker is open; if every target for a model is open, the request gets `503`. `targets[].retry` is honored under every mode, so set `attempts: 1` to keep single-attempt behavior even in a pool.
+Depends on the strategy. Pool modes — `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test` — advance to the next target in the pool after a failover-safe failure — the provider was unreachable, timed out, returned `408`/`429`/`5xx`, or is circuit-open or saturated; any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the caller instead. Named modes — `single`, `conditional`, `content-based` — report the failure back to the caller instead, since something specifically chose that target. Every mode skips a target whose circuit breaker is open; if every target for a model is open, the request gets `503`. `targets[].retry` is honored under every mode, so set `attempts: 1` to keep single-attempt behavior even in a pool.
 
 </div>
 </details>

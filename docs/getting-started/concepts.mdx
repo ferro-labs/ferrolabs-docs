@@ -34,7 +34,7 @@ The strategy controls which target(s) a request is offered to, and in what order
 | Strategy | Description |
 |---|---|
 | `single` | Always route to the first target. Simplest setup. |
-| `fallback` | Try targets in declared order; advance to the next target on failure. |
+| `fallback` | Try targets in declared order; advance to the next target after a failover-safe failure. |
 | `loadbalance` | Distribute requests across targets by weight. |
 | `conditional` | Match `model` (exact) or `model_prefix` (prefix) against declared rules; first match wins. |
 | `least-latency` | Route to the compatible target with the lowest observed p50 latency. |
@@ -44,7 +44,7 @@ The strategy controls which target(s) a request is offered to, and in what order
 
 One pipeline governs chat, streaming, embeddings, and images, so retry and circuit-breaking behave identically across all four. Strategies split into two families:
 
-- **Pool modes** (`fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test`) advance past a failed target to the next candidate.
+- **Pool modes** (`fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test`) advance past a target that failed in a failover-safe way — transport error, attempt timeout, `408`/`429`/`5xx`, open circuit, saturation — to the next candidate; any other `4xx` is returned to the client.
 - **Named modes** (`single`, `conditional`, `content-based`) commit to their chosen target and report its failure rather than trying another.
 
 Every mode skips a target whose circuit is open; if every candidate's circuit is open, the request is still attempted and returns `503`.
