@@ -8,7 +8,7 @@
  * below. Keep in sync on every release.
  */
 export const PRODUCT = {
-  version: '1.4.1',
+  version: '1.5.1',
   license: 'Apache 2.0',
   goVersion: '1.25',
   providers: 30,

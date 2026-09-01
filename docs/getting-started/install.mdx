@@ -62,11 +62,11 @@ verifies SHA-256, but it does not expose `-VerifySignature`; mandatory cosign
 verification is currently available only in the Linux/macOS installer.
 
 ```bash title="Pin a version, using the environment form"
-curl -fsSL https://get.ferrolabs.ai/install.sh | FERROGW_VERSION=v1.4.2 sh
+curl -fsSL https://get.ferrolabs.ai/install.sh | FERROGW_VERSION=v1.5.1 sh
 ```
 
 ```bash title="Or pass flags explicitly"
-curl -fsSL https://get.ferrolabs.ai/install.sh | sh -s -- --version v1.4.2
+curl -fsSL https://get.ferrolabs.ai/install.sh | sh -s -- --version v1.5.1
 ```
 
 ### Where it installs
@@ -129,8 +129,8 @@ cosign signature over it, and one SPDX SBOM per archive. Download them from the
 [releases page](https://github.com/ferro-labs/ai-gateway/releases).
 
 Archives are named `ferrogw_<version>_<os>_<arch>.tar.gz` — `.zip` on Windows.
-Note the version in the filename carries **no `v` prefix**: tag `v1.4.2` produces
-`ferrogw_1.4.2_linux_amd64.tar.gz`.
+Note the version in the filename carries **no `v` prefix**: tag `v1.5.1` produces
+`ferrogw_1.5.1_linux_amd64.tar.gz`.
 
 ### Verifying a download
 
