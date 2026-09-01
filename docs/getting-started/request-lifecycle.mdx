@@ -119,7 +119,7 @@ by the mode:
 
 | Mode family | Modes | On a failed target |
 |---|---|---|
-| Pool | `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test` | Advances to the next candidate |
+| Pool | `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test` | Advances to the next candidate after a failover-safe failure; other `4xx` are returned |
 | Named | `single`, `conditional`, `content-based` | Commits to the one target and reports the failure |
 
 Both families skip a target whose circuit breaker is **open** before

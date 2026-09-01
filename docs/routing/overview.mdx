@@ -1,11 +1,28 @@
 ---
 title: Routing overview
 description: "How the Ferro Labs AI Gateway routes requests: eight strategies that order targets, the strategy and targets config, retry, circuit breaking, and failover."
-keywords: [AI gateway routing, LLM routing strategies, fallback routing, load balancing, cost-optimized routing, least-latency routing, conditional routing, circuit breaker]
+keywords: [AI gateway routing, LLM routing strategies, fallback routing, load balancing, cost-optimized routing, least-latency routing, conditional routing, circuit breaker, model_map, failover-safe failures]
 slug: /routing
 ---
 
 Routing is how the Ferro Labs AI Gateway decides which provider answers a request. One **strategy** governs the whole gateway: it takes each request and returns an ordered list of **targets** to try. A strategy decides *order* and nothing else — retry, circuit breaking, failure classification and capability checks all live once in the request pipeline, so chat, streaming, embeddings and image generation route identically. Ferro Labs ships eight strategies across two families.
+
+:::tip In plain words
+You tell the gateway which providers it may use (`targets`) and one rule for choosing between them (`strategy.mode`). A request arrives asking for a model; the gateway works out which of your providers can serve it, tries them in the order the rule gives, and returns one answer. What happens when a provider fails depends on *why* it was chosen: picked as one of several interchangeable options, the request quietly moves on to the next; named on purpose, its failure is your answer.
+:::
+
+## Which one do I pick?
+
+| You want… | Mode | Looks like |
+|---|---|---|
+| One provider, nothing clever | [`single`](/routing/single) | Everything goes to OpenAI; the gateway adds keys, limits, plugins and logs. |
+| A main provider and a backup | [`fallback`](/routing/fallback) | OpenAI first; if it is down or overloaded, Anthropic answers the same request. |
+| Traffic shared between providers | [`loadbalance`](/routing/loadbalance) | 70 % OpenAI, 30 % Azure OpenAI; `weight: 0` drains one before you remove it. |
+| Whoever answers fastest right now | [`least-latency`](/routing/least-latency) | Groq, OpenAI and Anthropic all serve the model; the quickest one keeps getting the traffic. |
+| The cheapest provider per request | [`cost-optimized`](/routing/cost-optimized) | DeepSeek, OpenAI and Anthropic serve the model; the cheapest listed price wins. |
+| Some models pinned to one provider | [`conditional`](/routing/conditional) | `claude-*` only ever goes to Anthropic, whatever else is configured. |
+| Routing by what the prompt says | [`content-based`](/routing/content-based) | Coding questions to a coding model, translations to a cheap one, the rest to a default. |
+| Two options compared on live traffic | [`ab-test`](/routing/ab-test) | 90 % control, 10 % challenger, every answer labelled for analysis afterwards. |
 
 ## What a strategy is
 
@@ -47,6 +64,7 @@ Every entry names one provider registration and optionally attaches per-target r
 | `virtual_key` | string | — (required) | Names a provider registration, typically the provider id. `ferrogw validate` rejects a key no built-in provider matches. |
 | `weight` | float64 | `0` | Relative share under `loadbalance` **only**; ignored by every other mode. `0` means zero traffic — the drain lever. |
 | `models` | []string | — | Extra exact model IDs this target serves, added to the routing index and `/v1/models`. **Additive only** (never hides what a target already serves), **no wildcards** (rejected at load). |
+| `model_map` | map | — | Per-target translation of a name clients use into this target's upstream model ID (`smart: gpt-4o-mini`). The visible name routes to this target and appears in `/v1/models`; the upstream call and pricing use the mapped ID; the response says the visible name. See [One model name, different upstream IDs](#one-model-name-different-upstream-ids). |
 | `retry` | object | single attempt | Per-target retry policy. Applies under **every** mode — see below. |
 | `circuit_breaker` | object | none | Per-target breaker. One per `virtual_key`, shared by all four surfaces. |
 | `concurrency` | object | unlimited | In-flight bound with a queue; overflow fails fast with `429`. |
@@ -75,25 +93,81 @@ Every entry names one provider registration and optionally attaches per-target r
 | `max_concurrency` | int | unlimited | Max in-flight requests to this target; capped at `10000`. |
 | `queue_size` | int | default queue | Requests allowed to wait for a slot; beyond it the request is shed with `429`. |
 
+### One model name, different upstream IDs
+
+Providers rarely agree on model IDs, so a request for `gpt-4o` cannot simply fail over to Anthropic. `targets[].model_map` gives each target its own translation of a name your clients use:
+
+```yaml
+strategy:
+  mode: fallback
+
+targets:
+  - virtual_key: openai
+    model_map:
+      smart: gpt-4o
+  - virtual_key: anthropic
+    model_map:
+      smart: claude-sonnet-4-6
+```
+
+A client sends `"model": "smart"`. OpenAI is asked for `gpt-4o`; if that fails in a failover-safe way, Anthropic is asked for `claude-sonnet-4-6`. Either way the response says `"model": "smart"` — on every streamed chunk too — so the client sees one stable name whoever answered. `/v1/models` lists `smart`; cost is priced on the mapped ID that actually ran.
+
+`model_map` is per target. `aliases` (see [Configuration](/getting-started/configuration)) is a global rename applied before routing. Use `aliases` to give one real model ID a short name everywhere; use `model_map` when the same name must become a *different* ID on each provider.
+
 ## Two mode families
 
 The pipeline splits the modes by what their leading candidate *means*, and that decides whether moving off it is a repair or a betrayal.
 
 | Family | Modes | On a target failure |
 |---|---|---|
-| **Pool** | `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test` | Advances to the next candidate. |
+| **Pool** | `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test` | Advances to the next candidate after a **failover-safe** failure; any other failure is returned. |
 | **Named** | `single`, `conditional`, `content-based` | Commits to the chosen target and reports its failure. |
 
 A **pool** mode picks its head for a reason that is about the pool rather than the individual target — spread the load, take the cheapest, take the fastest, split the traffic — from targets the operator declared interchangeable, so carrying a failed request to a sibling is what was asked for. A **named** mode picks its head because something named that target specifically (`single` names it; a `conditional` or `content-based` rule matched it), so serving from anyone else would demote the rule to a suggestion.
+
+### Which failures fail over
+
+The gateway moves a request to another target only when the *provider* was the problem — never when the *request* was. Under a pool mode:
+
+| The target… | For example | What happens |
+|---|---|---|
+| could not be reached | connection refused, DNS failure, connection reset | next target |
+| did not answer in time | no response headers before the provider transport's timeout | next target |
+| asked you to back off, or was unavailable | `408`, `429`, `502`, `503`, any `5xx` | next target |
+| is already being avoided | circuit breaker open, concurrency queue full | next target |
+| rejected the request itself | `400`, `401`, `403`, `404`, `422` | **that response goes back to the client** |
+| — the client gave up | the caller cancelled, or its deadline passed | routing stops |
+
+Retry (below) re-asks the same target first for a transport failure or a retryable status; a hung attempt, an open circuit and a full queue are never retried and advance at once. Under a named mode the chosen target's result — after its own `retry` — is always the answer.
+
+```mermaid
+flowchart LR
+    A[Attempt at target N fails] --> B{Client cancelled or<br/>deadline passed?}
+    B -- yes --> S[Return the failure]
+    B -- no --> C{Provider problem?<br/>unreachable, timed out, 408/429/5xx,<br/>circuit open, saturated}
+    C -- no --> S
+    C -- yes --> D{Pool mode?}
+    D -- no --> S
+    D -- yes --> E[Try target N+1]
+```
 
 ## What every mode shares
 
 Regardless of family:
 
-- **Retry re-asks the same target.** `targets[].retry` is honoured under every mode. It never advances to a different target — only pool modes do that.
+- **Retry re-asks the same target.** `targets[].retry` is honoured under every mode. It never advances to a different target — only pool modes do that, and only after a failover-safe failure.
 - **An open circuit is skipped.** Before committing, a target whose breaker is open (or that cannot serve the request's surface at all) is passed over in favour of the next candidate — even under the named modes, where the operator named one target on purpose.
 - **All circuits open → `503`.** When every candidate's circuit is open the request is still attempted, the breaker refuses it, and the caller gets `503 upstream_unavailable`. That is deliberately different from `404`: "everything that serves this model is down" is not the same answer as "nothing serves this model".
 - **No candidate serves the model → `404`.** When no configured target serves the requested model, nothing is attempted and the caller gets `404 model_not_found`.
+- **The response names the model the client asked for.** `model` in the response, and in every streamed chunk, is the requested name after alias resolution — even when `model_map` sent a different ID upstream, and whichever target answered.
+
+## v1.5.1 behaviour changes
+
+Three things an operator may notice after upgrading from 1.5.0 or earlier:
+
+- **Pool modes no longer cover a client error.** Before 1.5.1 they advanced after *any* failure, so a target answering `400`, `401`, `404` or `422` was silently replaced by a sibling — a revoked key on the primary was invisible. Those responses now reach the client; only failover-safe failures advance ([table above](#which-failures-fail-over)).
+- **The response `model` is the routed name.** Responses used to echo whatever identifier the provider reported, such as a dated snapshot like `gpt-4o-2024-08-06`; they now carry the name the client asked for, after alias resolution, on streamed chunks too.
+- **Ambiguous configs are rejected at load.** Two targets sharing a `virtual_key`, an empty `virtual_key`, two `ab_variants` naming the same target, or a duplicated key in a JSON config used to load silently, collapsing retry, weight and breaker state for the pair. `ferrogw validate` and startup now refuse them.
 
 ## v1.4 breaking changes
 
