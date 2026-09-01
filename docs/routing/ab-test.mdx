@@ -6,9 +6,48 @@ keywords: [ab test routing, a/b test, weighted variants, model migration, ai-gat
 
 A/B test splits live traffic across two or more labelled variants by weighted random draw. It optimizes for **comparing** models or providers under real production traffic — measuring quality, cost, or latency differences during a migration — not for failover order (`fallback`), even load distribution (`loadbalance`), or measured speed (`least-latency`). Every request is answered by one real provider: this is **not** a shadow-traffic or mirroring mode. Set `strategy.mode: ab-test` to use it.
 
+:::tip In plain words
+Send a share of live traffic to a challenger and the rest to your control, label each request, and compare the labelled results later. Every request is answered by one variant only — nothing is duplicated. If the drawn variant is unreachable, times out or is overloaded, another target in the pool answers, but the request keeps its original label so the experiment stays honest.
+:::
+
+## What happens to a request
+
+Control at `weight: 90`, challenger at `weight: 10`, both serving the model:
+
+| The draw | The gateway… | Recorded label |
+|---|---|---|
+| control (about 9 in 10) | asks the control target | `control` |
+| challenger (about 1 in 10) | asks the challenger target | `challenger` |
+| challenger, which returns `503` | advances to the next configured target | still `challenger` — the failure counts against the variant that was drawn |
+| challenger, which returns `400` | stops | `challenger`; the client gets the `400` |
+
+Clients can keep sending one name while the variants run different models:
+
+```yaml
+strategy:
+  mode: ab-test
+  ab_variants:
+    - target_key: openai
+      weight: 90
+      label: control
+    - target_key: anthropic
+      weight: 10
+      label: challenger
+
+targets:
+  - virtual_key: openai
+    model_map:
+      smart: gpt-4o
+  - virtual_key: anthropic
+    model_map:
+      smart: claude-sonnet-4-6
+```
+
+One request in ten for `smart` is answered by Claude, and every response still says `"model": "smart"`. See [One model name, different upstream IDs](/routing#one-model-name-different-upstream-ids).
+
 ## Behaviour
 
-`ab-test` is a **pool mode**: on a request failure, the pipeline advances to the next configured target rather than reporting the failure back to the caller — but only after the strategy has already committed to a drawn variant (see [Gotchas](#gotchas)).
+`ab-test` is a **pool mode**: after a failover-safe failure (a transport failure, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, an open circuit, or a full concurrency queue) the pipeline advances to the next configured target rather than reporting the failure back to the caller — but only after the strategy has already committed to a drawn variant (see [Gotchas](#gotchas)); any other `4xx` is returned to the client.
 
 `ABTest.SelectTargets` (`internal/strategies/abtest.go`) filters `ab_variants[]` down to those whose provider is registered and whose `SupportsModel(req.Model)` returns true, then makes one weighted random draw (`weightedPick`) over that eligible subset. The drawn variant's `target_key` leads the returned order, followed by every configured `targets[].virtual_key` (de-duplicated) as pipeline fallback candidates. `SelectTargets` returns `nil` — the caller reports `404 model_not_found` — when no variant is both eligible for the requested model and positively weighted.
 
@@ -19,7 +58,7 @@ A/B test splits live traffic across two or more labelled variants by weighted ra
 | `strategy.mode` | string | — | Set to `ab-test` (hyphen). |
 | `strategy.ab_variants[].target_key` | string | — | Must name one of the configured `targets[].virtual_key`. |
 | `strategy.ab_variants[].weight` | float64 | — | Relative traffic share = `weight / sum(weights)`. `0` drains the variant (no traffic); negative or an all-zero set is rejected at load. |
-| `strategy.ab_variants[].label` | string | — | Human-readable variant id (e.g. `control`, `challenger`), logged with every routed request. |
+| `strategy.ab_variants[].label` | string | — | Human-readable variant id (e.g. `control`, `challenger`), carried as `ferro.routing.ab_variant_label` on the request's observability events. |
 
 ## Minimal working YAML
 
@@ -47,13 +86,13 @@ targets:
 
 ## Gotchas
 
-- **Not shadow traffic.** Every request is routed to exactly one real provider — the drawn variant. There is no mirrored or duplicated call to compare responses side by side; comparison happens by analyzing labelled logs after the fact.
+- **Not shadow traffic.** Every request is routed to exactly one real provider — the drawn variant. There is no mirrored or duplicated call to compare responses side by side; comparison happens after the fact, on the labelled events your exporter received (see the label gotcha below).
 - **The draw is over eligible variants, not all configured variants.** Only variants whose provider is registered and that support the requested model are candidates. If `control` serves `gpt-4o` and `challenger` doesn't, every `gpt-4o` request goes to `control` regardless of the configured weight — the effective split differs per model when variants serve different model sets.
-- **The variant label is logged per request** for analytics — this is how you attribute observed outcomes back to `control` vs. `challenger` after the fact.
+- **The variant label travels with the request** as `ferro.routing.ab_variant_label` on the request's observability events — the `gateway.request.completed` / `gateway.request.failed` event and, where attempt events are enabled, each `gateway.routing.attempt` event. Those events reach registered exporters (the LangSmith and Langfuse plugins, or your own) and a custom observability provider; the label is not a span attribute, a metric label, or a `request-logger` column. It is the label of the variant that was *drawn*, even when a failover meant another target produced the answer: an intent-to-treat record, so a challenger is charged for its failures rather than hidden behind the control. This is how you attribute observed outcomes back to `control` vs. `challenger` after the fact.
 - **`weight: 0` drains a variant.** A drained variant is excluded from the draw entirely; it can never win, even if it's technically eligible.
 - **`ab_variants[].weight` is what counts — `targets[].weight` is ignored under this mode.** `targets[].weight` only matters under `loadbalance`; don't expect it to influence the A/B split.
 - **Weights are relative, not percentages.** `weight: 70` and `weight: 30` behave identically to `weight: 7` and `weight: 3` — only the ratio matters.
-- **This is a pool mode, but the draw itself is not retried.** Once a variant is drawn, that variant's target leads; on failure the pipeline advances through the remaining configured targets like any pool mode. There is no re-draw — a failed request does not get a second chance at a different variant within the same routing decision.
+- **This is a pool mode, but the draw itself is not retried.** Once a variant is drawn, that variant's target leads; after a failover-safe failure the pipeline advances through the remaining configured targets like any pool mode, while any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the client. There is no re-draw — a failed request does not get a second chance at a different variant within the same routing decision.
 - **A negative weight or an all-zero weight set is a load error**, not a runtime failure — `ferrogw validate` and gateway startup reject it before traffic is served.
 
 ## Related

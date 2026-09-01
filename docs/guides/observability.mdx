@@ -213,7 +213,7 @@ Not every declared constant is wired into a live span yet — the **Status** col
 | `ferro.stream.time_to_last_token_ms` | Emitted | Streaming time-to-last-token |
 | `ferro.gateway.version` | Planned | Gateway build version |
 | `ferro.routing.attempt` | Planned | Attempt number within the strategy |
-| `ferro.routing.ab_variant_label` | Planned | A/B variant label — not yet on the span; today the A/B variant only shows up in `DEBUG`-level logs |
+| `ferro.routing.ab_variant_label` | Planned (span) | A/B variant label — not on the span. Since v1.5.1 it is carried as an attribute of the `gateway.request.completed` / `failed` events (and of `gateway.routing.attempt` events where enabled) delivered to exporters and custom providers |
 | `ferro.cache.hit` / `ferro.cache.kind` | Planned | Response-cache hit and cache kind |
 | `ferro.mcp.depth` | Planned | MCP call depth |
 | `ferro.circuit_breaker.state` / `ferro.circuit_breaker.opened` | Planned | Circuit-breaker state and whether it opened during the request |
@@ -236,7 +236,7 @@ No prompt or response content is exported at any privacy level.
 
 ### Exporters
 
-Beyond raw OTLP, the gateway exposes an exporter event seam: registered exporters receive `gateway.request.completed` / `gateway.request.failed` events for bridging to backends like LangSmith or Langfuse. No exporters ship in the core gateway — they live in the separate [`ai-gateway-plugins`](https://github.com/ferro-labs/ai-gateway-plugins) repo. List enabled exporters under `observability.exporters`; an unregistered `name`, or one whose `config` carries an undefined `${VAR}` reference, is logged and skipped without stopping the gateway (non-fatal) — the rest of the exporters and the OTLP pipeline keep running.
+Beyond raw OTLP, the gateway exposes an exporter event seam: registered exporters receive `gateway.request.completed` / `gateway.request.failed` events for bridging to backends like LangSmith or Langfuse. Since v1.5.1 an exporter can also opt into one `gateway.routing.attempt` event per provider call or local refusal (retries and failovers included); exporters that do not opt in keep receiving exactly one event per request. No exporters ship in the core gateway — they live in the separate [`ai-gateway-plugins`](https://github.com/ferro-labs/ai-gateway-plugins) repo. List enabled exporters under `observability.exporters`; an unregistered `name`, or one whose `config` carries an undefined `${VAR}` reference, is logged and skipped without stopping the gateway (non-fatal) — the rest of the exporters and the OTLP pipeline keep running.
 
 To see traces end to end without wiring your own collector, run the bundled demo stack — gateway, Prometheus, Grafana, Jaeger, and a traffic generator — with `make up-fullstack`, then open the dashboard's **Tracing** page. See [The embedded dashboard](/guides/dashboard).
 

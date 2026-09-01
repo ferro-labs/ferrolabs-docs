@@ -6,9 +6,23 @@ keywords: [conditional routing, model routing, strategy.mode conditional, model_
 
 Conditional routes each request by matching its declared `model` field against rules you write, not by weight, latency, or cost. It optimizes for **deterministic model-to-provider pinning** — "this model always goes to this backend, no exceptions" — the shape a compliance or contractual requirement needs, where a pool mode's willingness to substitute a different provider is the wrong behavior, not a convenience. Set `strategy.mode: conditional` to use it.
 
+:::tip In plain words
+Write rules like "model X goes to provider Y". The first matching rule wins; anything unmatched goes to the first target. The chosen provider's answer — success or failure — is what the client gets. The gateway swaps in another target for a matched rule only *before* the call — when the matched one has an open circuit breaker or cannot handle that kind of request (embeddings or images, say) — never after a failure.
+:::
+
+## What happens to a request
+
+With the rules in the YAML below (`gpt-4o` → OpenAI, `claude-` prefix → Anthropic, OpenAI first in `targets`):
+
+| Client asks for | Rule | Target | If that target fails |
+|---|---|---|---|
+| `gpt-4o` | exact match | OpenAI | the client gets OpenAI's error |
+| `claude-sonnet-4-6` | prefix `claude-` | Anthropic | the client gets Anthropic's error |
+| `mistral-large` | no match | OpenAI (`targets[0]`) | `404 model_not_found` if OpenAI does not serve it — even if another target does |
+
 ## Behaviour
 
-`conditional` is a **named mode**: the pipeline commits to the target the first matching rule names and reports that target's failure, rather than trying the remaining targets (contrast with `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, and `ab-test`, which are pool modes that advance past a failure). `Conditional.SelectTargets` (`internal/strategies/conditional.go`) evaluates `strategy.conditions[]` in declared order; the first rule whose `key`/`value` matches the request wins, and when none matches, the configured fallback target is used instead. The matched (or fallback) target leads the returned list, followed by every configured target de-duplicated — that tail is substitution-before-commit only (an open circuit or a surface-incapable target is swapped for a healthy one before the pipeline commits), never a failover path.
+`conditional` is a **named mode**: the pipeline commits to the target the first matching rule names and reports that target's failure, rather than trying the remaining targets (contrast with `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, and `ab-test`, which are pool modes that advance past a failover-safe failure). `Conditional.SelectTargets` (`internal/strategies/conditional.go`) evaluates `strategy.conditions[]` in declared order; the first rule whose `key`/`value` matches the request wins, and when none matches, the configured fallback target is used instead. The matched (or fallback) target leads the returned list, followed by every configured target de-duplicated — that tail is substitution-before-commit only (an open circuit or a surface-incapable target is swapped for a healthy one before the pipeline commits), never a failover path.
 
 The matcher key is a **closed set**: `model` (`req.Model == value`, exact) and `model_prefix` (`strings.HasPrefix(req.Model, value)`). There is no dynamic arm in the switch, so a `key` outside those two is rejected by `config.ValidateConfig` at load — a typo fails startup, not a live request. In the gateway's own wiring the no-match fallback is `targets[0]`, but that's a property of how `buildStrategy` constructs the strategy, not something `Conditional` itself enforces — it always asks `matchTarget`, never assumes the head of a list.
 

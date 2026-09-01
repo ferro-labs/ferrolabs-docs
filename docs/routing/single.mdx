@@ -6,6 +6,22 @@ keywords: [single routing strategy, ai-gateway strategy mode, default routing mo
 
 Single routes every request to one target — `targets[0]` — and nothing else. It optimizes for **simplicity and explicit control**: no weight math, no latency tracking, no per-request selection logic, just a provider behind a governance and observability layer. It's also the strategy you get by not choosing one: `strategy.mode: single`, or an empty/omitted `mode`, both build this strategy.
 
+:::tip In plain words
+One provider, full stop. The gateway still checks keys, applies limits and plugins, and logs everything, but it never picks a different provider. If that provider fails, its failure is your answer — add `retry` to absorb brief blips.
+:::
+
+## What happens to a request
+
+With `targets: [openai]` and `retry.attempts: 3`:
+
+| OpenAI… | The gateway… | The client gets |
+|---|---|---|
+| answers `200` | returns it | OpenAI's answer |
+| returns `503` three times | retries twice with backoff, then gives up | `503` |
+| returns `401` | stops immediately — not a retryable status | `401` |
+| has an open circuit breaker | still attempts it; the breaker refuses | `503 upstream_unavailable` |
+| does not serve the requested model | nothing is attempted | `404 model_not_found`, even if a second target in the list would serve it |
+
 ## Behaviour
 
 `single` is a **named mode** — the opposite of a pool mode like `fallback` or `loadbalance`. `Single.SelectTargets` (`internal/strategies/single.go`) returns a one-element slice built once at construction, `[]string{targets[0].VirtualKey}`. It never looks at the request, never checks which model was asked for, and never sees `targets[1:]` at all — `buildStrategy` (`gateway_strategy.go`) constructs `Single` from `targets[0]` alone, so any additional entries in `targets[]` are configured but structurally invisible to this strategy. There is no failover: a failure at `targets[0]` — after `targets[].retry` exhausts its attempts against that same target — is the answer the caller gets.

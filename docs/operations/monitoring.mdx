@@ -178,7 +178,7 @@ Filter gateway logs by `trace_id` in your aggregator to correlate all events for
 
 - **Circuit breakers** — configured per target (`targets[].circuit_breaker`), one breaker per target shared across chat/streaming/embeddings/images; every routing strategy skips an open circuit. State is exposed on `gateway_circuit_breaker_state` and, with request context, on `GET /health`.
 - **Retries** — configurable per target with status-code filtering (`retry.on_status_codes`), honored under every strategy including `single` (set `attempts: 1` to keep single-attempt behavior).
-- **Fallback and pool strategies** — `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, and `ab-test` all advance past a failed or open-circuit target automatically; `single`, `conditional`, and `content-based` commit to one target and report its outcome. See [Routing](/routing).
+- **Fallback and pool strategies** — `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, and `ab-test` all advance past an open-circuit target, or one that failed in a failover-safe way (transport error, attempt timeout, `408`/`429`/`5xx`, saturation), automatically, while any other `4xx` is returned to the client; `single`, `conditional`, and `content-based` commit to one target and report its outcome. See [Routing](/routing).
 
 ## Load balancer and orchestrator health checks
 

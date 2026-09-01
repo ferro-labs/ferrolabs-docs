@@ -6,9 +6,24 @@ keywords: [load balance routing, weighted random routing, AI gateway load balanc
 
 Load balance spreads traffic across two or more targets by weighted random selection. It optimizes for **distributing** load across interchangeable providers — not for failover order (`fallback`), latency (`least-latency`), or cost (`cost-optimized`). Set `strategy.mode: loadbalance` to use it.
 
+:::tip In plain words
+Split traffic between providers by weight — `weight: 7` and `weight: 3` means roughly 70/30 over time. A request whose chosen provider is unreachable, times out or is overloaded is handed to another provider in the pool; one the provider rejected as a bad request comes back as-is. `weight: 0` stops new traffic to a provider without deleting it.
+:::
+
+## What happens to a request
+
+With OpenAI at `weight: 7` and Anthropic at `weight: 3`, each request draws a starting provider — about seven in ten land on OpenAI, three on Anthropic. The split is a long-run ratio, not a strict rotation.
+
+| The drawn provider… | The gateway… | The client gets |
+|---|---|---|
+| answers `200` | returns it | that provider's answer |
+| returns `502` | asks the other provider | the other provider's answer |
+| has an open circuit breaker | skips it before the call and uses the other one | the other provider's answer |
+| returns `400` (bad request) | stops | `400` |
+
 ## Behaviour
 
-`loadbalance` is a **pool mode**: on a request failure, the pipeline advances to the next target in the rotated order rather than reporting the failure back to the caller. `targets[].retry` still governs how many times any one target is retried before the pipeline moves on.
+`loadbalance` is a **pool mode**: after a failover-safe failure (a transport failure, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, an open circuit, or a full concurrency queue) the pipeline advances to the next target in the rotated order rather than reporting the failure back to the caller; any other `4xx` is returned to the client. `targets[].retry` still governs how many times any one target is retried before the pipeline moves on.
 
 On each request, `LoadBalance.SelectTargets` (`internal/strategies/loadbalance.go`) filters `targets[]` down to those whose provider is registered and whose `SupportsModel(req.Model)` returns true, then picks a weight-biased starting index (`weightedStartIndex`, `internal/strategies/targetorder.go`) and returns the full compatible list **rotated** from that index. The first key in the returned order is the weighted pick the pipeline commits to first; the rest stay available as substitutes the pipeline may use before committing — for example when the picked target's circuit is open. `SelectTargets` returns `nil` (the caller reports 404 `model_not_found`) when no compatible target exists, or when every compatible target has been drained to weight `0`.
 
@@ -32,6 +47,22 @@ targets:
     weight: 0.3
 ```
 
+Interchangeable providers rarely share model IDs; give the name your clients send a translation on each target so the draw can land anywhere:
+
+```yaml
+targets:
+  - virtual_key: openai
+    weight: 7
+    model_map:
+      smart: gpt-4o-mini
+  - virtual_key: anthropic
+    weight: 3
+    model_map:
+      smart: claude-sonnet-4-6
+```
+
+Every response still says `"model": "smart"`. See [One model name, different upstream IDs](/routing#one-model-name-different-upstream-ids).
+
 ## When to use
 
 - Spreading load across two or more providers serving the same (or overlapping) models, for cost or capacity reasons.
@@ -43,7 +74,7 @@ targets:
 - **Weights are relative, not percentages.** `weight: 0.7` and `weight: 0.3` behave identically to `weight: 7` and `weight: 3` — only the ratio between targets matters.
 - **Omitting `weight` yields `0`, not an even split.** Because `weight` uses YAML `omitempty`, a target with no `weight` key defaults to `0.0` — silent zero traffic. This is an easy foot-gun: set `weight` explicitly on every target under `loadbalance`.
 - **An all-zero or negative weight set is rejected at load.** `ferrogw validate` (and gateway startup) reject a negative weight outright and reject a config where every target's weight sums to zero — but one *forgotten* weight on an otherwise-valid config passes validation and silently drains just that target.
-- **This is a pool mode.** The pipeline advances past a failed or open-circuit target to the next one in the rotated order; a `loadbalance` config gets failover "for free" as a side effect of the mode family, not because of anything weight-specific.
+- **This is a pool mode.** The pipeline advances past an open-circuit target, or one that failed in a failover-safe way, to the next one in the rotated order; any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the client. A `loadbalance` config gets failover "for free" as a side effect of the mode family, not because of anything weight-specific.
 - **Only model-compatible targets are eligible.** A target whose provider isn't registered, or that doesn't serve the requested model, is filtered out before weighting is applied — it never wins the draw regardless of its configured weight.
 - Selection uses `math/rand`, deliberately — this is a load-shaping decision, not a security-sensitive one.
 
