@@ -1,39 +1,55 @@
 ---
 title: Conditional routing strategy
-description: "Configure strategy.mode: conditional in Ferro Labs AI Gateway to pin models to targets by exact-name or prefix match, first match wins, targets[0] as fallback."
-keywords: [conditional routing, model routing, strategy.mode conditional, model_prefix, ai-gateway routing, deterministic model routing, named mode routing]
+description: "Configure strategy.mode: conditional in Ferro Labs AI Gateway to pin requests to targets by model, user, streaming, tool use or a metadata header, with target chains."
+keywords: [conditional routing, model routing, strategy.mode conditional, model_prefix, target_keys, X-Gateway-Metadata, ai-gateway routing, deterministic model routing, named mode routing]
 ---
 
-Conditional routes each request by matching its declared `model` field against rules you write, not by weight, latency, or cost. It optimizes for **deterministic model-to-provider pinning** — "this model always goes to this backend, no exceptions" — the shape a compliance or contractual requirement needs, where a pool mode's willingness to substitute a different provider is the wrong behavior, not a convenience. Set `strategy.mode: conditional` to use it.
+Conditional routes each request by matching a field of the request against rules you write, not by weight, latency, or cost. It optimizes for **deterministic pinning** — "this model always goes to this backend", "this tenant's traffic only ever goes here" — the shape a compliance or contractual requirement needs, where a pool mode's willingness to pick a different provider is the wrong behaviour, not a convenience. Set `strategy.mode: conditional` to use it.
 
 :::tip In plain words
-Write rules like "model X goes to provider Y". The first matching rule wins; anything unmatched goes to the first target. The chosen provider's answer — success or failure — is what the client gets. The gateway swaps in another target for a matched rule only *before* the call — when the matched one has an open circuit breaker or cannot handle that kind of request (embeddings or images, say) — never after a failure.
+Write rules like "model X goes to provider Y" or "user `vip` goes to provider Z". The first matching rule wins; anything unmatched goes to the first target. A rule names either one target or an ordered chain of targets (`target_keys`). The gateway tries the chain in order, moving on only when a provider is at fault, and never reaches for a target the rule did not name. A rule with one target is exact: if that target is down, the client gets the corresponding error.
 :::
 
 ## What happens to a request
 
-With the rules in the YAML below (`gpt-4o` → OpenAI, `claude-` prefix → Anthropic, OpenAI first in `targets`):
+With the rules in the YAML below (`gpt-4o` → OpenAI, `claude-` prefix → Anthropic then Bedrock, user `vip` → OpenAI, OpenAI first in `targets`):
 
-| Client asks for | Rule | Target | If that target fails |
+| Client asks for | Rule | Chain | If the first target fails |
 |---|---|---|---|
-| `gpt-4o` | exact match | OpenAI | the client gets OpenAI's error |
-| `claude-sonnet-4-6` | prefix `claude-` | Anthropic | the client gets Anthropic's error |
+| `gpt-4o` | exact model match | OpenAI | the client gets OpenAI's error |
+| `claude-sonnet-4-6` | prefix `claude-` | Anthropic, then Bedrock | Bedrock answers after a provider-side failure (`5xx`, timeout, open circuit); a `400` from Anthropic goes back to the client |
+| any model, `"user": "vip"` after the model rules | user match | OpenAI | the client gets OpenAI's error |
 | `mistral-large` | no match | OpenAI (`targets[0]`) | `404 model_not_found` if OpenAI does not serve it — even if another target does |
 
 ## Behaviour
 
-`conditional` is a **named mode**: the pipeline commits to the target the first matching rule names and reports that target's failure, rather than trying the remaining targets (contrast with `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, and `ab-test`, which are pool modes that advance past a failover-safe failure). `Conditional.SelectTargets` (`internal/strategies/conditional.go`) evaluates `strategy.conditions[]` in declared order; the first rule whose `key`/`value` matches the request wins, and when none matches, the configured fallback target is used instead. The matched (or fallback) target leads the returned list, followed by every configured target de-duplicated — that tail is substitution-before-commit only (an open circuit or a surface-incapable target is swapped for a healthy one before the pipeline commits), never a failover path.
+`conditional` is a **named mode**: the candidates for a request are exactly what the matched rule names — its `target_keys` chain, or `target_key` as a one-entry chain — and nothing else. `Conditional.SelectTargets` (`internal/strategies/conditional.go`) evaluates `strategy.conditions[]` in declared order; the first rule whose `key`/`value` matches the request wins, and when none matches, the no-match fallback (`targets[0]`) is the whole answer.
 
-The matcher key is a **closed set**: `model` (`req.Model == value`, exact) and `model_prefix` (`strings.HasPrefix(req.Model, value)`). There is no dynamic arm in the switch, so a `key` outside those two is rejected by `config.ValidateConfig` at load — a typo fails startup, not a live request. In the gateway's own wiring the no-match fallback is `targets[0]`, but that's a property of how `buildStrategy` constructs the strategy, not something `Conditional` itself enforces — it always asks `matchTarget`, never assumes the head of a list.
+The pipeline walks a chain the way it walks a pool: it advances to the next member only after a **failover-safe** failure (a transport failure, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, a provider's own context-length overflow, an open circuit, or a full concurrency queue), skips a member whose circuit is open or that is parked after a `429`, and returns any other `4xx` to the client. What it never does is substitute a target outside the chain. A rule with one target is therefore exact: a model it does not serve, a surface it cannot handle, or an open circuit is the corresponding error (`404`, `404`, `503`) rather than a sibling's answer.
+
+The matcher key is a **closed set**, validated at load: a `key` outside it is a `ferrogw validate` / startup error, not a live-request failure. Since v1.5.2 the set covers the request's shape as well as its model, and one allow-listed header — no other request header ever reaches a rule.
+
+| `key` | Matches when | `value` |
+|---|---|---|
+| `model` | the request's `model` equals `value` exactly | a model name |
+| `model_prefix` | the request's `model` starts with `value` | a prefix such as `claude-` |
+| `user` | the request's `user` field equals `value` | a user id |
+| `stream` | the request is (`"true"`) or is not (`"false"`) a streaming request | `"true"` \| `"false"` |
+| `has_tools` | the request carries (`"true"`) or does not carry (`"false"`) a `tools` array | `"true"` \| `"false"` |
+| `metadata` | the entry named by `field` in the `X-Gateway-Metadata` request header equals `value` | a string |
+
+`X-Gateway-Metadata` is a JSON object of at most 32 string, number or boolean values within 4 KiB, accepted on `/v1/chat/completions` and `/v1/completions`, and never forwarded to a provider; a malformed header is the caller's `400`. `user` also applies to embeddings and image requests, which carry the field; `stream`, `has_tools` and `metadata` are chat-only and match nothing on the other surfaces.
 
 ## Config keys
 
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `strategy.mode` | string | — | Set to `conditional`. |
-| `strategy.conditions[].key` | string | — | `model` (exact match) \| `model_prefix` (prefix match via `strings.HasPrefix`). Closed set — an unrecognized value is a `ferrogw validate` / startup error, not a request-time failure. |
-| `strategy.conditions[].value` | string | — | The exact model name (`key: model`) or prefix (`key: model_prefix`) to match against the request's `model` field. |
-| `strategy.conditions[].target_key` | string | — | Must name a configured `targets[].virtual_key`; validated at load. |
+| `strategy.conditions[].key` | string | — | `model` \| `model_prefix` \| `user` \| `stream` \| `has_tools` \| `metadata`. Closed set — an unrecognized value is a load error. |
+| `strategy.conditions[].value` | string | — | What `key` is matched against. `stream` and `has_tools` accept only `"true"` or `"false"`. |
+| `strategy.conditions[].field` | string | — | The metadata entry a `key: metadata` rule reads. Required there, refused elsewhere. |
+| `strategy.conditions[].target_key` | string | — | The one target this rule routes to; must name a configured `targets[].virtual_key`. Sugar for a one-entry `target_keys`. |
+| `strategy.conditions[].target_keys` | []string | — | The rule's ordered target chain. Every entry must be a declared target, none may repeat, and exactly one of `target_key` and `target_keys` is set. |
 
 ## Minimal working YAML
 
@@ -46,26 +62,36 @@ strategy:
       target_key: openai
     - key: model_prefix
       value: claude-
-      target_key: anthropic
+      target_keys: [anthropic, bedrock]   # Anthropic first; Bedrock stands in only for a provider-side failure
+    - key: user
+      value: vip
+      target_key: openai
+    - key: metadata
+      field: tier
+      value: gold
+      target_key: openai
 
 targets:
   - virtual_key: openai   # targets[0] doubles as the no-match fallback
   - virtual_key: anthropic
+  - virtual_key: bedrock
 ```
 
 ## When to use
 
-- Deterministic model-to-provider pinning: a specific model must always be served by a specific backend, for compliance, contractual, or data-residency reasons — not "prefer this provider," but "only this provider."
+- Deterministic pinning: a specific model, tenant or request shape must always be served by a specific backend, for compliance, contractual, or data-residency reasons — not "prefer this provider," but "only this provider."
 - Routing whole model families by prefix (`claude-`, `gpt-`, `gemini-`) to their native provider without listing every model name individually.
-- Any setup where `fallback`'s or `loadbalance`'s willingness to substitute a different provider on failure is the behavior you need to prevent, not add.
+- A pinned rule that still needs a stand-in: name the stand-in in `target_keys`, and it is used only when the preferred member is at fault.
+- Any setup where `fallback`'s or `loadbalance`'s willingness to pick a different provider is the behaviour you need to prevent, not add.
 
 ## Gotchas
 
-- **A model the matched target doesn't serve is `404 model_not_found`, even when another configured target serves it.** This is a named mode: the rule is a decision about which target handles this model, not a preference among several. Reaching the other target means writing another rule that names it — the tail of `targets[]` is never tried as a fallback for this.
+- **A model the matched chain doesn't serve is `404 model_not_found`, even when another configured target serves it.** The rule is a decision about which targets handle this request, not a preference among several. Reaching another target means naming it in the rule.
+- **A one-target rule whose target is down answers `503`, not a sibling.** Before v1.5.2 an open circuit on the matched target borrowed a healthy sibling from `targets[]`; it no longer does. Put the sibling in `target_keys` if you want it used.
 - **`GET /v1/models` mirrors the same restriction.** A model missing from that listing under this mode is the signal that a rule is needed for it, before a request ever hits the 404.
-- **The no-match fallback is `targets[0]`.** `NewConditional`'s constructor argument is a `fallback` value passed explicitly by `buildStrategy`, and in the gateway's wiring that argument is `targets[0]` — so put the target you want unmatched models to land on first.
-- **The condition-key set is closed on purpose.** `model` and `model_prefix` are the only two matcher arms; anything else — a typo, a field name from another mode — is rejected at load by `config.ValidateConfig`, not silently ignored or routed to the fallback.
-- **Circuit state is the one thing that still moves the choice.** If the matched (or fallback) target's circuit is open, the pipeline substitutes a healthy target from the tail before committing, and traffic returns to the matched target once its circuit closes. This is unrelated to, and doesn't reintroduce, failover on an ordinary request failure.
+- **The no-match fallback is `targets[0]`, alone.** Put the target you want unmatched requests to land on first.
+- **The condition-key set is closed on purpose.** Anything outside the six keys above — a typo, a field name from another mode, an arbitrary header — is rejected at load, not silently ignored or routed to the fallback.
+- **The chain is walked like a pool, and stops at its end.** Retry (`targets[].retry`) re-asks a member before the walk moves on; a member whose circuit is open or that is parked after a `429` is passed over; a deterministic `4xx` from a member stops the walk; a stream that has begun is never failed over mid-stream.
 
 ## Related
 

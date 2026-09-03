@@ -57,7 +57,7 @@ The gateway needs real token counts for metering, cost accounting, and the budge
 
 ## Mid-stream errors
 
-If the upstream provider fails *after* the stream has started, the gateway cannot reuse a normal HTTP status code (headers are already sent). Instead it emits a single error event as a `data:` line and then closes the stream. No `[DONE]` sentinel follows an error event. The failure is also recorded on the request's span, counted in Prometheus metrics, and written to the request log via the `on_error` plugin stage — a mid-stream failure is no longer a silent truncation on any of those surfaces.
+The response headers — including the `X-Gateway-Provider`, `X-Gateway-Target`, `X-Gateway-Model` and `X-Gateway-Attempts` [attribution headers](/api-reference/endpoints#attribution-headers) — are sent before the first chunk, because the routing walk has finished choosing by then. If the upstream provider fails *after* the stream has started, the gateway cannot reuse a normal HTTP status code (headers are already sent). Instead it emits a single error event as a `data:` line and then closes the stream. No `[DONE]` sentinel follows an error event. The failure is also recorded on the request's span, counted in Prometheus metrics, and written to the request log via the `on_error` plugin stage — a mid-stream failure is no longer a silent truncation on any of those surfaces.
 
 The error chunk has this exact JSON shape:
 

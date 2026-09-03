@@ -19,13 +19,15 @@ With `targets: [openai, anthropic]` and `retry.attempts: 3` on OpenAI:
 | answers `200` | returns it | OpenAI's answer |
 | returns `503` three times | retries twice with backoff, then asks Anthropic | Anthropic's answer |
 | returns `429` with `Retry-After: 2` | waits 2 s and retries; moves to Anthropic once the attempts are spent | an answer from whichever target succeeded |
-| never sends response headers | gives up when the provider transport's timeout expires and asks Anthropic | Anthropic's answer |
+| never sends response headers | gives up when its `targets[].timeout` (or the provider transport's timeout) expires and asks Anthropic | Anthropic's answer |
+| says the prompt exceeds its context window | asks Anthropic, whose model may have a larger window | Anthropic's answer |
+| returned `429` a moment ago | is skipped for its `Retry-After`; Anthropic is asked directly | Anthropic's answer |
 | returns `401` (revoked key) | stops — neither a retry nor a sibling can fix a bad key | `401` from OpenAI |
 | — the client disconnects first | stops routing | nothing; the request was cancelled |
 
 ## Behaviour
 
-`fallback` is a **pool mode** — the only mode whose entire purpose is advancing past a failed target in the order you declared. `Fallback.SelectTargets` (`internal/strategies/fallback.go`) returns every `targets[].virtual_key` in declared order, built once at construction; there is no per-request selection logic, no model filtering, and `targets[].weight` is ignored under this mode. The gateway pipeline (`routeTargets`, `gateway_pipeline.go`) walks that order: when the head target fails in a **failover-safe** way — a transport failure, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, an open circuit, or a full concurrency queue — and its retry budget, where one applies, is spent, the walk advances to the next declared target rather than reporting the failure back to the caller. Any other `4xx` is a verdict on the request itself and is returned unchanged; the request's own cancellation or deadline stops the walk.
+`fallback` is a **pool mode** — the only mode whose entire purpose is advancing past a failed target in the order you declared. `Fallback.SelectTargets` (`internal/strategies/fallback.go`) returns every `targets[].virtual_key` in declared order, built once at construction; there is no per-request selection logic, no model filtering, and `targets[].weight` is ignored under this mode. The gateway pipeline (`routeTargets`, `gateway_pipeline.go`) walks that order: when the head target fails in a **failover-safe** way — a transport failure, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, a provider's own context-length overflow, any status in `strategy.failover_on_status_codes`, an open circuit, a park after a `429`, or a full concurrency queue — and its retry budget, where one applies, is spent, the walk advances to the next declared target rather than reporting the failure back to the caller. Any other `4xx` is a verdict on the request itself and is returned unchanged; the request's own cancellation or deadline stops the walk.
 
 `targets[].retry` governs how many times **one** target is re-asked before the pipeline moves on — it applies under every routing mode, not only `fallback`. Fallback holds no retry policy of its own; advancing to the *next* target is fallback's behaviour alone. An open-circuit or surface-incapable target is skipped over before the pipeline commits to it, under every mode. `SelectTargets` never returns `nil` (declaring at least one target is required to build the strategy), but if every candidate's circuit is open the pipeline still attempts one and answers `503` rather than `404`.
 
@@ -34,6 +36,7 @@ With `targets: [openai, anthropic]` and `retry.attempts: 3` on OpenAI:
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `strategy.mode` | string | — | Set to `fallback`. |
+| `targets[].timeout` | duration | none | Bound on one attempt against this target, inside `request_timeout`. Unary attempts are bounded through the response; streaming attempts only until the provider answers. A timed-out attempt is failover-safe. |
 | `targets[].retry.attempts` | int | `1` (no retry) — omitted or `<= 0` normalizes to `1` | Maximum attempts against this one target before the pipeline advances to the next. Read per target, honored under every strategy mode. |
 | `targets[].retry.on_status_codes` | []int | transport errors + `408`, `429`, and `5xx` | Restricts retries to these HTTP status codes. Any other 4xx is treated as a deterministic client error and is never retried. |
 | `targets[].retry.initial_backoff_ms` | int | `100` | Base for exponential backoff with full jitter: the wait before attempt *N* is drawn uniformly from `[0, initial_backoff_ms * 2^(N-1))`. An upstream `Retry-After` header, when present, wins over the computed wait. |

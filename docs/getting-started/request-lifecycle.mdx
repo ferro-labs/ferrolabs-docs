@@ -120,13 +120,14 @@ by the mode:
 | Mode family | Modes | On a failed target |
 |---|---|---|
 | Pool | `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test` | Advances to the next candidate after a failover-safe failure; other `4xx` are returned |
-| Named | `single`, `conditional`, `content-based` | Commits to the one target and reports the failure |
+| Named | `single`, `conditional`, `content-based` | Stays inside what was named: `single` stops; a rule walks its `target_keys` chain and stops at its end |
 
-Both families skip a target whose circuit breaker is **open** before
-committing to it — including named modes, where the operator picked that
-target specifically. When every eligible candidate's circuit is open, the walk
-still attempts one anyway rather than reporting a false 404, and the breaker
-turns that attempt into a `503`.
+Both families skip a target whose circuit breaker is **open**, or that is
+parked after a `429`, among the candidates the mode offers — a pool's
+siblings, or a rule's chain. `single` and a one-target rule offer no other
+candidate. When every eligible candidate is unavailable, the walk still
+attempts one anyway rather than reporting a false 404, and the breaker turns
+that attempt into a `503`.
 
 ## MCP agentic loop
 

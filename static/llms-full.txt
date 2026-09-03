@@ -820,6 +820,34 @@ On the response, the gateway adds `X-Gateway-Provider` (the name of the
 provider that served the request) and scans non-2xx bodies to redact any
 echoed credential before it reaches the client.
 
+## Attribution headers
+
+Every routed surface — `/v1/chat/completions` (streamed or not),
+`/v1/completions`, `/v1/embeddings`, `/v1/images/generations`, `/v1/rerank`,
+`/v1/moderations`, `/v1/audio/transcriptions`, `/v1/audio/translations` and
+`/v1/audio/speech` — answers with four headers naming the target that served
+it, or on failure the last one attempted:
+
+| Header | Value |
+|---|---|
+| `X-Gateway-Provider` | the serving target's canonical provider (`openai`) |
+| `X-Gateway-Target` | the target key as configured: `targets[].virtual_key` |
+| `X-Gateway-Model` | the upstream model sent to the provider, after `model_map` |
+| `X-Gateway-Attempts` | routing-layer attempts for the request: provider calls plus local breaker or concurrency refusals, retries and failovers included |
+
+On a stream they are written before the first chunk. A request refused before
+any target was attempted — a plugin denial, a model nothing serves — carries
+none. The value is never a credential: the target key is the config string,
+not the key it names. The pass-through proxy above emits
+`X-Gateway-Provider` only.
+
+One request header goes the other way. `X-Gateway-Metadata`, a JSON object of
+at most 32 string, number or boolean values within 4 KiB, is the single
+request header [conditional routing](/routing/conditional) may read
+(`key: metadata`, `field: <entry>`), on `/v1/chat/completions` and
+`/v1/completions`. It never reaches a provider, no other header is exposed to
+a rule, and a malformed value is the caller's `400`.
+
 An upstream connection failure surfaces as `502 upstream_error`. A
 before-request content guardrail configured on the deployment that cannot
 read the request body (a multipart upload, binary audio, or anything not
@@ -1081,7 +1109,7 @@ The gateway needs real token counts for metering, cost accounting, and the budge
 
 ## Mid-stream errors
 
-If the upstream provider fails *after* the stream has started, the gateway cannot reuse a normal HTTP status code (headers are already sent). Instead it emits a single error event as a `data:` line and then closes the stream. No `[DONE]` sentinel follows an error event. The failure is also recorded on the request's span, counted in Prometheus metrics, and written to the request log via the `on_error` plugin stage — a mid-stream failure is no longer a silent truncation on any of those surfaces.
+The response headers — including the `X-Gateway-Provider`, `X-Gateway-Target`, `X-Gateway-Model` and `X-Gateway-Attempts` [attribution headers](/api-reference/endpoints#attribution-headers) — are sent before the first chunk, because the routing walk has finished choosing by then. If the upstream provider fails *after* the stream has started, the gateway cannot reuse a normal HTTP status code (headers are already sent). Instead it emits a single error event as a `data:` line and then closes the stream. No `[DONE]` sentinel follows an error event. The failure is also recorded on the request's span, counted in Prometheus metrics, and written to the request log via the `on_error` plugin stage — a mid-stream failure is no longer a silent truncation on any of those surfaces.
 
 The error chunk has this exact JSON shape:
 
@@ -1300,7 +1328,103 @@ python3 plot.py results/
 Source: https://docs.ferrolabs.ai/changelog/
 ================================================================================
 
-Full release notes are also on [GitHub Releases](https://github.com/ferro-labs/ai-gateway/releases). **v1.4.1 is the latest tag.**
+Full release notes are also on [GitHub Releases](https://github.com/ferro-labs/ai-gateway/releases). **v1.5.2 is the latest tag.**
+
+## v1.5.2 — 2026-09-03 — Routing depth
+
+Every routed surface now ranks through one strategy implementation, and the routing layer gains the operator controls a production gateway needs: per-attempt timeouts, a `429` cooldown, a typed context-length failover class, sticky sessions, rule target chains, bounded conditional predicates, attribution headers on every response, and a host-supplied price catalog. Everything ships in the open-source gateway; no configuration key is removed, and the Go API only grows. See [Routing](/routing) for the updated contract.
+
+### What's new in v1.5.2
+
+- **Attribution headers on every routed surface** — `X-Gateway-Provider`, `X-Gateway-Target`, `X-Gateway-Model` and `X-Gateway-Attempts` on chat (before a stream's first chunk), legacy completions, embeddings, images, rerank, moderations, transcriptions, translations and speech; a failed request names the last target attempted. `ferro.routing.attempt` is emitted on the request span. See [Attribution headers](/api-reference/endpoints#attribution-headers).
+- **`targets[].timeout`** bounds one physical attempt inside `request_timeout`, so a hung primary no longer consumes the whole request budget before a pool mode moves on. Streams are bounded only until the provider answers.
+- **`429` cooldown** — a target that answers `429` is parked for its `Retry-After` (five seconds when absent, a minute at most) so the next request does not pay another `429` on it. Process-local; the breaker is untouched.
+- **Typed context-length failover** — a provider's own statement that the prompt exceeded its context window (the OpenAI-compatible, Anthropic and Gemini envelopes) fails over to a sibling, whose model may have a larger window. Every other `4xx` still stops.
+- **`strategy.sticky: { on: user, ttl: "1h" }`** under `loadbalance` and `ab-test` pins a `user` to one target or variant with a stateless hash. See [Load balance](/routing/loadbalance#sticky-sessions).
+- **`target_keys: [a, b]`** on `conditions[]` and `content_conditions[]` names an ordered chain for a rule, walked on failover-safe failures and never left. See [Conditional](/routing/conditional).
+- **Conditional predicates** `user`, `stream`, `has_tools`, and `metadata` + `field` reading the single `X-Gateway-Metadata` request header.
+- **`strategy.failover_on_status_codes`** adds upstream statuses to the failover-safe set; `400`, `401`, `403`, `404` and `422` cannot be listed.
+- **`aigateway.WithCatalog(models.Catalog)`** hands an embedding host's own price catalog to the gateway in place of the embedded or remote one; `aigateway.WithRoutingAttribution` reads the attribution back.
+- **Embedded dashboard** — the strategy panel shows `model_map`, rule chains and the new predicates.
+
+### Behaviour changes in v1.5.2
+
+- **A rule that names one target is exact.** Under `conditional` and `content-based`, an open circuit on the matched target used to borrow a healthy sibling; it now answers `503`, and a rule that wants a stand-in lists one in `target_keys`. On non-chat surfaces `content-based` routes to the first target that can serve the request, alone.
+- **One ranker for every surface.** Embeddings, images, rerank, moderation, transcription and speech previously ranked through a second implementation that differed from chat in its random source, unseen-latency order, cost input and unpriced placement. The same config and health now produce the same candidate order everywhere.
+- **`least-latency` keeps learning.** Samples are keyed by target and upstream model, expire after five minutes, and one request in ten leads with a sampled runner-up so the leader cannot lock in. A stream's sample is its time to first chunk rather than its whole drain.
+- **`cost-optimized` prices input plus output** — the request's completion ceiling or 256 tokens — at the catalog rate for the model's mode on every surface; equal-cost targets draw by `targets[].weight`, and a negative weight is refused.
+- **Validation** — an `ab_variants[]` entry without a `label` no longer loads; a `single` strategy with more than one target logs a warning naming the unused targets.
+
+---
+
+## v1.5.1 — 2026-09-01 — Routing reliability correction
+
+A patch that makes the routing strategies truthful about failure, gives one client-facing model name a different upstream ID per provider, and makes each physical attempt observable. Three behaviours an operator may notice change; no configuration keys are removed. See [Routing](/routing) for the updated contract.
+
+### What's new in v1.5.1
+
+- **`targets[].model_map`** — several providers can serve one visible model name while each receives its own upstream model ID (`smart: gpt-4o` on OpenAI, `smart: claude-sonnet-4-6` on Anthropic). Mapped names participate in routing and `/v1/models`; pricing uses the mapped ID. See [One model name, different upstream IDs](/routing#one-model-name-different-upstream-ids).
+- **Attempt-level observability** — each provider call or local circuit-breaker/concurrency refusal can emit a `gateway.routing.attempt` event, retries and cross-target failovers included. Attempt events are opt-in per exporter and per custom observability provider; every existing exporter keeps receiving exactly one event per request. See [Observability](/guides/observability).
+- **A/B attribution** — attempt and terminal events carry `ferro.routing.ab_variant_label`, and it stays the variant that was drawn through retries and failover. See [A/B test](/routing/ab-test).
+- **Keyless strategy end-to-end suite** — `make test-e2e-strategies` exercises every routing mode over the real binary against three scriptable mock upstreams: failover classes, retries and `Retry-After`, breaker states, weight and variant distributions, `model_map` on unary and streamed requests, `/v1/models` and `/metrics` — with no provider credentials.
+- **Install paths recorded** — the one-command installer (`get.ferrolabs.ai`), `ferrogw` on npm and PyPI, the Homebrew cask and Scoop manifest, and the GoReleaser platform archives landed on `main` during the v1.4.x line without a changelog entry, as did the README quickstart overhaul; both are now recorded. See [Install](/getting-started/install).
+
+### Behaviour changes in v1.5.1
+
+- **Pool modes fail over only after a failover-safe failure.** `fallback`, `loadbalance`, `least-latency`, `cost-optimized` and `ab-test` advance to another target after a transport failure, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, an open circuit, or target saturation. They previously advanced after *any* failure, so a target answering `400`, `401`, `404` or `422` was silently covered by a sibling; those responses now reach the client. The request's own cancellation or deadline still stops routing, as does any provider-call failure under `single`, `conditional` and `content-based`.
+- **The response `model` is the routed name** — the model the client asked for, after alias resolution — on every surface, streamed chunks included, instead of the identifier the provider reported. Provider calls, pricing and the `UpstreamModel` of an attempt event still use the mapped upstream model.
+- **Ambiguous configurations are rejected at load** — duplicate target keys, an empty `targets[].virtual_key`, duplicate `ab_variants[].target_key` entries, and duplicated keys in a JSON config no longer load silently.
+- **The embedded model catalog is parsed once per process.** Every gateway constructed without a reachable remote catalog previously decoded the 3 MB document again (about 90 ms); it now receives its own copy of the parsed catalog in about 3 ms.
+
+### Fixed in v1.5.1
+
+- A failure in an `after_request` plugin is timed and counted as a plugin failure and emits one failed terminal lifecycle event carrying the selected A/B variant, instead of ending without a duration sample or a terminal event.
+- A stream whose upstream had already finished when the client hung up was recorded as a client cancellation about half the time; a completed and billed stream is now always recorded as completed.
+
+---
+
+## v1.5.0 — 2026-08-29 — The gateway is importable
+
+A new public `run` package exposes the `ferrogw` program to Go code. `run.Main()` is what `cmd/ferrogw` now calls; `run.Run(ctx, opts...)` runs the same server under a caller-owned context and returns startup and listen errors instead of exiting the process, with context cancellation triggering the same graceful shutdown as `SIGTERM`. A custom binary is a `main` that blank-imports its plugins and calls `run.Main()` — the process lane. `httpgateway` (since v1.4.2) remains the library lane for mounting gateway surfaces behind your own middleware.
+
+The server now binds its listener before it starts observing shutdown, so a cancellation that arrives during startup can no longer leave a listener behind. Existing `ferrogw` behaviour — commands, flags, exit codes — is unchanged.
+
+---
+
+## v1.4.5 — 2026-08-23 — Security patch: stdio MCP memory bound
+
+- **A stdio MCP server can no longer exhaust gateway memory.** The stdio transport now applies the same 10 MiB bound as the HTTP transport, measured per JSON-RPC message, so an ordinary conversation of any length is unaffected. A previously working oversized tool result now fails — terminal for that server, not for one call: the transport closes and the registry withdraws the server and its tools. A server with a legitimate reason to return more than 10 MiB should page its results. See [MCP](/guides/mcp).
+- **Three dependency advisories cleared** — `golang.org/x/text` v0.39.0, `golang.org/x/net` v0.56.0, `github.com/moby/go-archive` v0.3.0. None was reachable from gateway code; `govulncheck` reports zero vulnerabilities in every category.
+- `SECURITY.md` names 1.4.x as the supported series.
+
+No breaking changes to configuration or the API.
+
+---
+
+## v1.4.4 — 2026-08-18 — In-flight requests keep their provider price
+
+An alias repointed to a different provider while a request was in flight could price that request against the replacement provider, even though the original served it. Routing now carries the pricing identity captured at provider selection through unary and streaming cost accounting. Attribution is unchanged: responses, metrics, spans and plugin context still name the routing alias.
+
+---
+
+## v1.4.3 — 2026-08-17 — Security patch: Go 1.25.13 and alias pricing
+
+- **Go toolchain 1.25.13** — clears six standard-library advisories reachable from gateway code (`net/url`, `html/template`, `crypto/tls`, `net/http`, `encoding/xml`, `encoding/asn1`). No gateway code changes.
+- **Dashboard toolchain** — `nanoid` 3.3.18 closes a high-severity advisory in a build-time dependency; nothing shipped in the embedded bundle was affected.
+- **Registration aliases are priced correctly.** A provider registered under a routing alias (`RegisterProviderAs`, v1.4.2) was treated as unpriced by cost-optimized ranking and by streaming cost accounting; both now resolve the canonical provider for the catalog lookup. Deployments that register providers under their canonical name are unaffected.
+
+No breaking changes.
+
+---
+
+## v1.4.2 — 2026-08-10 — Registration aliases, an embedding facade, and build provenance
+
+- **`Gateway.RegisterProviderAs`** registers one provider under a distinct routing target, so a deployment can bind several credentials for the same canonical provider. The alias resolves every optional capability through the original provider — streaming, embeddings, images, rerank, moderation, audio, discovery, batch, Responses and pass-through.
+- **`httpgateway` facade** — the Files/Batches, Responses and generic pass-through handlers are exposed to embedding applications, which keep their own authentication and tenant middleware while reusing the gateway's provider resolution, credential injection, governance and usage capture.
+- **`GET /health` reports build provenance** — `version`, `commit` and `built` alongside provider status (`dev` / `none` / `unknown` for an unstamped local build).
+- The configuration schema — `Config` and its sub-types, loader and validator — lives in the `config` package (`github.com/ferro-labs/ai-gateway/config`) since v1.4.0; for an embedder the migration is a one-line import.
+
+---
 
 ## v1.4.1 — 2026-08-07 — Dependency security patch
 
@@ -1950,7 +2074,7 @@ On routed surfaces — chat completions, streaming, embeddings, images — `X-Pr
 <summary className={styles.q}>What happens if a provider is down?</summary>
 <div className={styles.a}>
 
-Depends on the strategy. Pool modes — `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test` — advance to the next target in the pool after a failover-safe failure — the provider was unreachable, timed out, returned `408`/`429`/`5xx`, or is circuit-open or saturated; any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the caller instead. Named modes — `single`, `conditional`, `content-based` — report the failure back to the caller instead, since something specifically chose that target. Every mode skips a target whose circuit breaker is open; if every target for a model is open, the request gets `503`. `targets[].retry` is honored under every mode, so set `attempts: 1` to keep single-attempt behavior even in a pool.
+Depends on the strategy. Pool modes — `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test` — advance to the next target in the pool after a failover-safe failure — the provider was unreachable, timed out, returned `408`/`429`/`5xx`, or is circuit-open or saturated; any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the caller instead. Named modes — `single`, `conditional`, `content-based` — stay inside what was named: `single` reports its one target's failure, and a `conditional` or `content-based` rule walks its `target_keys` chain on the same failover-safe failures without ever reaching a target it did not name. Every mode skips a target whose circuit breaker is open, or that is parked after a `429`, among the candidates it offers; if every target for a model is open, the request gets `503`. `targets[].retry` is honored under every mode, so set `attempts: 1` to keep single-attempt behavior even in a pool.
 
 </div>
 </details>
@@ -3507,19 +3631,19 @@ routing mode makes it **happen** (decides whether to try a sibling at all).
 | | Modes | On a target failure |
 |---|---|---|
 | **Pool** | `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test` | the walk advances to the next candidate after a failover-safe failure; any other `4xx` is returned |
-| **Named** | `single`, `conditional`, `content-based` | the walk stops and reports the failure |
+| **Named** | `single`, `conditional`, `content-based` | the walk stays inside what was named: `single` stops; a rule walks its `target_keys` chain on the same failover-safe failures and stops at its end |
 
 A pool mode picks its head target for a reason that's about the *pool* —
 spread load, take the cheapest, take the fastest — from targets declared
 interchangeable, so handing the request to a sibling is what was configured.
 A named mode picks its head because something named that target
-specifically; serving from elsewhere would demote the rule to a suggestion.
+specifically; serving from a target the rule did not name would demote the
+rule to a suggestion, so a rule's `target_keys` chain is a hard boundary.
 
-**Every mode skips a target whose circuit is open** — that rule is
-independent of pool vs named. When another configured target serves the
-model, the open one is silently passed over, even under `single`,
-`conditional`, or `content-based` where an operator named one target on
-purpose. When *no* other target serves the model, the walk still attempts
+**Every mode skips a target whose circuit is open, or that is parked after a
+`429`, among the candidates it offers** — a pool's siblings, or a rule's chain.
+`single` and a rule with one target offer no other candidate, so an open
+circuit there is refused with `503`. When *no* other target serves the model, the walk still attempts
 the open one (so a model that plainly exists never 404s), the breaker
 refuses it, and the caller gets `503 upstream_unavailable` instead.
 
@@ -3614,12 +3738,12 @@ The strategy controls which target(s) a request is offered to, and in what order
 | `content-based` | Match user-message content by substring or regex; first rule match wins. |
 | `ab-test` | Split traffic across labeled variants by weight for comparison testing. |
 
-One pipeline governs chat, streaming, embeddings, and images, so retry and circuit-breaking behave identically across all four. Strategies split into two families:
+One pipeline governs chat, streaming, embeddings, images, rerank, moderation, transcription and speech, and one ranker orders targets for all of them, so retry, circuit-breaking and candidate order behave identically across every surface. Strategies split into two families:
 
 - **Pool modes** (`fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test`) advance past a target that failed in a failover-safe way — transport error, attempt timeout, `408`/`429`/`5xx`, open circuit, saturation — to the next candidate; any other `4xx` is returned to the client.
-- **Named modes** (`single`, `conditional`, `content-based`) commit to their chosen target and report its failure rather than trying another.
+- **Named modes** (`single`, `conditional`, `content-based`) stay inside what was named: `single` reports its one target's failure; a rule walks its `target_keys` chain on the same failover-safe failures and never reaches a target it did not name.
 
-Every mode skips a target whose circuit is open; if every candidate's circuit is open, the request is still attempted and returns `503`.
+Every mode skips a target whose circuit is open, or that is parked after a `429`, among the candidates it offers; if every candidate is unavailable, the request is still attempted and returns `503`. A rule with one target offers no other candidate.
 
 See [Routing](/routing) for per-strategy configuration and YAML examples.
 
@@ -3716,13 +3840,13 @@ Source: https://docs.ferrolabs.ai/getting-started/configuration/
     "@context": "https://schema.org",
     "@type": "TechArticle",
     "headline": "Ferro Labs AI Gateway Configuration Reference",
-    "description": "Complete v1.4.x config reference for the Ferro Labs AI Gateway — targets, retry, circuit breakers, all 8 routing strategies, plugins, and MCP servers.",
+    "description": "Complete v1.5.x config reference for the Ferro Labs AI Gateway — targets, timeouts, retry, circuit breakers, all 8 routing strategies, plugins, and MCP servers.",
     "url": "https://docs.ferrolabs.ai/getting-started/configuration/"
   })}</script>
 </Head>
 
-:::info As of v1.4.x
-This page documents the config schema shipped by v1.4.x. `apiVersion` is advisory — an unrecognized value is kept and only logged as a warning, so a newer config file still starts on an older binary.
+:::info As of v1.5.x
+This page documents the config schema shipped by v1.5.2. Keys introduced on the v1.5 line — `targets[].timeout`, `strategy.sticky`, `strategy.failover_on_status_codes`, `conditions[].target_keys` — are rejected by a v1.4 binary's strict decoder. `apiVersion` is advisory — an unrecognized value is kept and only logged as a warning, so a newer config file still starts on an older binary as long as it uses only keys that binary knows.
 :::
 
 The gateway loads configuration from a YAML or JSON file at the path set by `GATEWAY_CONFIG`.
@@ -3765,17 +3889,19 @@ strategy:
 | `single` | Named | Route every request to `targets[0]` only. |
 | `fallback` | Pool | Try targets in declared order; advance to the next after a failover-safe failure. |
 | `loadbalance` | Pool | Weighted random distribution across targets (`targets[].weight`). |
-| `conditional` | Named | Match a request field (`model` or `model_prefix`) to a target; first match wins. |
-| `least-latency` | Pool | Route to the compatible target with the lowest observed p50 wall-clock latency. |
-| `cost-optimized` | Pool | Estimate prompt cost from the model catalog and pick the cheapest compatible target. |
+| `conditional` | Named | Match a request field (`model`, `model_prefix`, `user`, `stream`, `has_tools`, or a `metadata` header entry) to a target or an ordered `target_keys` chain; first match wins. |
+| `least-latency` | Pool | Route to the compatible target with the lowest observed p50 time to first byte for the upstream model; samples expire and one request in ten explores a runner-up. |
+| `cost-optimized` | Pool | Estimate input plus output cost from the model catalog and pick the cheapest compatible target; equal-cost targets draw by `weight`. |
 | `content-based` | Named | Route on user-message content by substring or regex; first match wins. |
 | `ab-test` | Pool | Split traffic across labeled, weighted variants for comparison testing. |
 
-The mode families matter for failure handling: a **pool** mode (`fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test`) advances the request pipeline to the next candidate target when one fails in a failover-safe way — a transport error, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, an open circuit, or saturation; any other `4xx` is returned to the client, and the request's own cancellation or deadline stops routing. A **named** mode (`single`, `conditional`, `content-based`) commits to the target it picked and reports that target's failure — it does not fail over to a sibling target just because one exists.
+The mode families matter for failure handling: a **pool** mode (`fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test`) advances the request pipeline to the next candidate target when one fails in a failover-safe way — a transport error, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, an open circuit, or saturation; any other `4xx` is returned to the client, and the request's own cancellation or deadline stops routing. A **named** mode (`single`, `conditional`, `content-based`) stays inside what was named: `single` reports its one target's failure, and a rule walks its `target_keys` chain on the same failover-safe failures and stops at its end — it never reaches a target the rule did not name. `strategy.failover_on_status_codes` adds upstream statuses to the failover-safe set (never `400`, `401`, `403`, `404` or `422`).
 
 Two rules hold under **every** mode, named or pool:
 - `targets[].retry` is honored regardless of mode — it re-asks the *same* target the number of configured times. Whether a *different* target is asked afterward is the mode's decision alone.
-- A target whose circuit breaker is open is skipped when the routable set is chosen. When every candidate target's circuit is open, the request is still attempted and answered `503` — that's a different signal from `404 model_not_found` ("nothing serves this model" vs. "everything that could serve it is currently down").
+- A target whose circuit breaker is open, or that is parked after answering `429` (for its `Retry-After`, a minute at most), is skipped among the candidates the mode offers. When every candidate is open or parked, the request is still attempted and answered `503` — that's a different signal from `404 model_not_found` ("nothing serves this model" vs. "everything that could serve it is currently down"). A rule with one target offers no other candidate, so an open circuit there is `503`.
+- `targets[].timeout` bounds one attempt against a target inside `request_timeout`; a timed-out attempt is failover-safe.
+- Every routed response carries `X-Gateway-Provider`, `X-Gateway-Target`, `X-Gateway-Model` and `X-Gateway-Attempts`.
 
 ### Conditional rules
 
@@ -3794,9 +3920,9 @@ targets:
   - virtual_key: anthropic
 ```
 
-`key` is one of `model` (exact match) or `model_prefix` (`strings.HasPrefix` match) — a closed set validated at load; anything else is a config error, not a silent no-op. `value` is what `key` is matched against, and `target_key` must name a configured `targets[].virtual_key`.
+`key` is one of `model` (exact match), `model_prefix` (prefix match), `user` (the request's `user` field), `stream` and `has_tools` (`"true"` / `"false"`), or `metadata` with `field` naming one entry of the `X-Gateway-Metadata` request header — a closed set validated at load; anything else is a config error, not a silent no-op. `value` is what `key` is matched against. A rule routes to `target_key` (one target) or `target_keys` (an ordered chain); exactly one is set, every entry must name a configured `targets[].virtual_key`, and none may repeat.
 
-Rules are evaluated in order; the first match wins and the request commits to that target — a request for a model the matched target doesn't actually serve is `404 model_not_found`, even when another configured target does serve it. Write another rule rather than relying on failover; `conditional` is a named mode. Unmatched requests fall to `targets[0]`.
+Rules are evaluated in order; the first match wins and the request stays inside the matched rule's chain — walking it on failover-safe failures and never reaching a target outside it. A request for a model the matched chain doesn't serve is `404 model_not_found`, even when another configured target does serve it; a one-target rule whose target's circuit is open is `503`. Write another rule, or add a chain member, rather than relying on failover. Unmatched requests fall to `targets[0]`. See [Conditional](/routing/conditional).
 
 ### Content-based routing
 
@@ -3821,7 +3947,19 @@ targets:
 
 Three condition types, evaluated over **user-role messages only** (system and assistant content is never inspected): `prompt_contains` (case-insensitive substring), `prompt_not_contains` (true when no user message contains the value — matches broadly, so ordering matters), and `prompt_regex` (Go regexp, compiled at startup — an invalid pattern is a startup error). First match wins and the request commits to that target; unmatched requests fall to `targets[0]`.
 
-`content-based` is a named mode, so a failure at the matched target is the request's answer, not a trigger to try another target.
+`content-based` is a named mode: a rule may name a `target_keys` chain, which is walked on failover-safe failures, and the request never reaches a target the rule did not name. On non-chat surfaces, which carry no messages, the request takes the first target that can serve it.
+
+### Sticky hashing
+
+```yaml
+strategy:
+  mode: loadbalance          # or ab-test
+  sticky:
+    on: user                 # the only supported key
+    ttl: 1h                  # optional; a pin lasts at most one window
+```
+
+Under `loadbalance` and `ab-test`, `sticky` pins each request to the same target — or variant — for the same `user` field, so a conversation keeps its provider prompt cache and a session does not flip variants. It is a stateless hash: no shared state, the same answer on every replica, a random draw for a request without `user`. Refused under any other mode.
 
 ### A/B test routing
 
@@ -3868,7 +4006,8 @@ targets:
 | Field | Type | Notes |
 |---|---|---|
 | `virtual_key` | string, required | Names a registered provider. |
-| `weight` | float64 | Relative share under `loadbalance` only. `0` drains the target. Negative or all-zero across the target set is a load error. |
+| `weight` | float64 | Relative share under `loadbalance`, and the tie-break among equal-cost targets under `cost-optimized`. `0` drains the target. Negative (any mode that reads it) or all-zero under `loadbalance` is a load error. |
+| `timeout` | duration | Bound on one attempt against this target (`"8s"`), inside `request_timeout`. A unary attempt is bounded through its response; a streaming attempt only until the provider answers. A timed-out attempt is failover-safe. Must be a positive Go duration. |
 | `models` | []string | Operator-declared model ids this target serves, in addition to whatever the catalog and live discovery already report. Exact ids only — wildcards are rejected at load. Purely additive: it never hides models the target already serves, and declaring one the catalog already knows is a harmless no-op. Advertised on `/v1/models`. |
 | `model_map` | map | Per-target translation of a name clients use into this target's upstream model id (`smart: gpt-4o-mini`). The visible name routes to this target and is listed in `/v1/models`; the upstream call and pricing use the mapped id; the response carries the visible name. Per target, unlike the global `aliases`. See [Routing](/routing#one-model-name-different-upstream-ids). |
 | `retry` | object | `attempts` (int, `1` = no retry), `on_status_codes` ([]int), `initial_backoff_ms` (int, default 100). Applies under **every** routing mode — it re-asks this one target; it does not by itself try a different target. |
@@ -4200,11 +4339,11 @@ verifies SHA-256, but it does not expose `-VerifySignature`; mandatory cosign
 verification is currently available only in the Linux/macOS installer.
 
 ```bash title="Pin a version, using the environment form"
-curl -fsSL https://get.ferrolabs.ai/install.sh | FERROGW_VERSION=v1.4.2 sh
+curl -fsSL https://get.ferrolabs.ai/install.sh | FERROGW_VERSION=v1.5.2 sh
 ```
 
 ```bash title="Or pass flags explicitly"
-curl -fsSL https://get.ferrolabs.ai/install.sh | sh -s -- --version v1.4.2
+curl -fsSL https://get.ferrolabs.ai/install.sh | sh -s -- --version v1.5.2
 ```
 
 ### Where it installs
@@ -4267,8 +4406,8 @@ cosign signature over it, and one SPDX SBOM per archive. Download them from the
 [releases page](https://github.com/ferro-labs/ai-gateway/releases).
 
 Archives are named `ferrogw_<version>_<os>_<arch>.tar.gz` — `.zip` on Windows.
-Note the version in the filename carries **no `v` prefix**: tag `v1.4.2` produces
-`ferrogw_1.4.2_linux_amd64.tar.gz`.
+Note the version in the filename carries **no `v` prefix**: tag `v1.5.2` produces
+`ferrogw_1.5.2_linux_amd64.tar.gz`.
 
 ### Verifying a download
 
@@ -4730,13 +4869,14 @@ by the mode:
 | Mode family | Modes | On a failed target |
 |---|---|---|
 | Pool | `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test` | Advances to the next candidate after a failover-safe failure; other `4xx` are returned |
-| Named | `single`, `conditional`, `content-based` | Commits to the one target and reports the failure |
+| Named | `single`, `conditional`, `content-based` | Stays inside what was named: `single` stops; a rule walks its `target_keys` chain and stops at its end |
 
-Both families skip a target whose circuit breaker is **open** before
-committing to it — including named modes, where the operator picked that
-target specifically. When every eligible candidate's circuit is open, the walk
-still attempts one anyway rather than reporting a false 404, and the breaker
-turns that attempt into a `503`.
+Both families skip a target whose circuit breaker is **open**, or that is
+parked after a `429`, among the candidates the mode offers — a pool's
+siblings, or a rule's chain. `single` and a one-target rule offer no other
+candidate. When every eligible candidate is unavailable, the walk still
+attempts one anyway rather than reporting a false 404, and the breaker turns
+that attempt into a `503`.
 
 ## MCP agentic loop
 
@@ -6301,7 +6441,7 @@ Not every declared constant is wired into a live span yet — the **Status** col
 | `ferro.stream.time_to_first_token_ms` | Emitted | Streaming time-to-first-token |
 | `ferro.stream.time_to_last_token_ms` | Emitted | Streaming time-to-last-token |
 | `ferro.gateway.version` | Planned | Gateway build version |
-| `ferro.routing.attempt` | Planned | Attempt number within the strategy |
+| `ferro.routing.attempt` | Emitted | Routing-layer attempt count when the walk ended — provider calls plus local breaker or concurrency refusals, retries and failovers included; the same number as the `X-Gateway-Attempts` response header (since v1.5.2) |
 | `ferro.routing.ab_variant_label` | Planned (span) | A/B variant label — not on the span. Since v1.5.1 it is carried as an attribute of the `gateway.request.completed` / `failed` events (and of `gateway.routing.attempt` events where enabled) delivered to exporters and custom providers |
 | `ferro.cache.hit` / `ferro.cache.kind` | Planned | Response-cache hit and cache kind |
 | `ferro.mcp.depth` | Planned | MCP call depth |
@@ -11683,7 +11823,7 @@ ferrogw status --gateway-url http://localhost:8080
 
 ```text
   [OK] http://localhost:8080 -- healthy (4ms)
-  Version: 1.4.1
+  Version: 1.5.2
   Providers: 30 (412 models)
 ```
 
@@ -11730,7 +11870,7 @@ ferrogw version
 ```
 
 ```text
-  Version      1.4.1
+  Version      1.5.2
   Commit       a1b2c3d
   Built        2026-06-01T12:00:00Z
   Go           go1.25.0
@@ -12035,9 +12175,9 @@ Filter gateway logs by `trace_id` in your aggregator to correlate all events for
 
 ## Resiliency controls
 
-- **Circuit breakers** — configured per target (`targets[].circuit_breaker`), one breaker per target shared across chat/streaming/embeddings/images; every routing strategy skips an open circuit. State is exposed on `gateway_circuit_breaker_state` and, with request context, on `GET /health`.
+- **Circuit breakers** — configured per target (`targets[].circuit_breaker`), one breaker per target shared across every surface; every routing strategy skips an open circuit among the candidates it offers. A target that answers `429` is parked for its `Retry-After` (a minute at most) the same way, without its breaker counting the rate limit as a failure. Both are local to one gateway process. State is exposed on `gateway_circuit_breaker_state` and, with request context, on `GET /health`.
 - **Retries** — configurable per target with status-code filtering (`retry.on_status_codes`), honored under every strategy including `single` (set `attempts: 1` to keep single-attempt behavior).
-- **Fallback and pool strategies** — `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, and `ab-test` all advance past an open-circuit target, or one that failed in a failover-safe way (transport error, attempt timeout, `408`/`429`/`5xx`, saturation), automatically, while any other `4xx` is returned to the client; `single`, `conditional`, and `content-based` commit to one target and report its outcome. See [Routing](/routing).
+- **Fallback and pool strategies** — `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, and `ab-test` all advance past an open-circuit target, or one that failed in a failover-safe way (transport error, attempt timeout, `408`/`429`/`5xx`, saturation), automatically, while any other `4xx` is returned to the client; `single` commits to one target and reports its outcome, and a `conditional` or `content-based` rule walks its `target_keys` chain and stops at its end. `targets[].timeout` bounds one attempt so a hung target is failover-safe. See [Routing](/routing).
 
 ## Load balancer and orchestrator health checks
 
@@ -13288,7 +13428,7 @@ See [Routing](/routing) and [Provider configuration](/providers/configuration).
 
 ## Endpoint-support matrix
 
-Which OpenAI-compatible surface each provider implements, as of **v1.4.1**. This
+Which OpenAI-compatible surface each provider implements, as of **v1.5.2**. This
 mirrors the machine-checked matrix in the gateway source (`providers/README.md`),
 which fails the build if a provider's real interface set ever drifts from it.
 
@@ -13450,7 +13590,9 @@ One request in ten for `smart` is answered by Claude, and every response still s
 | `strategy.mode` | string | — | Set to `ab-test` (hyphen). |
 | `strategy.ab_variants[].target_key` | string | — | Must name one of the configured `targets[].virtual_key`. |
 | `strategy.ab_variants[].weight` | float64 | — | Relative traffic share = `weight / sum(weights)`. `0` drains the variant (no traffic); negative or an all-zero set is rejected at load. |
-| `strategy.ab_variants[].label` | string | — | Human-readable variant id (e.g. `control`, `challenger`), carried as `ferro.routing.ab_variant_label` on the request's observability events. |
+| `strategy.ab_variants[].label` | string | — (required) | Variant id (e.g. `control`, `challenger`), carried as `ferro.routing.ab_variant_label` on the request's observability events. Attribution keys on it, so a variant without a label is a load error since v1.5.2. |
+| `strategy.sticky.on` | string | — | Set to `user` to keep every request with the same `user` field on the variant it first drew: a stateless hash, so a multi-turn session does not flip variants and every replica agrees. A request with no `user` draws at random. |
+| `strategy.sticky.ttl` | duration | none | Rotates pins: a `user` stays on its variant for at most one window (`"1h"`). |
 
 ## Minimal working YAML
 
@@ -13485,7 +13627,8 @@ targets:
 - **`ab_variants[].weight` is what counts — `targets[].weight` is ignored under this mode.** `targets[].weight` only matters under `loadbalance`; don't expect it to influence the A/B split.
 - **Weights are relative, not percentages.** `weight: 70` and `weight: 30` behave identically to `weight: 7` and `weight: 3` — only the ratio matters.
 - **This is a pool mode, but the draw itself is not retried.** Once a variant is drawn, that variant's target leads; after a failover-safe failure the pipeline advances through the remaining configured targets like any pool mode, while any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the client. There is no re-draw — a failed request does not get a second chance at a different variant within the same routing decision.
-- **A negative weight or an all-zero weight set is a load error**, not a runtime failure — `ferrogw validate` and gateway startup reject it before traffic is served.
+- **A negative weight, an all-zero weight set, or a variant without a `label` is a load error**, not a runtime failure — `ferrogw validate` and gateway startup reject it before traffic is served.
+- **`sticky: { on: user }` keeps a session on its variant.** Without it every request re-draws, so a conversation can alternate between control and challenger turn by turn. With it the draw is a hash of the `user`, so the split still follows the weights across users while each user sees one variant.
 
 ## Related
 
@@ -13502,36 +13645,52 @@ targets:
 Source: https://docs.ferrolabs.ai/routing/conditional/
 ================================================================================
 
-Conditional routes each request by matching its declared `model` field against rules you write, not by weight, latency, or cost. It optimizes for **deterministic model-to-provider pinning** — "this model always goes to this backend, no exceptions" — the shape a compliance or contractual requirement needs, where a pool mode's willingness to substitute a different provider is the wrong behavior, not a convenience. Set `strategy.mode: conditional` to use it.
+Conditional routes each request by matching a field of the request against rules you write, not by weight, latency, or cost. It optimizes for **deterministic pinning** — "this model always goes to this backend", "this tenant's traffic only ever goes here" — the shape a compliance or contractual requirement needs, where a pool mode's willingness to pick a different provider is the wrong behaviour, not a convenience. Set `strategy.mode: conditional` to use it.
 
 :::tip In plain words
-Write rules like "model X goes to provider Y". The first matching rule wins; anything unmatched goes to the first target. The chosen provider's answer — success or failure — is what the client gets. The gateway swaps in another target for a matched rule only *before* the call — when the matched one has an open circuit breaker or cannot handle that kind of request (embeddings or images, say) — never after a failure.
+Write rules like "model X goes to provider Y" or "user `vip` goes to provider Z". The first matching rule wins; anything unmatched goes to the first target. A rule names either one target or an ordered chain of targets (`target_keys`). The gateway tries the chain in order, moving on only when a provider is at fault, and never reaches for a target the rule did not name. A rule with one target is exact: if that target is down, the client gets the corresponding error.
 :::
 
 ## What happens to a request
 
-With the rules in the YAML below (`gpt-4o` → OpenAI, `claude-` prefix → Anthropic, OpenAI first in `targets`):
+With the rules in the YAML below (`gpt-4o` → OpenAI, `claude-` prefix → Anthropic then Bedrock, user `vip` → OpenAI, OpenAI first in `targets`):
 
-| Client asks for | Rule | Target | If that target fails |
+| Client asks for | Rule | Chain | If the first target fails |
 |---|---|---|---|
-| `gpt-4o` | exact match | OpenAI | the client gets OpenAI's error |
-| `claude-sonnet-4-6` | prefix `claude-` | Anthropic | the client gets Anthropic's error |
+| `gpt-4o` | exact model match | OpenAI | the client gets OpenAI's error |
+| `claude-sonnet-4-6` | prefix `claude-` | Anthropic, then Bedrock | Bedrock answers after a provider-side failure (`5xx`, timeout, open circuit); a `400` from Anthropic goes back to the client |
+| any model, `"user": "vip"` after the model rules | user match | OpenAI | the client gets OpenAI's error |
 | `mistral-large` | no match | OpenAI (`targets[0]`) | `404 model_not_found` if OpenAI does not serve it — even if another target does |
 
 ## Behaviour
 
-`conditional` is a **named mode**: the pipeline commits to the target the first matching rule names and reports that target's failure, rather than trying the remaining targets (contrast with `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, and `ab-test`, which are pool modes that advance past a failover-safe failure). `Conditional.SelectTargets` (`internal/strategies/conditional.go`) evaluates `strategy.conditions[]` in declared order; the first rule whose `key`/`value` matches the request wins, and when none matches, the configured fallback target is used instead. The matched (or fallback) target leads the returned list, followed by every configured target de-duplicated — that tail is substitution-before-commit only (an open circuit or a surface-incapable target is swapped for a healthy one before the pipeline commits), never a failover path.
+`conditional` is a **named mode**: the candidates for a request are exactly what the matched rule names — its `target_keys` chain, or `target_key` as a one-entry chain — and nothing else. `Conditional.SelectTargets` (`internal/strategies/conditional.go`) evaluates `strategy.conditions[]` in declared order; the first rule whose `key`/`value` matches the request wins, and when none matches, the no-match fallback (`targets[0]`) is the whole answer.
 
-The matcher key is a **closed set**: `model` (`req.Model == value`, exact) and `model_prefix` (`strings.HasPrefix(req.Model, value)`). There is no dynamic arm in the switch, so a `key` outside those two is rejected by `config.ValidateConfig` at load — a typo fails startup, not a live request. In the gateway's own wiring the no-match fallback is `targets[0]`, but that's a property of how `buildStrategy` constructs the strategy, not something `Conditional` itself enforces — it always asks `matchTarget`, never assumes the head of a list.
+The pipeline walks a chain the way it walks a pool: it advances to the next member only after a **failover-safe** failure (a transport failure, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, a provider's own context-length overflow, an open circuit, or a full concurrency queue), skips a member whose circuit is open or that is parked after a `429`, and returns any other `4xx` to the client. What it never does is substitute a target outside the chain. A rule with one target is therefore exact: a model it does not serve, a surface it cannot handle, or an open circuit is the corresponding error (`404`, `404`, `503`) rather than a sibling's answer.
+
+The matcher key is a **closed set**, validated at load: a `key` outside it is a `ferrogw validate` / startup error, not a live-request failure. Since v1.5.2 the set covers the request's shape as well as its model, and one allow-listed header — no other request header ever reaches a rule.
+
+| `key` | Matches when | `value` |
+|---|---|---|
+| `model` | the request's `model` equals `value` exactly | a model name |
+| `model_prefix` | the request's `model` starts with `value` | a prefix such as `claude-` |
+| `user` | the request's `user` field equals `value` | a user id |
+| `stream` | the request is (`"true"`) or is not (`"false"`) a streaming request | `"true"` \| `"false"` |
+| `has_tools` | the request carries (`"true"`) or does not carry (`"false"`) a `tools` array | `"true"` \| `"false"` |
+| `metadata` | the entry named by `field` in the `X-Gateway-Metadata` request header equals `value` | a string |
+
+`X-Gateway-Metadata` is a JSON object of at most 32 string, number or boolean values within 4 KiB, accepted on `/v1/chat/completions` and `/v1/completions`, and never forwarded to a provider; a malformed header is the caller's `400`. `user` also applies to embeddings and image requests, which carry the field; `stream`, `has_tools` and `metadata` are chat-only and match nothing on the other surfaces.
 
 ## Config keys
 
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `strategy.mode` | string | — | Set to `conditional`. |
-| `strategy.conditions[].key` | string | — | `model` (exact match) \| `model_prefix` (prefix match via `strings.HasPrefix`). Closed set — an unrecognized value is a `ferrogw validate` / startup error, not a request-time failure. |
-| `strategy.conditions[].value` | string | — | The exact model name (`key: model`) or prefix (`key: model_prefix`) to match against the request's `model` field. |
-| `strategy.conditions[].target_key` | string | — | Must name a configured `targets[].virtual_key`; validated at load. |
+| `strategy.conditions[].key` | string | — | `model` \| `model_prefix` \| `user` \| `stream` \| `has_tools` \| `metadata`. Closed set — an unrecognized value is a load error. |
+| `strategy.conditions[].value` | string | — | What `key` is matched against. `stream` and `has_tools` accept only `"true"` or `"false"`. |
+| `strategy.conditions[].field` | string | — | The metadata entry a `key: metadata` rule reads. Required there, refused elsewhere. |
+| `strategy.conditions[].target_key` | string | — | The one target this rule routes to; must name a configured `targets[].virtual_key`. Sugar for a one-entry `target_keys`. |
+| `strategy.conditions[].target_keys` | []string | — | The rule's ordered target chain. Every entry must be a declared target, none may repeat, and exactly one of `target_key` and `target_keys` is set. |
 
 ## Minimal working YAML
 
@@ -13544,26 +13703,36 @@ strategy:
       target_key: openai
     - key: model_prefix
       value: claude-
-      target_key: anthropic
+      target_keys: [anthropic, bedrock]   # Anthropic first; Bedrock stands in only for a provider-side failure
+    - key: user
+      value: vip
+      target_key: openai
+    - key: metadata
+      field: tier
+      value: gold
+      target_key: openai
 
 targets:
   - virtual_key: openai   # targets[0] doubles as the no-match fallback
   - virtual_key: anthropic
+  - virtual_key: bedrock
 ```
 
 ## When to use
 
-- Deterministic model-to-provider pinning: a specific model must always be served by a specific backend, for compliance, contractual, or data-residency reasons — not "prefer this provider," but "only this provider."
+- Deterministic pinning: a specific model, tenant or request shape must always be served by a specific backend, for compliance, contractual, or data-residency reasons — not "prefer this provider," but "only this provider."
 - Routing whole model families by prefix (`claude-`, `gpt-`, `gemini-`) to their native provider without listing every model name individually.
-- Any setup where `fallback`'s or `loadbalance`'s willingness to substitute a different provider on failure is the behavior you need to prevent, not add.
+- A pinned rule that still needs a stand-in: name the stand-in in `target_keys`, and it is used only when the preferred member is at fault.
+- Any setup where `fallback`'s or `loadbalance`'s willingness to pick a different provider is the behaviour you need to prevent, not add.
 
 ## Gotchas
 
-- **A model the matched target doesn't serve is `404 model_not_found`, even when another configured target serves it.** This is a named mode: the rule is a decision about which target handles this model, not a preference among several. Reaching the other target means writing another rule that names it — the tail of `targets[]` is never tried as a fallback for this.
+- **A model the matched chain doesn't serve is `404 model_not_found`, even when another configured target serves it.** The rule is a decision about which targets handle this request, not a preference among several. Reaching another target means naming it in the rule.
+- **A one-target rule whose target is down answers `503`, not a sibling.** Before v1.5.2 an open circuit on the matched target borrowed a healthy sibling from `targets[]`; it no longer does. Put the sibling in `target_keys` if you want it used.
 - **`GET /v1/models` mirrors the same restriction.** A model missing from that listing under this mode is the signal that a rule is needed for it, before a request ever hits the 404.
-- **The no-match fallback is `targets[0]`.** `NewConditional`'s constructor argument is a `fallback` value passed explicitly by `buildStrategy`, and in the gateway's wiring that argument is `targets[0]` — so put the target you want unmatched models to land on first.
-- **The condition-key set is closed on purpose.** `model` and `model_prefix` are the only two matcher arms; anything else — a typo, a field name from another mode — is rejected at load by `config.ValidateConfig`, not silently ignored or routed to the fallback.
-- **Circuit state is the one thing that still moves the choice.** If the matched (or fallback) target's circuit is open, the pipeline substitutes a healthy target from the tail before committing, and traffic returns to the matched target once its circuit closes. This is unrelated to, and doesn't reintroduce, failover on an ordinary request failure.
+- **The no-match fallback is `targets[0]`, alone.** Put the target you want unmatched requests to land on first.
+- **The condition-key set is closed on purpose.** Anything outside the six keys above — a typo, a field name from another mode, an arbitrary header — is rejected at load, not silently ignored or routed to the fallback.
+- **The chain is walked like a pool, and stops at its end.** Retry (`targets[].retry`) re-asks a member before the walk moves on; a member whose circuit is open or that is parked after a `429` is passed over; a deterministic `4xx` from a member stops the walk; a stream that has begun is never failed over mid-stream.
 
 ## Related
 
@@ -13583,7 +13752,7 @@ Source: https://docs.ferrolabs.ai/routing/content-based/
 Content-based routes each request by inspecting the text of its **user-role** prompt messages, not its declared `model` field. It optimizes for **prompt-aware model selection** — code-shaped prompts to a coding model, prompts mentioning "translate" to a translation-tuned model, everything else to a general default — a decision `conditional` routing can't make because it only ever sees the model name. Set `strategy.mode: content-based` to use it.
 
 :::tip In plain words
-Look at what the user wrote, not which model they asked for. "Write a function that…" goes to a coding model; "translate this…" to a cheap one; everything else to your default. Rules are checked in order, the first match wins, and the matched provider's answer is final: the gateway swaps in another target only *before* the call — when the matched one has an open circuit breaker or cannot handle that kind of request (embeddings or images, say) — never after a failure.
+Look at what the user wrote, not which model they asked for. "Write a function that…" goes to a coding model; "translate this…" to a cheap one; everything else to your default. Rules are checked in order and the first match wins. A rule names one provider or an ordered chain (`target_keys`): with one provider its answer is final, and with a chain the gateway moves to the next member only when the provider was at fault — unreachable, timed out, overloaded, circuit open — never for a bad request, and never to a provider the rule did not name.
 :::
 
 ## What happens to a request
@@ -13597,13 +13766,15 @@ With the rules in the YAML below (code words → DeepSeek, "translate" → Gemin
 | "What is the capital of Peru?" | no match | OpenAI (`targets[0]`) |
 | system prompt mentions code, user message does not | system content is never inspected | OpenAI |
 
-If the matched target fails, the client gets that failure; the gateway does not try the others.
+A rule names one target or an ordered chain (`target_keys`). If the matched target fails because the provider was at fault, the next member of its chain is tried; the gateway never reaches for a target the rule did not name, and a rule with one target is exact.
 
 ## Behaviour
 
-`content-based` is a **named mode**: the pipeline commits to the target the first matching rule names and reports that target's failure, rather than trying the remaining targets (contrast with `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, and `ab-test`, which are pool modes that advance past a failover-safe failure). `ContentBased.SelectTargets` (`internal/strategies/contentbased.go`) evaluates `strategy.content_conditions[]` in declared order over **user-role messages only** — system and assistant content is never inspected — and the first rule that matches wins. The matched rule's target leads the returned list, followed by every configured target de-duplicated; the rest of the list is substitution-before-commit only (an open circuit or a surface-incapable target is swapped for a healthy one before the pipeline commits), never a failover path. With no rule matching, `SelectTargets` returns `targets[]` in declared order, so `targets[0]` is the no-match fallback.
+`content-based` is a **named mode**: the candidates for a request are exactly what the matched rule names — its `target_keys` chain, or `target_key` as a one-entry chain — and nothing else. `ContentBased.SelectTargets` (`internal/strategies/contentbased.go`) evaluates `strategy.content_conditions[]` in declared order over **user-role messages only** — system and assistant content is never inspected — and the first rule that matches wins. With no rule matching, the no-match fallback (`targets[0]`) is the whole answer.
 
-Because the match happens against request content, `GET /v1/models` under this mode is **representative, not exact**: it advertises what a request carrying no content would get — the no-match fallback target's models — so a model only a matched rule reaches is not listed there.
+The pipeline walks a chain the way it walks a pool — advancing only after a failover-safe failure (a transport failure, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, a provider's own context-length overflow, an open circuit, or a full concurrency queue), skipping a member whose circuit is open or that is parked after a `429`, returning any other `4xx` to the client — and never substitutes a target outside it. A rule with one target is exact: a model it does not serve or an open circuit is the corresponding error, not a sibling's answer.
+
+Content rules read chat messages, which embeddings, images and the other non-chat surfaces do not carry, so on those surfaces a request takes the no-match answer: the first configured target that can serve the model on that surface, alone. Because the match happens against request content, `GET /v1/models` under this mode is **representative, not exact**: it advertises what a request carrying no content would get — the no-match fallback target's models — so a model only a matched rule reaches is not listed there.
 
 ## Config keys
 
@@ -13613,6 +13784,7 @@ Because the match happens against request content, `GET /v1/models` under this m
 | `strategy.content_conditions[].type` | string | — | `prompt_contains` \| `prompt_not_contains` \| `prompt_regex`. Closed set — an unrecognized value is a `ferrogw validate` / startup error, not a request-time failure. |
 | `strategy.content_conditions[].value` | string | — | The substring (matched case-insensitively) for `prompt_contains`/`prompt_not_contains`, or the Go (RE2) regular expression for `prompt_regex`. |
 | `strategy.content_conditions[].target_key` | string | — | Must name a configured `targets[].virtual_key`; validated at load. |
+| `strategy.content_conditions[].target_keys` | []string | — | The rule's ordered target chain, tried in order on failover-safe failures and never left. Every entry must be a declared target, none may repeat, and exactly one of `target_key` and `target_keys` is set. |
 
 ## Minimal working YAML
 
@@ -13643,10 +13815,10 @@ targets:
 
 - **Only user-role messages are inspected.** System prompts and prior assistant turns never match, by any of the three rule types.
 - **`prompt_not_contains` matches broadly, so rule order matters a lot.** It's true for *any* prompt that lacks the value — an early, broad `prompt_not_contains` rule can shadow every more-specific rule declared after it. Put narrow rules first.
-- **A model the matched target doesn't serve is `404 model_not_found`, even when another configured target serves it.** This is a named mode: the rule is a decision about which target handles this content, not a preference among several. If a matched target needs to serve more models, add them there (or `targets[].models`) rather than expecting the tail of the list to cover it.
+- **A model the matched chain doesn't serve is `404 model_not_found`, even when another configured target serves it.** This is a named mode: the rule is a decision about which targets handle this content, not a preference among several. If a matched target needs to serve more models, add them there (or `targets[].models`) rather than expecting the rest of `targets[]` to cover it.
 - **`GET /v1/models` is representative, not exact, under this mode.** It shows only what the no-match fallback (`targets[0]`) serves, since there's no request content to evaluate rules against at listing time — a model reachable only through a matched rule won't appear.
 - **Regex is Go RE2 syntax.** No backreferences, no lookahead/lookbehind. An invalid pattern is caught at config load (`config.ValidateConfig` compiles every `prompt_regex` pattern the same way `NewContentBased` does), so a bad pattern fails startup rather than misrouting silently.
-- **Circuit state is the one thing that still moves the choice.** If the matched target's circuit is open, the pipeline substitutes a healthy target from the tail before committing — traffic returns to the matched target once its circuit closes. This is unrelated to, and doesn't reintroduce, failover on ordinary request failure.
+- **A one-target rule whose target is down answers `503`, not a sibling.** Before v1.5.2 an open circuit on the matched target borrowed a healthy target from `targets[]`; it no longer does. Name the stand-in in `target_keys` if you want one — the chain is walked on failover-safe failures and stops at its end.
 
 ## Related
 
@@ -13663,10 +13835,10 @@ targets:
 Source: https://docs.ferrolabs.ai/routing/cost-optimized/
 ================================================================================
 
-Cost-optimized routes each request to the cheapest model-compatible target, ranked by **estimated input cost** from the built-in model catalog. It optimizes for **spend** — not failover order (`fallback`), distribution (`loadbalance`), or latency (`least-latency`). Set `strategy.mode: cost-optimized` to use it.
+Cost-optimized routes each request to the cheapest model-compatible target, ranked by **estimated input plus output cost** from the built-in model catalog. It optimizes for **spend** — not failover order (`fallback`), distribution (`loadbalance`), or latency (`least-latency`). Set `strategy.mode: cost-optimized` to use it.
 
 :::tip In plain words
-Each request goes to the cheapest provider that serves the model, using the built-in price list and a rough guess at how many tokens the prompt is. If the cheapest one is unreachable, times out or is overloaded, the next-cheapest takes over. A provider with no known price is used last (the default), skipped, or treated as free — your choice.
+Each request goes to the cheapest provider that serves the model, using the built-in price list, a rough guess at how many tokens the prompt is, and the completion budget the request asked for. If the cheapest one is unreachable, times out or is overloaded, the next-cheapest takes over; two providers that cost the same share the traffic by `weight`. A provider with no known price is used last (the default), skipped, or treated as free — your choice.
 :::
 
 ## What happens to a request
@@ -13697,7 +13869,7 @@ targets:
 
 `cost-optimized` is a **pool mode**: after a failover-safe failure (a transport failure, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, an open circuit, or a full concurrency queue) the pipeline advances to the next candidate in the ranked order rather than reporting the failure back to the caller; any other `4xx` is returned to the client. `targets[].retry` still governs how many times any one target is retried before the pipeline moves on.
 
-On each request, `CostOptimized.SelectTargets` (`internal/strategies/costoptimized.go`) filters `targets[]` down to those whose provider is registered and whose `SupportsModel(req.Model)` returns true, then estimates the prompt token count at roughly **4 characters per token** (a routing heuristic, not a billing figure) and prices each compatible target's upstream model — the `model_map` translation when the target has one, otherwise the requested model — through the model catalog. Candidates are ranked by ascending estimated input cost — the cheapest target leads. `strategy.unpriced_strategy` decides which cataloged-but-unpriced candidates are allowed to rank at all (see below). Candidates the catalog doesn't recognize as that model (`ModelFound: false`) never rank, regardless of `unpriced_strategy`.
+On each request, `CostOptimized.SelectTargets` (`internal/strategies/costoptimized.go`) filters `targets[]` down to those whose provider is registered and whose `SupportsModel(req.Model)` returns true, then estimates the prompt at roughly **4 characters per token** and the completion at the request's `max_tokens` / `max_completion_tokens` (or **256 tokens** when it sets none) — a routing heuristic, not a billing figure — and prices each compatible target's upstream model — the `model_map` translation when the target has one, otherwise the requested model — through the model catalog at the rate for that model's mode: input plus output for chat, per token for embeddings, per image, per minute or character for audio. Candidates are ranked by ascending estimated cost — the cheapest target leads — and a run of equal-cost candidates leads with one drawn by `targets[].weight` (equally when no weight is set), since declaration order is not a contract. `strategy.unpriced_strategy` decides which cataloged-but-unpriced candidates are allowed to rank at all (see below). Candidates the catalog doesn't recognize as that model (`ModelFound: false`) never rank, regardless of `unpriced_strategy`.
 
 ## Config keys
 
@@ -13705,6 +13877,7 @@ On each request, `CostOptimized.SelectTargets` (`internal/strategies/costoptimiz
 |---|---|---|---|
 | `strategy.mode` | string | — | Set to `cost-optimized`. |
 | `strategy.unpriced_strategy` | string | `fallback` | `fallback` \| `skip` \| `allow`. Governs how compatible targets the catalog knows about but has no price for are treated during ranking. |
+| `targets[].weight` | float64 | `0` | Breaks ties between equal-cost candidates; unset or zero everywhere means an equal draw. A negative weight is rejected at load. |
 
 ### `unpriced_strategy` in detail
 
@@ -13737,7 +13910,8 @@ targets:
 
 ## Gotchas
 
-- **Input cost only, and estimated.** Ranking uses only prompt/input tokens, priced from the catalog's per-1M-input-token field, estimated at ~4 characters per token. Output pricing is never considered, so a target that's cheap on input but expensive on output can still be picked. Do not read the ranking as a billing-accurate number — it's a routing heuristic.
+- **Estimated, not billed.** The prompt is counted at ~4 characters per token and the completion at the request's own ceiling or 256 tokens, so the score is a comparison of list prices for a typical request, not a billing-accurate number. Before v1.5.2 only input price counted, so a target cheap to read and expensive to write could win a request with a large completion budget; it no longer does.
+- **The same order on every surface.** An embeddings, image or audio request is priced at the catalog's rate for that model's mode, so those models no longer tie at zero and fall to declared order.
 - **`allow` makes unpriced look free.** Under `unpriced_strategy: allow`, any compatible target the catalog has no price for is treated as `$0` and wins the draw over every priced target, every time. This is useful for a self-hosted/local target you always want preferred, but a surprise for one you didn't intend to be prioritized.
 - **`skip` narrows what `/v1/models` advertises.** Under `unpriced_strategy: skip`, targets with no catalog price are excluded from ranking entirely; if a request's model has no priced target, the request errors rather than falling through. `targets[].models` entries are unpriced by construction (they're operator-declared, not catalog data), so they're excluded here too.
 - **Default (`fallback`) only reaches unpriced targets as a last resort.** A self-hosted or otherwise-unpriced target under the default strategy is used only when **no** compatible target in `targets[]` has any catalog price at all — not merely when it's cheaper.
@@ -13776,13 +13950,15 @@ With `targets: [openai, anthropic]` and `retry.attempts: 3` on OpenAI:
 | answers `200` | returns it | OpenAI's answer |
 | returns `503` three times | retries twice with backoff, then asks Anthropic | Anthropic's answer |
 | returns `429` with `Retry-After: 2` | waits 2 s and retries; moves to Anthropic once the attempts are spent | an answer from whichever target succeeded |
-| never sends response headers | gives up when the provider transport's timeout expires and asks Anthropic | Anthropic's answer |
+| never sends response headers | gives up when its `targets[].timeout` (or the provider transport's timeout) expires and asks Anthropic | Anthropic's answer |
+| says the prompt exceeds its context window | asks Anthropic, whose model may have a larger window | Anthropic's answer |
+| returned `429` a moment ago | is skipped for its `Retry-After`; Anthropic is asked directly | Anthropic's answer |
 | returns `401` (revoked key) | stops — neither a retry nor a sibling can fix a bad key | `401` from OpenAI |
 | — the client disconnects first | stops routing | nothing; the request was cancelled |
 
 ## Behaviour
 
-`fallback` is a **pool mode** — the only mode whose entire purpose is advancing past a failed target in the order you declared. `Fallback.SelectTargets` (`internal/strategies/fallback.go`) returns every `targets[].virtual_key` in declared order, built once at construction; there is no per-request selection logic, no model filtering, and `targets[].weight` is ignored under this mode. The gateway pipeline (`routeTargets`, `gateway_pipeline.go`) walks that order: when the head target fails in a **failover-safe** way — a transport failure, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, an open circuit, or a full concurrency queue — and its retry budget, where one applies, is spent, the walk advances to the next declared target rather than reporting the failure back to the caller. Any other `4xx` is a verdict on the request itself and is returned unchanged; the request's own cancellation or deadline stops the walk.
+`fallback` is a **pool mode** — the only mode whose entire purpose is advancing past a failed target in the order you declared. `Fallback.SelectTargets` (`internal/strategies/fallback.go`) returns every `targets[].virtual_key` in declared order, built once at construction; there is no per-request selection logic, no model filtering, and `targets[].weight` is ignored under this mode. The gateway pipeline (`routeTargets`, `gateway_pipeline.go`) walks that order: when the head target fails in a **failover-safe** way — a transport failure, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, a provider's own context-length overflow, any status in `strategy.failover_on_status_codes`, an open circuit, a park after a `429`, or a full concurrency queue — and its retry budget, where one applies, is spent, the walk advances to the next declared target rather than reporting the failure back to the caller. Any other `4xx` is a verdict on the request itself and is returned unchanged; the request's own cancellation or deadline stops the walk.
 
 `targets[].retry` governs how many times **one** target is re-asked before the pipeline moves on — it applies under every routing mode, not only `fallback`. Fallback holds no retry policy of its own; advancing to the *next* target is fallback's behaviour alone. An open-circuit or surface-incapable target is skipped over before the pipeline commits to it, under every mode. `SelectTargets` never returns `nil` (declaring at least one target is required to build the strategy), but if every candidate's circuit is open the pipeline still attempts one and answers `503` rather than `404`.
 
@@ -13791,6 +13967,7 @@ With `targets: [openai, anthropic]` and `retry.attempts: 3` on OpenAI:
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `strategy.mode` | string | — | Set to `fallback`. |
+| `targets[].timeout` | duration | none | Bound on one attempt against this target, inside `request_timeout`. Unary attempts are bounded through the response; streaming attempts only until the provider answers. A timed-out attempt is failover-safe. |
 | `targets[].retry.attempts` | int | `1` (no retry) — omitted or `<= 0` normalizes to `1` | Maximum attempts against this one target before the pipeline advances to the next. Read per target, honored under every strategy mode. |
 | `targets[].retry.on_status_codes` | []int | transport errors + `408`, `429`, and `5xx` | Restricts retries to these HTTP status codes. Any other 4xx is treated as a deterministic client error and is never retried. |
 | `targets[].retry.initial_backoff_ms` | int | `100` | Base for exponential backoff with full jitter: the wait before attempt *N* is drawn uniformly from `[0, initial_backoff_ms * 2^(N-1))`. An upstream `Retry-After` header, when present, wins over the computed wait. |
@@ -13861,31 +14038,33 @@ A request for `smart` is served by OpenAI as `gpt-4o` and, on failover, by Anthr
 Source: https://docs.ferrolabs.ai/routing/least-latency/
 ================================================================================
 
-Least-latency routes to the compatible target with the lowest observed **p50** latency. It optimizes for **total response time** across interchangeable providers — not for cost (`cost-optimized`), declared failover order (`fallback`), or an even traffic split (`loadbalance`). Set `strategy.mode: least-latency` to use it.
+Least-latency routes to the compatible target with the lowest observed **p50** latency for the request's upstream model. It optimizes for **how quickly a provider begins answering** across interchangeable providers — not for cost (`cost-optimized`), declared failover order (`fallback`), or an even traffic split (`loadbalance`). Set `strategy.mode: least-latency` to use it.
 
 :::tip In plain words
-Every completed request is timed, and each new request goes to the provider with the lowest median time so far. A provider nobody has timed yet is tried first so it gets measured. "Time" is the whole response, so a model that writes longer answers looks slower than a terse one on the same hardware.
+Every completed request is timed, and each new request goes to the provider with the lowest median time so far for that model. A provider nobody has timed yet is tried first so it gets measured; one nobody has timed in the last five minutes counts as untimed again. One request in ten goes to a measured runner-up on purpose, so a provider that has recovered gets noticed. "Time" is how long the provider took to *start* answering — a stream's first chunk — so a model that writes longer answers does not look slower than a terse one.
 :::
 
 ## What happens to a request
 
-Three targets serve the model. Groq's median so far is 0.8 s, OpenAI's 1.6 s, and Anthropic was just added and has no samples:
+Three targets serve the model. Groq's median so far is 0.3 s, OpenAI's 0.6 s, and Anthropic was just added and has no samples:
 
 | Request | Order tried | Why |
 |---|---|---|
 | first after adding Anthropic | Anthropic, Groq, OpenAI | unmeasured targets go first so they get a sample |
-| once Anthropic measures 2.1 s | Groq, OpenAI, Anthropic | ascending median |
+| once Anthropic measures 0.9 s | Groq, OpenAI, Anthropic | ascending median — about nine requests in ten |
+| about one request in ten | OpenAI or Anthropic first | bounded exploration, so a runner-up that got faster is re-measured |
 | Groq returns `503` | OpenAI answers it | failover-safe failure, next in order |
 | Groq returns `422` | the client gets the `422` | the request was the problem |
+| no request for six minutes | all three unmeasured again | samples expire after five minutes |
 | after a restart | all three unmeasured again | samples live in memory only |
 
 ## Behaviour
 
-`least-latency` is a **pool mode**: after a failover-safe failure (a transport failure, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, an open circuit, or a full concurrency queue) the pipeline advances to the next candidate in the ordered list rather than reporting the failure back to the caller; any other `4xx` is returned to the client. `targets[].retry` still governs how many times any one target is retried before the pipeline moves on.
+`least-latency` is a **pool mode**: after a failover-safe failure (a transport failure, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, a provider's own context-length overflow, an open circuit, or a full concurrency queue) the pipeline advances to the next candidate in the ordered list rather than reporting the failure back to the caller; any other `4xx` is returned to the client. `targets[].retry` still governs how many times any one target is retried before the pipeline moves on.
 
-On each request, `LeastLatency.SelectTargets` (`internal/strategies/leastlatency.go`) filters `targets[]` down to those whose provider is registered and whose `SupportsModel(req.Model)` returns true, then splits them by whether the in-process `latency.Tracker` holds any samples for that target. Targets with **no recorded samples are shuffled to the front** — cold-start profiling, so a newly added target gets tried rather than starved by an established leader — followed by sampled targets sorted **ascending by p50**, followed by any remaining declared targets. The pipeline commits to the head of that order first; the rest stand in as substitutes before committing (an open circuit, for example) and, because this is a pool mode, as the next attempt if the head fails. `SelectTargets` returns `nil` (the caller reports 404 `model_not_found`) when no configured target serves the requested model.
+On each request, `LeastLatency.SelectTargets` (`internal/strategies/leastlatency.go`) filters `targets[]` down to those whose provider is registered and that serve the requested model, then looks up each one's samples for the **upstream model** — the `model_map` translation when the target has one — in the in-process latency tracker. Targets with **no live samples are shuffled to the front** — cold-start profiling, so a newly added target gets tried rather than starved by an established leader — followed by sampled targets sorted **ascending by p50**. Once every target is sampled, **one request in ten leads with a random sampled runner-up** instead of the leader, so the ranking keeps learning; without that, nothing but the leader's own samples ever changed and a sibling that recovered was never seen. `SelectTargets` returns `nil` (the caller reports 404 `model_not_found`) when no configured target serves the requested model.
 
-The sample the tracker records is **total wall-clock for the request**, not time-to-first-token and not provider health. Generation length dominates it: a provider that answers the same prompt at greater length reads as "slower" than a terse one on identical hardware, and a model whose replies are simply longer loses to a model whose replies are shorter regardless of service speed. That is the intended trade — wall-clock is what a caller actually waits for, so ranking on it optimizes the number the caller experiences. Do not read the ordering as a health claim; `/health`, `/readyz`, and the circuit-breaker metric answer that question instead.
+The sample is the time a target took to **begin** answering: for a streamed request, until its first chunk; for a unary request, until the response returned, since it arrives whole. It is not the time to finish, so a model whose replies are long does not read as a slow provider. Samples are keyed by target *and* upstream model, so two models mapped onto one target rank on their own numbers, and every sample **expires after five minutes**: a target nothing has measured recently is treated as unseen and profiled again rather than ranked on a number from before an incident. A window holds the last 100 samples per target and model. Do not read the ordering as a health claim; `/health`, `/readyz`, and the circuit-breaker metric answer that question instead.
 
 ## Config keys
 
@@ -13893,7 +14072,7 @@ The sample the tracker records is **total wall-clock for the request**, not time
 |---|---|---|---|
 | `strategy.mode` | string | — | Set to `least-latency` (note the hyphen). |
 
-There are no other strategy-level keys for this mode — the latency tracker is internal process state, not configurable, and `weight` on `targets[]` is ignored.
+There are no other strategy-level keys for this mode — the sample window (100), the sample TTL (five minutes) and the exploration share (one in ten) are fixed, the tracker is internal process state, and `weight` on `targets[]` is ignored.
 
 ## Minimal working YAML
 
@@ -13909,16 +14088,17 @@ targets:
 
 ## When to use
 
-- Total response time is the objective, and the configured targets serve equivalent or interchangeable models across providers.
+- Time to first token is the objective, and the configured targets serve equivalent or interchangeable models across providers.
 - You want the gateway to steer traffic toward whichever provider is currently answering fastest, without hand-tuning weights or a declared priority order.
 
 ## Gotchas
 
-- **Measures wall-clock, not health or TTFT.** The ranking reflects how long a full response took, generation length included — it is not a claim about provider uptime or how fast the first token arrived. Use `/health`, `/readyz`, and the circuit-breaker metric to answer health questions.
-- **Unseen targets jump the queue by design.** A target with no recorded samples is shuffled to the front ahead of every sampled target, so adding a new target to the pool means it briefly absorbs traffic while it's profiled — this is intentional cold-start behaviour, not a bug.
-- **Samples reset with the process.** The tracker is in-memory only; a restart, redeploy, or rolling update wipes all latency history, so every target starts "unseen" again and cold-start shuffling kicks back in.
-- **`weight` is ignored.** `targets[].weight` has no effect under this mode — it is read only by `loadbalance`.
-- **This is a pool mode.** The pipeline advances past an open-circuit target, or one that failed in a failover-safe way, to the next one in p50 order; any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the client. Failover falls out of the mode family, not out of anything latency-specific.
+- **Measures time to first byte, not health.** A stream's sample ends at its first chunk and a unary call's at its response, so the ranking says how quickly a provider starts, not how long it takes to finish and not whether it is up. Use `/health`, `/readyz`, and the circuit-breaker metric for health questions.
+- **Unseen targets jump the queue by design.** A target with no live samples for the model is shuffled to the front ahead of every sampled target, so adding a new target to the pool means it briefly absorbs traffic while it's profiled — this is intentional cold-start behaviour, not a bug.
+- **About one request in ten goes to a runner-up.** The leader takes the large majority, not everything. A dashboard that expects 100 % on the fastest provider is reading the exploration share.
+- **Samples expire and reset with the process.** A target with no sample newer than five minutes reads as unseen again; a restart, redeploy, or rolling update wipes all history. Neither is shared between gateway instances.
+- **`weight` is ignored.** `targets[].weight` has no effect under this mode — it is read by `loadbalance` and, for equal-cost ties, `cost-optimized`.
+- **This is a pool mode.** The pipeline advances past an open-circuit or parked target, or one that failed in a failover-safe way, to the next one in p50 order; any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the client. Failover falls out of the mode family, not out of anything latency-specific.
 - **Only model-compatible targets are eligible.** A target whose provider isn't registered, or that doesn't serve the requested model, is filtered out before latency ordering is applied.
 
 ## Related
@@ -13964,7 +14144,21 @@ On each request, `LoadBalance.SelectTargets` (`internal/strategies/loadbalance.g
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `strategy.mode` | string | — | Set to `loadbalance`. |
-| `targets[].weight` | float64 | `0` if omitted (YAML `omitempty`) | This target's relative share of traffic. Ignored by every other routing mode. `0` means the target receives zero traffic — it can never be the rotation's start index. |
+| `targets[].weight` | float64 | `0` if omitted (YAML `omitempty`) | This target's relative share of traffic. Read here and, for equal-cost ties, by `cost-optimized`; ignored by every other mode. `0` means the target receives zero traffic — it can never be the rotation's start index. |
+| `strategy.sticky.on` | string | — | Set to `user` to pin each request to the same start target for the same `user` field: a stateless hash, so a conversation keeps its provider prompt cache without any shared state, and every replica with this config answers the same. A request with no `user` draws at random. |
+| `strategy.sticky.ttl` | duration | none | Rotates pins: a `user` stays pinned for at most one window (`"1h"`), after which it may hash to another target. |
+
+### Sticky sessions
+
+```yaml
+strategy:
+  mode: loadbalance
+  sticky:
+    on: user     # the request's `user` field
+    ttl: 1h      # optional; a pin lasts at most one window
+```
+
+With `sticky`, every request carrying the same `user` starts on the same target, so a multi-turn conversation keeps hitting the provider that holds its prompt cache. The pin is a hash of the user, not a table: nothing is stored, nothing is shared between gateway replicas, and a request without a `user` is a normal weighted draw. `sticky` also applies on embeddings and image requests, which carry the field.
 
 ## Minimal working YAML
 
@@ -14008,6 +14202,7 @@ Every response still says `"model": "smart"`. See [One model name, different ups
 - **An all-zero or negative weight set is rejected at load.** `ferrogw validate` (and gateway startup) reject a negative weight outright and reject a config where every target's weight sums to zero — but one *forgotten* weight on an otherwise-valid config passes validation and silently drains just that target.
 - **This is a pool mode.** The pipeline advances past an open-circuit target, or one that failed in a failover-safe way, to the next one in the rotated order; any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the client. A `loadbalance` config gets failover "for free" as a side effect of the mode family, not because of anything weight-specific.
 - **Only model-compatible targets are eligible.** A target whose provider isn't registered, or that doesn't serve the requested model, is filtered out before weighting is applied — it never wins the draw regardless of its configured weight.
+- **Sticky hashing changes the draw, not the pool.** `sticky: { on: user }` maps each `user` into the same weight-proportional draw every time, so a pinned user still lands on a target in proportion to the weights; changing weights or the target set re-maps a share of users. A `weight: 0` target is never pinned to.
 - Selection uses `math/rand`, deliberately — this is a load-shaping decision, not a security-sensitive one.
 
 ## Related
@@ -14026,10 +14221,10 @@ Every response still says `"model": "smart"`. See [One model name, different ups
 Source: https://docs.ferrolabs.ai/routing/overview/
 ================================================================================
 
-Routing is how the Ferro Labs AI Gateway decides which provider answers a request. One **strategy** governs the whole gateway: it takes each request and returns an ordered list of **targets** to try. A strategy decides *order* and nothing else — retry, circuit breaking, failure classification and capability checks all live once in the request pipeline, so chat, streaming, embeddings and image generation route identically. Ferro Labs ships eight strategies across two families.
+Routing is how the Ferro Labs AI Gateway decides which provider answers a request. One **strategy** governs the whole gateway: it takes each request and returns an ordered list of **targets** to try. A strategy decides *order* and nothing else — retry, circuit breaking, failure classification and capability checks all live once in the request pipeline, so chat, streaming, embeddings, images, rerank, moderation, transcription and speech route identically: the same config and the same health produce the same candidate order on every surface. Ferro Labs ships eight strategies across two families.
 
 :::tip In plain words
-You tell the gateway which providers it may use (`targets`) and one rule for choosing between them (`strategy.mode`). A request arrives asking for a model; the gateway works out which of your providers can serve it, tries them in the order the rule gives, and returns one answer. What happens when a provider fails depends on *why* it was chosen: picked as one of several interchangeable options, the request quietly moves on to the next; named on purpose, its failure is your answer.
+You tell the gateway which providers it may use (`targets`) and one rule for choosing between them (`strategy.mode`). A request arrives asking for a model; the gateway works out which of your providers can serve it, tries them in the order the rule gives, and returns one answer. What happens when a provider fails depends on *why* it was chosen: picked as one of several interchangeable options, the request quietly moves on to the next; named on purpose, the request stays inside what was named — a rule can name an ordered chain of stand-ins, and never reaches past it. Every answer says which provider, target and model served it, and how many attempts that took.
 :::
 
 ## Which one do I pick?
@@ -14047,9 +14242,9 @@ You tell the gateway which providers it may use (`targets`) and one rule for cho
 
 ## What a strategy is
 
-A strategy implements a single method, `SelectTargets(req)`, which returns the ordered virtual keys it would try for a request, most-preferred first, followed by the remaining configured targets. That ordering is the whole of its job.
+A strategy implements a single method, `SelectTargets(req)`, which returns exactly the ordered virtual keys the pipeline may try for a request, most-preferred first — a pool mode's whole pool, a rule's chain, `single`'s one target. That ordering is the whole of its job.
 
-This follows Envoy's split: the route table and load balancer say *where* a request may go, while the retry policy hangs off the route and the circuit breaker off the cluster. In the gateway, the strategy names order; the pipeline (`routeTargets`) owns retry, the circuit breaker, the concurrency limiter, failure classification and "nothing here can serve this". Stating order once and executing it once is why a config orders its targets the same way whether the request streams or not.
+This follows Envoy's split: the route table and load balancer say *where* a request may go, while the retry policy hangs off the route and the circuit breaker off the cluster. In the gateway, the strategy names order; the pipeline (`routeTargets`) owns retry, the circuit breaker, the concurrency limiter, failure classification and "nothing here can serve this". Stating order once and executing it once is why a config orders its targets the same way whether the request streams or not, and the same way on embeddings or speech as on chat: a target that cannot serve a surface is simply not a candidate there.
 
 - A **nil** result means no configured target serves the requested model — the caller reports `404 model_not_found`.
 - Only `cost-optimized` (in `skip` mode) can return an error; every other strategy returns a nil error.
@@ -14070,7 +14265,11 @@ targets:
   - virtual_key: anthropic
 ```
 
-Mode-specific keys live under `strategy:` alongside `mode`: `conditions[]` (conditional), `content_conditions[]` (content-based), `ab_variants[]` (ab-test) and `unpriced_strategy` (cost-optimized). Each is documented on that strategy's own page.
+Mode-specific keys live under `strategy:` alongside `mode`: `conditions[]` (conditional), `content_conditions[]` (content-based), `ab_variants[]` (ab-test), `unpriced_strategy` (cost-optimized) and `sticky` (loadbalance and ab-test). Each is documented on that strategy's own page. One key applies to every pool mode and rule chain:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `strategy.failover_on_status_codes` | []int | — | Extra upstream statuses that count as failover-safe, so the walk moves to the next candidate on them. `400`, `401`, `403`, `404` and `422` cannot be listed — a bad request, a bad key or a missing model is the request's problem on every target — and the request's own cancellation or deadline always stops routing. |
 
 :::info `targets` is an allowlist
 Setting a provider's credentials registers it, but a provider only routes if it appears in `targets[]`. A request for a model no listed target serves is `404 model_not_found`, even when a registered-but-unlisted provider could have served it. To stop routing to a provider, remove its target.
@@ -14083,9 +14282,10 @@ Every entry names one provider registration and optionally attaches per-target r
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `virtual_key` | string | — (required) | Names a provider registration, typically the provider id. `ferrogw validate` rejects a key no built-in provider matches. |
-| `weight` | float64 | `0` | Relative share under `loadbalance` **only**; ignored by every other mode. `0` means zero traffic — the drain lever. |
+| `weight` | float64 | `0` | Relative share under `loadbalance`, and the tie-break among equal-cost targets under `cost-optimized`; ignored by every other mode. `0` means zero traffic — the drain lever. |
 | `models` | []string | — | Extra exact model IDs this target serves, added to the routing index and `/v1/models`. **Additive only** (never hides what a target already serves), **no wildcards** (rejected at load). |
 | `model_map` | map | — | Per-target translation of a name clients use into this target's upstream model ID (`smart: gpt-4o-mini`). The visible name routes to this target and appears in `/v1/models`; the upstream call and pricing use the mapped ID; the response says the visible name. See [One model name, different upstream IDs](#one-model-name-different-upstream-ids). |
+| `timeout` | duration | none | Bound on **one** attempt against this target, inside `request_timeout` (which stays authoritative for the whole request). A unary attempt is bounded through its response; a streaming attempt only until the provider answers, since a stream that has begun cannot be replayed elsewhere. An attempt that times out is failover-safe, so a hung primary no longer consumes the whole request budget. |
 | `retry` | object | single attempt | Per-target retry policy. Applies under **every** mode — see below. |
 | `circuit_breaker` | object | none | Per-target breaker. One per `virtual_key`, shared by all four surfaces. |
 | `concurrency` | object | unlimited | In-flight bound with a queue; overflow fails fast with `429`. |
@@ -14142,9 +14342,9 @@ The pipeline splits the modes by what their leading candidate *means*, and that 
 | Family | Modes | On a target failure |
 |---|---|---|
 | **Pool** | `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test` | Advances to the next candidate after a **failover-safe** failure; any other failure is returned. |
-| **Named** | `single`, `conditional`, `content-based` | Commits to the chosen target and reports its failure. |
+| **Named** | `single`, `conditional`, `content-based` | Stays inside what was named: `single` stops; a rule walks its `target_keys` chain on the same failover-safe failures and stops at its end. |
 
-A **pool** mode picks its head for a reason that is about the pool rather than the individual target — spread the load, take the cheapest, take the fastest, split the traffic — from targets the operator declared interchangeable, so carrying a failed request to a sibling is what was asked for. A **named** mode picks its head because something named that target specifically (`single` names it; a `conditional` or `content-based` rule matched it), so serving from anyone else would demote the rule to a suggestion.
+A **pool** mode picks its head for a reason that is about the pool rather than the individual target — spread the load, take the cheapest, take the fastest, split the traffic — from targets the operator declared interchangeable, so carrying a failed request to a sibling is what was asked for. A **named** mode picks its head because something named that target specifically (`single` names it; a `conditional` or `content-based` rule matched it), so serving from anyone the rule did not name would demote the rule to a suggestion. A rule may name an ordered chain (`target_keys`); the chain is walked like a pool and is a hard boundary — a rule with one target is exact, and that target being down is the corresponding error, not a sibling's answer.
 
 ### Which failures fail over
 
@@ -14155,19 +14355,21 @@ The gateway moves a request to another target only when the *provider* was the p
 | could not be reached | connection refused, DNS failure, connection reset | next target |
 | did not answer in time | no response headers before the provider transport's timeout | next target |
 | asked you to back off, or was unavailable | `408`, `429`, `502`, `503`, any `5xx` | next target |
-| is already being avoided | circuit breaker open, concurrency queue full | next target |
+| is already being avoided | circuit breaker open, parked after a `429`, concurrency queue full | next target |
+| said the prompt is too long for its model | the OpenAI-compatible `context_length_exceeded` code, Anthropic's `prompt is too long`, Gemini's token-count `INVALID_ARGUMENT` | next target — its model may have a larger window |
+| answered a status you listed | any code in `strategy.failover_on_status_codes` | next target |
 | rejected the request itself | `400`, `401`, `403`, `404`, `422` | **that response goes back to the client** |
 | — the client gave up | the caller cancelled, or its deadline passed | routing stops |
 
-Retry (below) re-asks the same target first for a transport failure or a retryable status; a hung attempt, an open circuit and a full queue are never retried and advance at once. Under a named mode the chosen target's result — after its own `retry` — is always the answer.
+Retry (below) re-asks the same target first for a transport failure or a retryable status; a hung attempt, an open circuit and a full queue are never retried and advance at once. Under `single` the one target's result — after its own `retry` — is always the answer; under a rule, the chain is walked on exactly these classes and the last member's result is the answer.
 
 ```mermaid
 flowchart LR
     A[Attempt at target N fails] --> B{Client cancelled or<br/>deadline passed?}
     B -- yes --> S[Return the failure]
-    B -- no --> C{Provider problem?<br/>unreachable, timed out, 408/429/5xx,<br/>circuit open, saturated}
+    B -- no --> C{Provider problem?<br/>unreachable, timed out, 408/429/5xx,<br/>context-length overflow, circuit open,<br/>parked after 429, saturated}
     C -- no --> S
-    C -- yes --> D{Pool mode?}
+    C -- yes --> D{Another candidate<br/>in the pool or chain?}
     D -- no --> S
     D -- yes --> E[Try target N+1]
 ```
@@ -14177,10 +14379,23 @@ flowchart LR
 Regardless of family:
 
 - **Retry re-asks the same target.** `targets[].retry` is honoured under every mode. It never advances to a different target — only pool modes do that, and only after a failover-safe failure.
-- **An open circuit is skipped.** Before committing, a target whose breaker is open (or that cannot serve the request's surface at all) is passed over in favour of the next candidate — even under the named modes, where the operator named one target on purpose.
+- **An open circuit is skipped, among the candidates the mode offers.** Before committing, a target whose breaker is open is passed over in favour of the next candidate — a pool's next sibling, or a rule's next chain member. `single` and a rule with one target offer no next candidate, so an open circuit there is answered `503`.
+- **A `429` parks the target.** A target that answers `429` is skipped for its `Retry-After` — five seconds when the header is missing or unusable, a minute at most — so the next request does not pay another `429` on it. The park filters like an open circuit and never refuses a request outright; the target's circuit breaker is untouched, since a rate limit is not a failure of the target.
+- **Every answer is attributed.** Every routed surface responds with `X-Gateway-Provider`, `X-Gateway-Target`, `X-Gateway-Model` and `X-Gateway-Attempts` — the canonical provider, the `virtual_key` as you wrote it, the upstream model after `model_map`, and the number of routing-layer attempts. A stream carries them before its first chunk. See [Endpoints](/api-reference/endpoints#attribution-headers).
+- **Health is per process.** Circuit state, latency samples and `429` parks are local to one gateway instance; nothing is shared between replicas.
 - **All circuits open → `503`.** When every candidate's circuit is open the request is still attempted, the breaker refuses it, and the caller gets `503 upstream_unavailable`. That is deliberately different from `404`: "everything that serves this model is down" is not the same answer as "nothing serves this model".
 - **No candidate serves the model → `404`.** When no configured target serves the requested model, nothing is attempted and the caller gets `404 model_not_found`.
 - **The response names the model the client asked for.** `model` in the response, and in every streamed chunk, is the requested name after alias resolution — even when `model_map` sent a different ID upstream, and whichever target answered.
+
+## v1.5.2 behaviour changes
+
+Five things an operator may notice after upgrading from 1.5.1:
+
+- **A rule that names one target is exact.** Under `conditional` and `content-based`, an open circuit on the matched target used to borrow a healthy sibling from `targets[]`; it now answers `503`. A rule that wants a stand-in lists one in `target_keys`. On the non-chat surfaces, where content rules cannot be evaluated, `content-based` routes to the first target that can serve the request, alone.
+- **Cost ranking prices output too.** `cost-optimized` scores input plus output — the request's `max_tokens` / `max_completion_tokens`, or 256 tokens — so a target that is cheap to read and expensive to write no longer wins a request with a large completion budget. Embedding, image and audio models that tied at zero now rank by their real catalog rate, and equal-cost targets draw by `weight`.
+- **Latency samples expire, key by model, and keep exploring.** A target nothing has measured in five minutes is profiled again; one request in ten leads with a runner-up; a stream's sample is its time to first chunk rather than its whole drain.
+- **One ranker for every surface.** Embeddings, images, rerank, moderation, transcription and speech previously ranked through a second implementation that drew load-balance starts from a different random source, kept unseen least-latency targets in declared order, and priced cost candidates differently. The same config now orders the same targets the same way everywhere.
+- **Unlabelled A/B variants no longer load.** An `ab_variants[]` entry needs a `label`; attribution keys on it. A `single` strategy with more than one target logs a warning naming the unused targets.
 
 ## v1.5.1 behaviour changes
 
@@ -14204,9 +14419,9 @@ Two routing behaviours changed and may need config edits when upgrading:
 | [Single](/routing/single) | Named | You have one provider and want the gateway as a pure governance and observability layer. |
 | [Fallback](/routing/fallback) | Pool | A primary plus backups, where a failed request should be answered by someone else rather than reported. |
 | [Load balance](/routing/loadbalance) | Pool | Spreading load across interchangeable providers, weight-shifted migration, or draining one (`weight: 0`) before removal. |
-| [Least-latency](/routing/least-latency) | Pool | Total response time is the objective across equivalent models on several providers. |
+| [Least-latency](/routing/least-latency) | Pool | Time to first token is the objective across equivalent models on several providers. |
 | [Cost-optimized](/routing/cost-optimized) | Pool | Cost is the objective and the model catalog carries the prices. |
-| [Conditional](/routing/conditional) | Named | Deterministic model→provider pinning, e.g. for compliance or contract reasons. |
+| [Conditional](/routing/conditional) | Named | Deterministic pinning by model, user, streaming, tool use or a metadata header, with an optional target chain — e.g. for compliance or contract reasons. |
 | [Content-based](/routing/content-based) | Named | Prompt-aware selection: code to a code model, translation to a cheap one, sensitive content to a specific backend. |
 | [A/B test](/routing/ab-test) | Pool | Comparing model quality or cost on a controlled live traffic split. |
 
@@ -14246,7 +14461,7 @@ With `targets: [openai]` and `retry.attempts: 3`:
 
 `single` is a **named mode** — the opposite of a pool mode like `fallback` or `loadbalance`. `Single.SelectTargets` (`internal/strategies/single.go`) returns a one-element slice built once at construction, `[]string{targets[0].VirtualKey}`. It never looks at the request, never checks which model was asked for, and never sees `targets[1:]` at all — `buildStrategy` (`gateway_strategy.go`) constructs `Single` from `targets[0]` alone, so any additional entries in `targets[]` are configured but structurally invisible to this strategy. There is no failover: a failure at `targets[0]` — after `targets[].retry` exhausts its attempts against that same target — is the answer the caller gets.
 
-An open circuit breaker on `targets[0]` behaves differently here than under a pool mode, and it's worth being precise about it. The pipeline's open-circuit filter (`healthyKeys`, `gateway_pipeline.go`) only filters when the strategy handed it **more than one** candidate to choose from — with a single-element list, it returns that element unfiltered, open or not. So under `single`, an open circuit does not divert traffic anywhere: the request is still attempted, the circuit breaker itself refuses the call, and the gateway answers `503 upstream_unavailable`. That's a different outcome from `fallback`/`conditional`/`content-based`, where an open circuit on the lead target *is* passed over in favor of a healthy one in the same `targets[]` list — `single` has no such list to fall back into.
+An open circuit breaker on `targets[0]` behaves differently here than under a pool mode, and it's worth being precise about it. The pipeline's open-circuit filter (`healthyKeys`, `gateway_pipeline.go`) only filters when the strategy handed it **more than one** candidate to choose from — with a single-element list, it returns that element unfiltered, open or not. So under `single`, an open circuit does not divert traffic anywhere: the request is still attempted, the circuit breaker itself refuses the call, and the gateway answers `503 upstream_unavailable`. That's a different outcome from `fallback`, where an open circuit on the lead target *is* passed over in favor of the next one in `targets[]` — `single` has no such list to fall back into. A `conditional` or `content-based` rule with one target behaves exactly like `single` here; a rule with a `target_keys` chain moves on to the next chain member.
 
 ## Config keys
 
@@ -14280,7 +14495,7 @@ targets:
 
 ## Gotchas
 
-- **Only `targets[0]` counts.** A second, third, or further entry in `targets[]` is accepted by `ferrogw validate` but is never selected, never health-checked by the strategy, and never receives traffic. If you meant to fail over to it, use `mode: fallback` instead.
+- **Only `targets[0]` counts.** A second, third, or further entry in `targets[]` is accepted by `ferrogw validate` — with a startup warning naming the unused targets since v1.5.2 — but is never selected, never health-checked by the strategy, and never receives traffic. If you meant to fail over to it, use `mode: fallback` instead.
 - **Readiness doesn't know that either.** `/readyz` and startup logging check whether each *configured* target's provider is registered, not which one `single` would actually pick — so a config with a broken `targets[0]` and a perfectly healthy `targets[1]` still reports `200 ready`. Put the target you mean to use first.
 - **No failover, by design.** A failure at `targets[0]` — once `retry.attempts` is exhausted — is the response the caller gets. Add `retry` to absorb transient errors against that one target; switch strategies if a hard outage should move traffic elsewhere.
 - **An open circuit doesn't skip the target — it fails the request.** Because `SelectTargets` always returns exactly one key, the pipeline's open-circuit filter has nothing to filter between and never fires. The call is attempted anyway, the breaker refuses it, and the caller gets `503 upstream_unavailable` — even if another configured target could serve the model. This is easy to assume works like `fallback`'s circuit handling; it doesn't.
