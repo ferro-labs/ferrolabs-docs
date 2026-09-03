@@ -1,13 +1,13 @@
 ---
 title: Cost-optimized routing strategy
-description: "Configure strategy.mode: cost-optimized in Ferro Labs AI Gateway to route to the cheapest priced target by estimated input cost, using unpriced_strategy."
+description: "Configure strategy.mode: cost-optimized in Ferro Labs AI Gateway to route to the cheapest priced target by estimated input plus output cost, using unpriced_strategy."
 keywords: [cost-optimized routing, AI gateway cost routing, LLM cost optimization, unpriced_strategy, cheapest model routing, model catalog pricing, ai-gateway strategy.mode]
 ---
 
-Cost-optimized routes each request to the cheapest model-compatible target, ranked by **estimated input cost** from the built-in model catalog. It optimizes for **spend** — not failover order (`fallback`), distribution (`loadbalance`), or latency (`least-latency`). Set `strategy.mode: cost-optimized` to use it.
+Cost-optimized routes each request to the cheapest model-compatible target, ranked by **estimated input plus output cost** from the built-in model catalog. It optimizes for **spend** — not failover order (`fallback`), distribution (`loadbalance`), or latency (`least-latency`). Set `strategy.mode: cost-optimized` to use it.
 
 :::tip In plain words
-Each request goes to the cheapest provider that serves the model, using the built-in price list and a rough guess at how many tokens the prompt is. If the cheapest one is unreachable, times out or is overloaded, the next-cheapest takes over. A provider with no known price is used last (the default), skipped, or treated as free — your choice.
+Each request goes to the cheapest provider that serves the model, using the built-in price list, a rough guess at how many tokens the prompt is, and the completion budget the request asked for. If the cheapest one is unreachable, times out or is overloaded, the next-cheapest takes over; two providers that cost the same share the traffic by `weight`. A provider with no known price is used last (the default), skipped, or treated as free — your choice.
 :::
 
 ## What happens to a request
@@ -38,7 +38,7 @@ targets:
 
 `cost-optimized` is a **pool mode**: after a failover-safe failure (a transport failure, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, an open circuit, or a full concurrency queue) the pipeline advances to the next candidate in the ranked order rather than reporting the failure back to the caller; any other `4xx` is returned to the client. `targets[].retry` still governs how many times any one target is retried before the pipeline moves on.
 
-On each request, `CostOptimized.SelectTargets` (`internal/strategies/costoptimized.go`) filters `targets[]` down to those whose provider is registered and whose `SupportsModel(req.Model)` returns true, then estimates the prompt token count at roughly **4 characters per token** (a routing heuristic, not a billing figure) and prices each compatible target's upstream model — the `model_map` translation when the target has one, otherwise the requested model — through the model catalog. Candidates are ranked by ascending estimated input cost — the cheapest target leads. `strategy.unpriced_strategy` decides which cataloged-but-unpriced candidates are allowed to rank at all (see below). Candidates the catalog doesn't recognize as that model (`ModelFound: false`) never rank, regardless of `unpriced_strategy`.
+On each request, `CostOptimized.SelectTargets` (`internal/strategies/costoptimized.go`) filters `targets[]` down to those whose provider is registered and whose `SupportsModel(req.Model)` returns true, then estimates the prompt at roughly **4 characters per token** and the completion at the request's `max_tokens` / `max_completion_tokens` (or **256 tokens** when it sets none) — a routing heuristic, not a billing figure — and prices each compatible target's upstream model — the `model_map` translation when the target has one, otherwise the requested model — through the model catalog at the rate for that model's mode: input plus output for chat, per token for embeddings, per image, per minute or character for audio. Candidates are ranked by ascending estimated cost — the cheapest target leads — and a run of equal-cost candidates leads with one drawn by `targets[].weight` (equally when no weight is set), since declaration order is not a contract. `strategy.unpriced_strategy` decides which cataloged-but-unpriced candidates are allowed to rank at all (see below). Candidates the catalog doesn't recognize as that model (`ModelFound: false`) never rank, regardless of `unpriced_strategy`.
 
 ## Config keys
 
@@ -46,6 +46,7 @@ On each request, `CostOptimized.SelectTargets` (`internal/strategies/costoptimiz
 |---|---|---|---|
 | `strategy.mode` | string | — | Set to `cost-optimized`. |
 | `strategy.unpriced_strategy` | string | `fallback` | `fallback` \| `skip` \| `allow`. Governs how compatible targets the catalog knows about but has no price for are treated during ranking. |
+| `targets[].weight` | float64 | `0` | Breaks ties between equal-cost candidates; unset or zero everywhere means an equal draw. A negative weight is rejected at load. |
 
 ### `unpriced_strategy` in detail
 
@@ -78,7 +79,8 @@ targets:
 
 ## Gotchas
 
-- **Input cost only, and estimated.** Ranking uses only prompt/input tokens, priced from the catalog's per-1M-input-token field, estimated at ~4 characters per token. Output pricing is never considered, so a target that's cheap on input but expensive on output can still be picked. Do not read the ranking as a billing-accurate number — it's a routing heuristic.
+- **Estimated, not billed.** The prompt is counted at ~4 characters per token and the completion at the request's own ceiling or 256 tokens, so the score is a comparison of list prices for a typical request, not a billing-accurate number. Before v1.5.2 only input price counted, so a target cheap to read and expensive to write could win a request with a large completion budget; it no longer does.
+- **The same order on every surface.** An embeddings, image or audio request is priced at the catalog's rate for that model's mode, so those models no longer tie at zero and fall to declared order.
 - **`allow` makes unpriced look free.** Under `unpriced_strategy: allow`, any compatible target the catalog has no price for is treated as `$0` and wins the draw over every priced target, every time. This is useful for a self-hosted/local target you always want preferred, but a surprise for one you didn't intend to be prioritized.
 - **`skip` narrows what `/v1/models` advertises.** Under `unpriced_strategy: skip`, targets with no catalog price are excluded from ranking entirely; if a request's model has no priced target, the request errors rather than falling through. `targets[].models` entries are unpriced by construction (they're operator-declared, not catalog data), so they're excluded here too.
 - **Default (`fallback`) only reaches unpriced targets as a last resort.** A self-hosted or otherwise-unpriced target under the default strategy is used only when **no** compatible target in `targets[]` has any catalog price at all — not merely when it's cheaper.

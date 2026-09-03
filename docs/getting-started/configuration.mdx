@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: "Complete v1.4.x config reference for the Ferro Labs AI Gateway — targets, retry, circuit breakers, all 8 routing strategies, plugins, and MCP servers."
+description: "Complete v1.5.x config reference for the Ferro Labs AI Gateway — targets, timeouts, retry, circuit breakers, all 8 routing strategies, plugins, and MCP servers."
 keywords: [AI gateway configuration, config.yaml, LLM routing config, targets concurrency, compatibility on_unsupported_param, MCP servers config, observability tracing config, budget plugin config]
 ---
 
@@ -11,7 +11,7 @@ import Head from '@docusaurus/Head';
     "@context": "https://schema.org",
     "@type": "TechArticle",
     "headline": "Ferro Labs AI Gateway Configuration Reference",
-    "description": "Complete v1.4.x config reference for the Ferro Labs AI Gateway — targets, retry, circuit breakers, all 8 routing strategies, plugins, and MCP servers.",
+    "description": "Complete v1.5.x config reference for the Ferro Labs AI Gateway — targets, timeouts, retry, circuit breakers, all 8 routing strategies, plugins, and MCP servers.",
     "url": "https://docs.ferrolabs.ai/getting-started/configuration/"
   })}</script>
 </Head>
@@ -60,17 +60,19 @@ strategy:
 | `single` | Named | Route every request to `targets[0]` only. |
 | `fallback` | Pool | Try targets in declared order; advance to the next after a failover-safe failure. |
 | `loadbalance` | Pool | Weighted random distribution across targets (`targets[].weight`). |
-| `conditional` | Named | Match a request field (`model` or `model_prefix`) to a target; first match wins. |
-| `least-latency` | Pool | Route to the compatible target with the lowest observed p50 wall-clock latency. |
-| `cost-optimized` | Pool | Estimate prompt cost from the model catalog and pick the cheapest compatible target. |
+| `conditional` | Named | Match a request field (`model`, `model_prefix`, `user`, `stream`, `has_tools`, or a `metadata` header entry) to a target or an ordered `target_keys` chain; first match wins. |
+| `least-latency` | Pool | Route to the compatible target with the lowest observed p50 time to first byte for the upstream model; samples expire and one request in ten explores a runner-up. |
+| `cost-optimized` | Pool | Estimate input plus output cost from the model catalog and pick the cheapest compatible target; equal-cost targets draw by `weight`. |
 | `content-based` | Named | Route on user-message content by substring or regex; first match wins. |
 | `ab-test` | Pool | Split traffic across labeled, weighted variants for comparison testing. |
 
-The mode families matter for failure handling: a **pool** mode (`fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test`) advances the request pipeline to the next candidate target when one fails in a failover-safe way — a transport error, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, an open circuit, or saturation; any other `4xx` is returned to the client, and the request's own cancellation or deadline stops routing. A **named** mode (`single`, `conditional`, `content-based`) commits to the target it picked and reports that target's failure — it does not fail over to a sibling target just because one exists.
+The mode families matter for failure handling: a **pool** mode (`fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test`) advances the request pipeline to the next candidate target when one fails in a failover-safe way — a transport error, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, an open circuit, or saturation; any other `4xx` is returned to the client, and the request's own cancellation or deadline stops routing. A **named** mode (`single`, `conditional`, `content-based`) stays inside what was named: `single` reports its one target's failure, and a rule walks its `target_keys` chain on the same failover-safe failures and stops at its end — it never reaches a target the rule did not name. `strategy.failover_on_status_codes` adds upstream statuses to the failover-safe set (never `400`, `401`, `403`, `404` or `422`).
 
 Two rules hold under **every** mode, named or pool:
 - `targets[].retry` is honored regardless of mode — it re-asks the *same* target the number of configured times. Whether a *different* target is asked afterward is the mode's decision alone.
-- A target whose circuit breaker is open is skipped when the routable set is chosen. When every candidate target's circuit is open, the request is still attempted and answered `503` — that's a different signal from `404 model_not_found` ("nothing serves this model" vs. "everything that could serve it is currently down").
+- A target whose circuit breaker is open, or that is parked after answering `429` (for its `Retry-After`, a minute at most), is skipped among the candidates the mode offers. When every candidate is open or parked, the request is still attempted and answered `503` — that's a different signal from `404 model_not_found` ("nothing serves this model" vs. "everything that could serve it is currently down"). A rule with one target offers no other candidate, so an open circuit there is `503`.
+- `targets[].timeout` bounds one attempt against a target inside `request_timeout`; a timed-out attempt is failover-safe.
+- Every routed response carries `X-Gateway-Provider`, `X-Gateway-Target`, `X-Gateway-Model` and `X-Gateway-Attempts`.
 
 ### Conditional rules
 
@@ -89,9 +91,9 @@ targets:
   - virtual_key: anthropic
 ```
 
-`key` is one of `model` (exact match) or `model_prefix` (`strings.HasPrefix` match) — a closed set validated at load; anything else is a config error, not a silent no-op. `value` is what `key` is matched against, and `target_key` must name a configured `targets[].virtual_key`.
+`key` is one of `model` (exact match), `model_prefix` (prefix match), `user` (the request's `user` field), `stream` and `has_tools` (`"true"` / `"false"`), or `metadata` with `field` naming one entry of the `X-Gateway-Metadata` request header — a closed set validated at load; anything else is a config error, not a silent no-op. `value` is what `key` is matched against. A rule routes to `target_key` (one target) or `target_keys` (an ordered chain); exactly one is set, every entry must name a configured `targets[].virtual_key`, and none may repeat.
 
-Rules are evaluated in order; the first match wins and the request commits to that target — a request for a model the matched target doesn't actually serve is `404 model_not_found`, even when another configured target does serve it. Write another rule rather than relying on failover; `conditional` is a named mode. Unmatched requests fall to `targets[0]`.
+Rules are evaluated in order; the first match wins and the request stays inside the matched rule's chain — walking it on failover-safe failures and never reaching a target outside it. A request for a model the matched chain doesn't serve is `404 model_not_found`, even when another configured target does serve it; a one-target rule whose target's circuit is open is `503`. Write another rule, or add a chain member, rather than relying on failover. Unmatched requests fall to `targets[0]`. See [Conditional](/routing/conditional).
 
 ### Content-based routing
 
@@ -116,7 +118,19 @@ targets:
 
 Three condition types, evaluated over **user-role messages only** (system and assistant content is never inspected): `prompt_contains` (case-insensitive substring), `prompt_not_contains` (true when no user message contains the value — matches broadly, so ordering matters), and `prompt_regex` (Go regexp, compiled at startup — an invalid pattern is a startup error). First match wins and the request commits to that target; unmatched requests fall to `targets[0]`.
 
-`content-based` is a named mode, so a failure at the matched target is the request's answer, not a trigger to try another target.
+`content-based` is a named mode: a rule may name a `target_keys` chain, which is walked on failover-safe failures, and the request never reaches a target the rule did not name. On non-chat surfaces, which carry no messages, the request takes the first target that can serve it.
+
+### Sticky hashing
+
+```yaml
+strategy:
+  mode: loadbalance          # or ab-test
+  sticky:
+    on: user                 # the only supported key
+    ttl: 1h                  # optional; a pin lasts at most one window
+```
+
+Under `loadbalance` and `ab-test`, `sticky` pins each request to the same target — or variant — for the same `user` field, so a conversation keeps its provider prompt cache and a session does not flip variants. It is a stateless hash: no shared state, the same answer on every replica, a random draw for a request without `user`. Refused under any other mode.
 
 ### A/B test routing
 
@@ -163,7 +177,8 @@ targets:
 | Field | Type | Notes |
 |---|---|---|
 | `virtual_key` | string, required | Names a registered provider. |
-| `weight` | float64 | Relative share under `loadbalance` only. `0` drains the target. Negative or all-zero across the target set is a load error. |
+| `weight` | float64 | Relative share under `loadbalance`, and the tie-break among equal-cost targets under `cost-optimized`. `0` drains the target. Negative (any mode that reads it) or all-zero under `loadbalance` is a load error. |
+| `timeout` | duration | Bound on one attempt against this target (`"8s"`), inside `request_timeout`. A unary attempt is bounded through its response; a streaming attempt only until the provider answers. A timed-out attempt is failover-safe. Must be a positive Go duration. |
 | `models` | []string | Operator-declared model ids this target serves, in addition to whatever the catalog and live discovery already report. Exact ids only — wildcards are rejected at load. Purely additive: it never hides models the target already serves, and declaring one the catalog already knows is a harmless no-op. Advertised on `/v1/models`. |
 | `model_map` | map | Per-target translation of a name clients use into this target's upstream model id (`smart: gpt-4o-mini`). The visible name routes to this target and is listed in `/v1/models`; the upstream call and pricing use the mapped id; the response carries the visible name. Per target, unlike the global `aliases`. See [Routing](/routing#one-model-name-different-upstream-ids). |
 | `retry` | object | `attempts` (int, `1` = no retry), `on_status_codes` ([]int), `initial_backoff_ms` (int, default 100). Applies under **every** routing mode — it re-asks this one target; it does not by itself try a different target. |

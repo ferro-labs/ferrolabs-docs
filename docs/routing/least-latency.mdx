@@ -1,34 +1,36 @@
 ---
 title: Least-latency routing strategy
-description: "Configure strategy.mode: least-latency to route to the target with the lowest observed p50 latency, with cold-start shuffling for unseen targets."
-keywords: [least-latency routing, p50 latency routing, AI gateway latency-based routing, ai-gateway strategy.mode, cold-start profiling, latency tracker]
+description: "Configure strategy.mode: least-latency to route to the target with the lowest observed p50 time to first byte per model, with expiring samples and bounded exploration."
+keywords: [least-latency routing, p50 latency routing, AI gateway latency-based routing, ai-gateway strategy.mode, cold-start profiling, latency tracker, time to first chunk, exploration]
 ---
 
-Least-latency routes to the compatible target with the lowest observed **p50** latency. It optimizes for **total response time** across interchangeable providers — not for cost (`cost-optimized`), declared failover order (`fallback`), or an even traffic split (`loadbalance`). Set `strategy.mode: least-latency` to use it.
+Least-latency routes to the compatible target with the lowest observed **p50** latency for the request's upstream model. It optimizes for **how quickly a provider begins answering** across interchangeable providers — not for cost (`cost-optimized`), declared failover order (`fallback`), or an even traffic split (`loadbalance`). Set `strategy.mode: least-latency` to use it.
 
 :::tip In plain words
-Every completed request is timed, and each new request goes to the provider with the lowest median time so far. A provider nobody has timed yet is tried first so it gets measured. "Time" is the whole response, so a model that writes longer answers looks slower than a terse one on the same hardware.
+Every completed request is timed, and each new request goes to the provider with the lowest median time so far for that model. A provider nobody has timed yet is tried first so it gets measured; one nobody has timed in the last five minutes counts as untimed again. One request in ten goes to a measured runner-up on purpose, so a provider that has recovered gets noticed. "Time" is how long the provider took to *start* answering — a stream's first chunk — so a model that writes longer answers does not look slower than a terse one.
 :::
 
 ## What happens to a request
 
-Three targets serve the model. Groq's median so far is 0.8 s, OpenAI's 1.6 s, and Anthropic was just added and has no samples:
+Three targets serve the model. Groq's median so far is 0.3 s, OpenAI's 0.6 s, and Anthropic was just added and has no samples:
 
 | Request | Order tried | Why |
 |---|---|---|
 | first after adding Anthropic | Anthropic, Groq, OpenAI | unmeasured targets go first so they get a sample |
-| once Anthropic measures 2.1 s | Groq, OpenAI, Anthropic | ascending median |
+| once Anthropic measures 0.9 s | Groq, OpenAI, Anthropic | ascending median — about nine requests in ten |
+| about one request in ten | OpenAI or Anthropic first | bounded exploration, so a runner-up that got faster is re-measured |
 | Groq returns `503` | OpenAI answers it | failover-safe failure, next in order |
 | Groq returns `422` | the client gets the `422` | the request was the problem |
+| no request for six minutes | all three unmeasured again | samples expire after five minutes |
 | after a restart | all three unmeasured again | samples live in memory only |
 
 ## Behaviour
 
-`least-latency` is a **pool mode**: after a failover-safe failure (a transport failure, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, an open circuit, or a full concurrency queue) the pipeline advances to the next candidate in the ordered list rather than reporting the failure back to the caller; any other `4xx` is returned to the client. `targets[].retry` still governs how many times any one target is retried before the pipeline moves on.
+`least-latency` is a **pool mode**: after a failover-safe failure (a transport failure, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, a provider's own context-length overflow, an open circuit, or a full concurrency queue) the pipeline advances to the next candidate in the ordered list rather than reporting the failure back to the caller; any other `4xx` is returned to the client. `targets[].retry` still governs how many times any one target is retried before the pipeline moves on.
 
-On each request, `LeastLatency.SelectTargets` (`internal/strategies/leastlatency.go`) filters `targets[]` down to those whose provider is registered and whose `SupportsModel(req.Model)` returns true, then splits them by whether the in-process `latency.Tracker` holds any samples for that target. Targets with **no recorded samples are shuffled to the front** — cold-start profiling, so a newly added target gets tried rather than starved by an established leader — followed by sampled targets sorted **ascending by p50**, followed by any remaining declared targets. The pipeline commits to the head of that order first; the rest stand in as substitutes before committing (an open circuit, for example) and, because this is a pool mode, as the next attempt if the head fails. `SelectTargets` returns `nil` (the caller reports 404 `model_not_found`) when no configured target serves the requested model.
+On each request, `LeastLatency.SelectTargets` (`internal/strategies/leastlatency.go`) filters `targets[]` down to those whose provider is registered and that serve the requested model, then looks up each one's samples for the **upstream model** — the `model_map` translation when the target has one — in the in-process latency tracker. Targets with **no live samples are shuffled to the front** — cold-start profiling, so a newly added target gets tried rather than starved by an established leader — followed by sampled targets sorted **ascending by p50**. Once every target is sampled, **one request in ten leads with a random sampled runner-up** instead of the leader, so the ranking keeps learning; without that, nothing but the leader's own samples ever changed and a sibling that recovered was never seen. `SelectTargets` returns `nil` (the caller reports 404 `model_not_found`) when no configured target serves the requested model.
 
-The sample the tracker records is **total wall-clock for the request**, not time-to-first-token and not provider health. Generation length dominates it: a provider that answers the same prompt at greater length reads as "slower" than a terse one on identical hardware, and a model whose replies are simply longer loses to a model whose replies are shorter regardless of service speed. That is the intended trade — wall-clock is what a caller actually waits for, so ranking on it optimizes the number the caller experiences. Do not read the ordering as a health claim; `/health`, `/readyz`, and the circuit-breaker metric answer that question instead.
+The sample is the time a target took to **begin** answering: for a streamed request, until its first chunk; for a unary request, until the response returned, since it arrives whole. It is not the time to finish, so a model whose replies are long does not read as a slow provider. Samples are keyed by target *and* upstream model, so two models mapped onto one target rank on their own numbers, and every sample **expires after five minutes**: a target nothing has measured recently is treated as unseen and profiled again rather than ranked on a number from before an incident. A window holds the last 100 samples per target and model. Do not read the ordering as a health claim; `/health`, `/readyz`, and the circuit-breaker metric answer that question instead.
 
 ## Config keys
 
@@ -36,7 +38,7 @@ The sample the tracker records is **total wall-clock for the request**, not time
 |---|---|---|---|
 | `strategy.mode` | string | — | Set to `least-latency` (note the hyphen). |
 
-There are no other strategy-level keys for this mode — the latency tracker is internal process state, not configurable, and `weight` on `targets[]` is ignored.
+There are no other strategy-level keys for this mode — the sample window (100), the sample TTL (five minutes) and the exploration share (one in ten) are fixed, the tracker is internal process state, and `weight` on `targets[]` is ignored.
 
 ## Minimal working YAML
 
@@ -52,16 +54,17 @@ targets:
 
 ## When to use
 
-- Total response time is the objective, and the configured targets serve equivalent or interchangeable models across providers.
+- Time to first token is the objective, and the configured targets serve equivalent or interchangeable models across providers.
 - You want the gateway to steer traffic toward whichever provider is currently answering fastest, without hand-tuning weights or a declared priority order.
 
 ## Gotchas
 
-- **Measures wall-clock, not health or TTFT.** The ranking reflects how long a full response took, generation length included — it is not a claim about provider uptime or how fast the first token arrived. Use `/health`, `/readyz`, and the circuit-breaker metric to answer health questions.
-- **Unseen targets jump the queue by design.** A target with no recorded samples is shuffled to the front ahead of every sampled target, so adding a new target to the pool means it briefly absorbs traffic while it's profiled — this is intentional cold-start behaviour, not a bug.
-- **Samples reset with the process.** The tracker is in-memory only; a restart, redeploy, or rolling update wipes all latency history, so every target starts "unseen" again and cold-start shuffling kicks back in.
-- **`weight` is ignored.** `targets[].weight` has no effect under this mode — it is read only by `loadbalance`.
-- **This is a pool mode.** The pipeline advances past an open-circuit target, or one that failed in a failover-safe way, to the next one in p50 order; any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the client. Failover falls out of the mode family, not out of anything latency-specific.
+- **Measures time to first byte, not health.** A stream's sample ends at its first chunk and a unary call's at its response, so the ranking says how quickly a provider starts, not how long it takes to finish and not whether it is up. Use `/health`, `/readyz`, and the circuit-breaker metric for health questions.
+- **Unseen targets jump the queue by design.** A target with no live samples for the model is shuffled to the front ahead of every sampled target, so adding a new target to the pool means it briefly absorbs traffic while it's profiled — this is intentional cold-start behaviour, not a bug.
+- **About one request in ten goes to a runner-up.** The leader takes the large majority, not everything. A dashboard that expects 100 % on the fastest provider is reading the exploration share.
+- **Samples expire and reset with the process.** A target with no sample newer than five minutes reads as unseen again; a restart, redeploy, or rolling update wipes all history. Neither is shared between gateway instances.
+- **`weight` is ignored.** `targets[].weight` has no effect under this mode — it is read by `loadbalance` and, for equal-cost ties, `cost-optimized`.
+- **This is a pool mode.** The pipeline advances past an open-circuit or parked target, or one that failed in a failover-safe way, to the next one in p50 order; any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the client. Failover falls out of the mode family, not out of anything latency-specific.
 - **Only model-compatible targets are eligible.** A target whose provider isn't registered, or that doesn't serve the requested model, is filtered out before latency ordering is applied.
 
 ## Related

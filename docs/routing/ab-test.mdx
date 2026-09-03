@@ -58,7 +58,9 @@ One request in ten for `smart` is answered by Claude, and every response still s
 | `strategy.mode` | string | — | Set to `ab-test` (hyphen). |
 | `strategy.ab_variants[].target_key` | string | — | Must name one of the configured `targets[].virtual_key`. |
 | `strategy.ab_variants[].weight` | float64 | — | Relative traffic share = `weight / sum(weights)`. `0` drains the variant (no traffic); negative or an all-zero set is rejected at load. |
-| `strategy.ab_variants[].label` | string | — | Human-readable variant id (e.g. `control`, `challenger`), carried as `ferro.routing.ab_variant_label` on the request's observability events. |
+| `strategy.ab_variants[].label` | string | — (required) | Variant id (e.g. `control`, `challenger`), carried as `ferro.routing.ab_variant_label` on the request's observability events. Attribution keys on it, so a variant without a label is a load error since v1.5.2. |
+| `strategy.sticky.on` | string | — | Set to `user` to keep every request with the same `user` field on the variant it first drew: a stateless hash, so a multi-turn session does not flip variants and every replica agrees. A request with no `user` draws at random. |
+| `strategy.sticky.ttl` | duration | none | Rotates pins: a `user` stays on its variant for at most one window (`"1h"`). |
 
 ## Minimal working YAML
 
@@ -93,7 +95,8 @@ targets:
 - **`ab_variants[].weight` is what counts — `targets[].weight` is ignored under this mode.** `targets[].weight` only matters under `loadbalance`; don't expect it to influence the A/B split.
 - **Weights are relative, not percentages.** `weight: 70` and `weight: 30` behave identically to `weight: 7` and `weight: 3` — only the ratio matters.
 - **This is a pool mode, but the draw itself is not retried.** Once a variant is drawn, that variant's target leads; after a failover-safe failure the pipeline advances through the remaining configured targets like any pool mode, while any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the client. There is no re-draw — a failed request does not get a second chance at a different variant within the same routing decision.
-- **A negative weight or an all-zero weight set is a load error**, not a runtime failure — `ferrogw validate` and gateway startup reject it before traffic is served.
+- **A negative weight, an all-zero weight set, or a variant without a `label` is a load error**, not a runtime failure — `ferrogw validate` and gateway startup reject it before traffic is served.
+- **`sticky: { on: user }` keeps a session on its variant.** Without it every request re-draws, so a conversation can alternate between control and challenger turn by turn. With it the draw is a hash of the `user`, so the split still follows the weights across users while each user sees one variant.
 
 ## Related
 

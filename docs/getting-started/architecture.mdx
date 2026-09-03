@@ -169,19 +169,19 @@ routing mode makes it **happen** (decides whether to try a sibling at all).
 | | Modes | On a target failure |
 |---|---|---|
 | **Pool** | `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test` | the walk advances to the next candidate after a failover-safe failure; any other `4xx` is returned |
-| **Named** | `single`, `conditional`, `content-based` | the walk stops and reports the failure |
+| **Named** | `single`, `conditional`, `content-based` | the walk stays inside what was named: `single` stops; a rule walks its `target_keys` chain on the same failover-safe failures and stops at its end |
 
 A pool mode picks its head target for a reason that's about the *pool* —
 spread load, take the cheapest, take the fastest — from targets declared
 interchangeable, so handing the request to a sibling is what was configured.
 A named mode picks its head because something named that target
-specifically; serving from elsewhere would demote the rule to a suggestion.
+specifically; serving from a target the rule did not name would demote the
+rule to a suggestion, so a rule's `target_keys` chain is a hard boundary.
 
-**Every mode skips a target whose circuit is open** — that rule is
-independent of pool vs named. When another configured target serves the
-model, the open one is silently passed over, even under `single`,
-`conditional`, or `content-based` where an operator named one target on
-purpose. When *no* other target serves the model, the walk still attempts
+**Every mode skips a target whose circuit is open, or that is parked after a
+`429`, among the candidates it offers** — a pool's siblings, or a rule's chain.
+`single` and a rule with one target offer no other candidate, so an open
+circuit there is refused with `503`. When *no* other target serves the model, the walk still attempts
 the open one (so a model that plainly exists never 404s), the breaker
 refuses it, and the caller gets `503 upstream_unavailable` instead.
 

@@ -32,7 +32,21 @@ On each request, `LoadBalance.SelectTargets` (`internal/strategies/loadbalance.g
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `strategy.mode` | string | — | Set to `loadbalance`. |
-| `targets[].weight` | float64 | `0` if omitted (YAML `omitempty`) | This target's relative share of traffic. Ignored by every other routing mode. `0` means the target receives zero traffic — it can never be the rotation's start index. |
+| `targets[].weight` | float64 | `0` if omitted (YAML `omitempty`) | This target's relative share of traffic. Read here and, for equal-cost ties, by `cost-optimized`; ignored by every other mode. `0` means the target receives zero traffic — it can never be the rotation's start index. |
+| `strategy.sticky.on` | string | — | Set to `user` to pin each request to the same start target for the same `user` field: a stateless hash, so a conversation keeps its provider prompt cache without any shared state, and every replica with this config answers the same. A request with no `user` draws at random. |
+| `strategy.sticky.ttl` | duration | none | Rotates pins: a `user` stays pinned for at most one window (`"1h"`), after which it may hash to another target. |
+
+### Sticky sessions
+
+```yaml
+strategy:
+  mode: loadbalance
+  sticky:
+    on: user     # the request's `user` field
+    ttl: 1h      # optional; a pin lasts at most one window
+```
+
+With `sticky`, every request carrying the same `user` starts on the same target, so a multi-turn conversation keeps hitting the provider that holds its prompt cache. The pin is a hash of the user, not a table: nothing is stored, nothing is shared between gateway replicas, and a request without a `user` is a normal weighted draw. `sticky` also applies on embeddings and image requests, which carry the field.
 
 ## Minimal working YAML
 
@@ -76,6 +90,7 @@ Every response still says `"model": "smart"`. See [One model name, different ups
 - **An all-zero or negative weight set is rejected at load.** `ferrogw validate` (and gateway startup) reject a negative weight outright and reject a config where every target's weight sums to zero — but one *forgotten* weight on an otherwise-valid config passes validation and silently drains just that target.
 - **This is a pool mode.** The pipeline advances past an open-circuit target, or one that failed in a failover-safe way, to the next one in the rotated order; any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the client. A `loadbalance` config gets failover "for free" as a side effect of the mode family, not because of anything weight-specific.
 - **Only model-compatible targets are eligible.** A target whose provider isn't registered, or that doesn't serve the requested model, is filtered out before weighting is applied — it never wins the draw regardless of its configured weight.
+- **Sticky hashing changes the draw, not the pool.** `sticky: { on: user }` maps each `user` into the same weight-proportional draw every time, so a pinned user still lands on a target in proportion to the weights; changing weights or the target set re-maps a share of users. A `weight: 0` target is never pinned to.
 - Selection uses `math/rand`, deliberately — this is a load-shaping decision, not a security-sensitive one.
 
 ## Related

@@ -1,10 +1,37 @@
 ---
 title: Changelog
-description: "Release history for Ferro Labs AI Gateway v0.4.5 through v1.5.1: the v1.5.1 routing correction, the importable v1.5.0 runtime, and the v1.4.0 routing pipeline."
-keywords: [AI gateway changelog, LLM proxy releases, AI gateway version history, AI gateway v1.5.1, model_map, failover-safe routing, AI gateway v1.4.0 breaking changes, embedded dashboard, unified routing pipeline, MCP stdio transport, OpenTelemetry tracing, gateway updates]
+description: "Release history for Ferro Labs AI Gateway v0.4.5 through v1.5.2: the v1.5.2 routing depth release, the v1.5.1 routing correction, and the importable v1.5.0 runtime."
+keywords: [AI gateway changelog, LLM proxy releases, AI gateway version history, AI gateway v1.5.2, sticky routing, target_keys, attribution headers, model_map, failover-safe routing, AI gateway v1.4.0 breaking changes, embedded dashboard, unified routing pipeline, MCP stdio transport, OpenTelemetry tracing, gateway updates]
 ---
 
-Full release notes are also on [GitHub Releases](https://github.com/ferro-labs/ai-gateway/releases). **v1.5.1 is the latest tag.**
+Full release notes are also on [GitHub Releases](https://github.com/ferro-labs/ai-gateway/releases). **v1.5.2 is the latest tag.**
+
+## v1.5.2 — 2026-09-03 — Routing depth
+
+Every routed surface now ranks through one strategy implementation, and the routing layer gains the operator controls a production gateway needs: per-attempt timeouts, a `429` cooldown, a typed context-length failover class, sticky sessions, rule target chains, bounded conditional predicates, attribution headers on every response, and a host-supplied price catalog. Everything ships in the open-source gateway; no configuration key is removed, and the Go API only grows. See [Routing](/routing) for the updated contract.
+
+### What's new in v1.5.2
+
+- **Attribution headers on every routed surface** — `X-Gateway-Provider`, `X-Gateway-Target`, `X-Gateway-Model` and `X-Gateway-Attempts` on chat (before a stream's first chunk), legacy completions, embeddings, images, rerank, moderations, transcriptions, translations and speech; a failed request names the last target attempted. `ferro.routing.attempt` is emitted on the request span. See [Attribution headers](/api-reference/endpoints#attribution-headers).
+- **`targets[].timeout`** bounds one physical attempt inside `request_timeout`, so a hung primary no longer consumes the whole request budget before a pool mode moves on. Streams are bounded only until the provider answers.
+- **`429` cooldown** — a target that answers `429` is parked for its `Retry-After` (five seconds when absent, a minute at most) so the next request does not pay another `429` on it. Process-local; the breaker is untouched.
+- **Typed context-length failover** — a provider's own statement that the prompt exceeded its context window (the OpenAI-compatible, Anthropic and Gemini envelopes) fails over to a sibling, whose model may have a larger window. Every other `4xx` still stops.
+- **`strategy.sticky: { on: user, ttl: "1h" }`** under `loadbalance` and `ab-test` pins a `user` to one target or variant with a stateless hash. See [Load balance](/routing/loadbalance#sticky-sessions).
+- **`target_keys: [a, b]`** on `conditions[]` and `content_conditions[]` names an ordered chain for a rule, walked on failover-safe failures and never left. See [Conditional](/routing/conditional).
+- **Conditional predicates** `user`, `stream`, `has_tools`, and `metadata` + `field` reading the single `X-Gateway-Metadata` request header.
+- **`strategy.failover_on_status_codes`** adds upstream statuses to the failover-safe set; `400`, `401`, `403`, `404` and `422` cannot be listed.
+- **`aigateway.WithCatalog(models.Catalog)`** hands an embedding host's own price catalog to the gateway in place of the embedded or remote one; `aigateway.WithRoutingAttribution` reads the attribution back.
+- **Embedded dashboard** — the strategy panel shows `model_map`, rule chains and the new predicates.
+
+### Behaviour changes in v1.5.2
+
+- **A rule that names one target is exact.** Under `conditional` and `content-based`, an open circuit on the matched target used to borrow a healthy sibling; it now answers `503`, and a rule that wants a stand-in lists one in `target_keys`. On non-chat surfaces `content-based` routes to the first target that can serve the request, alone.
+- **One ranker for every surface.** Embeddings, images, rerank, moderation, transcription and speech previously ranked through a second implementation that differed from chat in its random source, unseen-latency order, cost input and unpriced placement. The same config and health now produce the same candidate order everywhere.
+- **`least-latency` keeps learning.** Samples are keyed by target and upstream model, expire after five minutes, and one request in ten leads with a sampled runner-up so the leader cannot lock in. A stream's sample is its time to first chunk rather than its whole drain.
+- **`cost-optimized` prices input plus output** — the request's completion ceiling or 256 tokens — at the catalog rate for the model's mode on every surface; equal-cost targets draw by `targets[].weight`, and a negative weight is refused.
+- **Validation** — an `ab_variants[]` entry without a `label` no longer loads; a `single` strategy with more than one target logs a warning naming the unused targets.
+
+---
 
 ## v1.5.1 — 2026-09-01 — Routing reliability correction
 

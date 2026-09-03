@@ -21,13 +21,15 @@ With the rules in the YAML below (code words → DeepSeek, "translate" → Gemin
 | "What is the capital of Peru?" | no match | OpenAI (`targets[0]`) |
 | system prompt mentions code, user message does not | system content is never inspected | OpenAI |
 
-If the matched target fails, the client gets that failure; the gateway does not try the others.
+A rule names one target or an ordered chain (`target_keys`). If the matched target fails because the provider was at fault, the next member of its chain is tried; the gateway never reaches for a target the rule did not name, and a rule with one target is exact.
 
 ## Behaviour
 
-`content-based` is a **named mode**: the pipeline commits to the target the first matching rule names and reports that target's failure, rather than trying the remaining targets (contrast with `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, and `ab-test`, which are pool modes that advance past a failover-safe failure). `ContentBased.SelectTargets` (`internal/strategies/contentbased.go`) evaluates `strategy.content_conditions[]` in declared order over **user-role messages only** — system and assistant content is never inspected — and the first rule that matches wins. The matched rule's target leads the returned list, followed by every configured target de-duplicated; the rest of the list is substitution-before-commit only (an open circuit or a surface-incapable target is swapped for a healthy one before the pipeline commits), never a failover path. With no rule matching, `SelectTargets` returns `targets[]` in declared order, so `targets[0]` is the no-match fallback.
+`content-based` is a **named mode**: the candidates for a request are exactly what the matched rule names — its `target_keys` chain, or `target_key` as a one-entry chain — and nothing else. `ContentBased.SelectTargets` (`internal/strategies/contentbased.go`) evaluates `strategy.content_conditions[]` in declared order over **user-role messages only** — system and assistant content is never inspected — and the first rule that matches wins. With no rule matching, the no-match fallback (`targets[0]`) is the whole answer.
 
-Because the match happens against request content, `GET /v1/models` under this mode is **representative, not exact**: it advertises what a request carrying no content would get — the no-match fallback target's models — so a model only a matched rule reaches is not listed there.
+The pipeline walks a chain the way it walks a pool — advancing only after a failover-safe failure (a transport failure, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, a provider's own context-length overflow, an open circuit, or a full concurrency queue), skipping a member whose circuit is open or that is parked after a `429`, returning any other `4xx` to the client — and never substitutes a target outside it. A rule with one target is exact: a model it does not serve or an open circuit is the corresponding error, not a sibling's answer.
+
+Content rules read chat messages, which embeddings, images and the other non-chat surfaces do not carry, so on those surfaces a request takes the no-match answer: the first configured target that can serve the model on that surface, alone. Because the match happens against request content, `GET /v1/models` under this mode is **representative, not exact**: it advertises what a request carrying no content would get — the no-match fallback target's models — so a model only a matched rule reaches is not listed there.
 
 ## Config keys
 
@@ -37,6 +39,7 @@ Because the match happens against request content, `GET /v1/models` under this m
 | `strategy.content_conditions[].type` | string | — | `prompt_contains` \| `prompt_not_contains` \| `prompt_regex`. Closed set — an unrecognized value is a `ferrogw validate` / startup error, not a request-time failure. |
 | `strategy.content_conditions[].value` | string | — | The substring (matched case-insensitively) for `prompt_contains`/`prompt_not_contains`, or the Go (RE2) regular expression for `prompt_regex`. |
 | `strategy.content_conditions[].target_key` | string | — | Must name a configured `targets[].virtual_key`; validated at load. |
+| `strategy.content_conditions[].target_keys` | []string | — | The rule's ordered target chain, tried in order on failover-safe failures and never left. Every entry must be a declared target, none may repeat, and exactly one of `target_key` and `target_keys` is set. |
 
 ## Minimal working YAML
 
@@ -67,10 +70,10 @@ targets:
 
 - **Only user-role messages are inspected.** System prompts and prior assistant turns never match, by any of the three rule types.
 - **`prompt_not_contains` matches broadly, so rule order matters a lot.** It's true for *any* prompt that lacks the value — an early, broad `prompt_not_contains` rule can shadow every more-specific rule declared after it. Put narrow rules first.
-- **A model the matched target doesn't serve is `404 model_not_found`, even when another configured target serves it.** This is a named mode: the rule is a decision about which target handles this content, not a preference among several. If a matched target needs to serve more models, add them there (or `targets[].models`) rather than expecting the tail of the list to cover it.
+- **A model the matched chain doesn't serve is `404 model_not_found`, even when another configured target serves it.** This is a named mode: the rule is a decision about which targets handle this content, not a preference among several. If a matched target needs to serve more models, add them there (or `targets[].models`) rather than expecting the rest of `targets[]` to cover it.
 - **`GET /v1/models` is representative, not exact, under this mode.** It shows only what the no-match fallback (`targets[0]`) serves, since there's no request content to evaluate rules against at listing time — a model reachable only through a matched rule won't appear.
 - **Regex is Go RE2 syntax.** No backreferences, no lookahead/lookbehind. An invalid pattern is caught at config load (`config.ValidateConfig` compiles every `prompt_regex` pattern the same way `NewContentBased` does), so a bad pattern fails startup rather than misrouting silently.
-- **Circuit state is the one thing that still moves the choice.** If the matched target's circuit is open, the pipeline substitutes a healthy target from the tail before committing — traffic returns to the matched target once its circuit closes. This is unrelated to, and doesn't reintroduce, failover on ordinary request failure.
+- **A one-target rule whose target is down answers `503`, not a sibling.** Before v1.5.2 an open circuit on the matched target borrowed a healthy target from `targets[]`; it no longer does. Name the stand-in in `target_keys` if you want one — the chain is walked on failover-safe failures and stops at its end.
 
 ## Related
 

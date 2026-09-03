@@ -40,7 +40,7 @@ const structuredData = {
       name: 'Ferro Labs AI Gateway',
       applicationCategory: 'DeveloperApplication',
       operatingSystem: 'Linux, macOS, Windows, Docker, Kubernetes',
-      softwareVersion: '1.5.1',
+      softwareVersion: '1.5.2',
       // Folded in from the former homepage-local block, so the site keeps ONE
       // SoftwareApplication entity instead of two conflicting copies.
       license: 'https://opensource.org/licenses/Apache-2.0',
@@ -279,9 +279,9 @@ const config: Config = {
     ],
     announcementBar: {
       // New id so it re-shows to anyone who dismissed the previous bar.
-      id: 'v151-released',
+      id: 'v152-released',
       content:
-        '🚀 <strong>v1.5.1 is out</strong> — one model name across providers with model_map, pool modes that fail over only when the provider is at fault, and an importable gateway runtime. <a href="/changelog/">See what changed →</a>',
+        '🚀 <strong>v1.5.2 is out</strong> — one ranker on every surface, per-target timeouts, 429 cooldown, sticky sessions, rule target chains, and attribution headers on every response. <a href="/changelog/">See what changed →</a>',
       backgroundColor: '#ecfdf5',
       textColor: '#065f46',
       isCloseable: true,
