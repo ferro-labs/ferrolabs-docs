@@ -3845,8 +3845,8 @@ Source: https://docs.ferrolabs.ai/getting-started/configuration/
   })}</script>
 </Head>
 
-:::info As of v1.4.x
-This page documents the config schema shipped by v1.4.x. `apiVersion` is advisory — an unrecognized value is kept and only logged as a warning, so a newer config file still starts on an older binary.
+:::info As of v1.5.x
+This page documents the config schema shipped by v1.5.2. Keys introduced on the v1.5 line — `targets[].timeout`, `strategy.sticky`, `strategy.failover_on_status_codes`, `conditions[].target_keys` — are rejected by a v1.4 binary's strict decoder. `apiVersion` is advisory — an unrecognized value is kept and only logged as a warning, so a newer config file still starts on an older binary as long as it uses only keys that binary knows.
 :::
 
 The gateway loads configuration from a YAML or JSON file at the path set by `GATEWAY_CONFIG`.
@@ -13752,7 +13752,7 @@ Source: https://docs.ferrolabs.ai/routing/content-based/
 Content-based routes each request by inspecting the text of its **user-role** prompt messages, not its declared `model` field. It optimizes for **prompt-aware model selection** — code-shaped prompts to a coding model, prompts mentioning "translate" to a translation-tuned model, everything else to a general default — a decision `conditional` routing can't make because it only ever sees the model name. Set `strategy.mode: content-based` to use it.
 
 :::tip In plain words
-Look at what the user wrote, not which model they asked for. "Write a function that…" goes to a coding model; "translate this…" to a cheap one; everything else to your default. Rules are checked in order, the first match wins, and the matched provider's answer is final: the gateway swaps in another target only *before* the call — when the matched one has an open circuit breaker or cannot handle that kind of request (embeddings or images, say) — never after a failure.
+Look at what the user wrote, not which model they asked for. "Write a function that…" goes to a coding model; "translate this…" to a cheap one; everything else to your default. Rules are checked in order and the first match wins. A rule names one provider or an ordered chain (`target_keys`): with one provider its answer is final, and with a chain the gateway moves to the next member only when the provider was at fault — unreachable, timed out, overloaded, circuit open — never for a bad request, and never to a provider the rule did not name.
 :::
 
 ## What happens to a request

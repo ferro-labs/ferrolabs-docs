@@ -281,7 +281,7 @@ const config: Config = {
       // New id so it re-shows to anyone who dismissed the previous bar.
       id: 'v152-released',
       content:
-        '🚀 <strong>v1.5.2 is out</strong> — one ranker on every surface, per-target timeouts, 429 cooldown, sticky sessions, rule target chains, and attribution headers on every response. <a href="/changelog/">See what changed →</a>',
+        '🚀 <strong>v1.5.2 is out</strong> — one ranker on every surface, per-target timeouts, 429 cooldown, sticky sessions, rule target chains, and attribution headers on every routed response. <a href="/changelog/">See what changed →</a>',
       backgroundColor: '#ecfdf5',
       textColor: '#065f46',
       isCloseable: true,

@@ -16,8 +16,8 @@ import Head from '@docusaurus/Head';
   })}</script>
 </Head>
 
-:::info As of v1.4.x
-This page documents the config schema shipped by v1.4.x. `apiVersion` is advisory — an unrecognized value is kept and only logged as a warning, so a newer config file still starts on an older binary.
+:::info As of v1.5.x
+This page documents the config schema shipped by v1.5.2. Keys introduced on the v1.5 line — `targets[].timeout`, `strategy.sticky`, `strategy.failover_on_status_codes`, `conditions[].target_keys` — are rejected by a v1.4 binary's strict decoder. `apiVersion` is advisory — an unrecognized value is kept and only logged as a warning, so a newer config file still starts on an older binary as long as it uses only keys that binary knows.
 :::
 
 The gateway loads configuration from a YAML or JSON file at the path set by `GATEWAY_CONFIG`.
