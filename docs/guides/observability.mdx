@@ -212,7 +212,7 @@ Not every declared constant is wired into a live span yet — the **Status** col
 | `ferro.stream.time_to_first_token_ms` | Emitted | Streaming time-to-first-token |
 | `ferro.stream.time_to_last_token_ms` | Emitted | Streaming time-to-last-token |
 | `ferro.gateway.version` | Planned | Gateway build version |
-| `ferro.routing.attempt` | Planned | Attempt number within the strategy |
+| `ferro.routing.attempt` | Emitted | Routing-layer attempt count when the walk ended — provider calls plus local breaker or concurrency refusals, retries and failovers included; the same number as the `X-Gateway-Attempts` response header (since v1.5.2) |
 | `ferro.routing.ab_variant_label` | Planned (span) | A/B variant label — not on the span. Since v1.5.1 it is carried as an attribute of the `gateway.request.completed` / `failed` events (and of `gateway.routing.attempt` events where enabled) delivered to exporters and custom providers |
 | `ferro.cache.hit` / `ferro.cache.kind` | Planned | Response-cache hit and cache kind |
 | `ferro.mcp.depth` | Planned | MCP call depth |

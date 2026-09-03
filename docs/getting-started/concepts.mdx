@@ -42,12 +42,12 @@ The strategy controls which target(s) a request is offered to, and in what order
 | `content-based` | Match user-message content by substring or regex; first rule match wins. |
 | `ab-test` | Split traffic across labeled variants by weight for comparison testing. |
 
-One pipeline governs chat, streaming, embeddings, and images, so retry and circuit-breaking behave identically across all four. Strategies split into two families:
+One pipeline governs chat, streaming, embeddings, images, rerank, moderation, transcription and speech, and one ranker orders targets for all of them, so retry, circuit-breaking and candidate order behave identically across every surface. Strategies split into two families:
 
 - **Pool modes** (`fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test`) advance past a target that failed in a failover-safe way — transport error, attempt timeout, `408`/`429`/`5xx`, open circuit, saturation — to the next candidate; any other `4xx` is returned to the client.
-- **Named modes** (`single`, `conditional`, `content-based`) commit to their chosen target and report its failure rather than trying another.
+- **Named modes** (`single`, `conditional`, `content-based`) stay inside what was named: `single` reports its one target's failure; a rule walks its `target_keys` chain on the same failover-safe failures and never reaches a target it did not name.
 
-Every mode skips a target whose circuit is open; if every candidate's circuit is open, the request is still attempted and returns `503`.
+Every mode skips a target whose circuit is open, or that is parked after a `429`, among the candidates it offers; if every candidate is unavailable, the request is still attempted and returns `503`. A rule with one target offers no other candidate.
 
 See [Routing](/routing) for per-strategy configuration and YAML examples.
 

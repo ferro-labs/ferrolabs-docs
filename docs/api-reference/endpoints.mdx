@@ -224,6 +224,34 @@ On the response, the gateway adds `X-Gateway-Provider` (the name of the
 provider that served the request) and scans non-2xx bodies to redact any
 echoed credential before it reaches the client.
 
+## Attribution headers
+
+Every routed surface — `/v1/chat/completions` (streamed or not),
+`/v1/completions`, `/v1/embeddings`, `/v1/images/generations`, `/v1/rerank`,
+`/v1/moderations`, `/v1/audio/transcriptions`, `/v1/audio/translations` and
+`/v1/audio/speech` — answers with four headers naming the target that served
+it, or on failure the last one attempted:
+
+| Header | Value |
+|---|---|
+| `X-Gateway-Provider` | the serving target's canonical provider (`openai`) |
+| `X-Gateway-Target` | the target key as configured: `targets[].virtual_key` |
+| `X-Gateway-Model` | the upstream model sent to the provider, after `model_map` |
+| `X-Gateway-Attempts` | routing-layer attempts for the request: provider calls plus local breaker or concurrency refusals, retries and failovers included |
+
+On a stream they are written before the first chunk. A request refused before
+any target was attempted — a plugin denial, a model nothing serves — carries
+none. The value is never a credential: the target key is the config string,
+not the key it names. The pass-through proxy above emits
+`X-Gateway-Provider` only.
+
+One request header goes the other way. `X-Gateway-Metadata`, a JSON object of
+at most 32 string, number or boolean values within 4 KiB, is the single
+request header [conditional routing](/routing/conditional) may read
+(`key: metadata`, `field: <entry>`), on `/v1/chat/completions` and
+`/v1/completions`. It never reaches a provider, no other header is exposed to
+a rule, and a malformed value is the caller's `400`.
+
 An upstream connection failure surfaces as `502 upstream_error`. A
 before-request content guardrail configured on the deployment that cannot
 read the request body (a multipart upload, binary audio, or anything not
