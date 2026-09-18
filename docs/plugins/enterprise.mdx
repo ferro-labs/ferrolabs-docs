@@ -1,25 +1,56 @@
 ---
-title: Ferro Labs Managed Plugins
-description: "Overview of the five Ferro Labs Managed security plugins — PII redaction, secret scanning, prompt shielding, schema guard, regex guard — not in the OSS gateway."
-keywords: [Ferro Labs Managed plugins, PII redaction, secret scanning, prompt injection shield, schema guard, regex guard, AI gateway security]
+title: Managed guardrails
+description: "Ferro Labs Managed guardrails: CEL custom policy rules plus consent-gated Lakera Guard and OpenAI Moderation preflight."
+keywords: [Ferro Labs Managed guardrails, CEL guardrails, custom AI policy, Lakera Guard, OpenAI Moderation]
 ---
 
-Ferro Labs Managed adds five security plugins on top of the [6 open-source plugins](/plugins) that ship with the AI Gateway. They slot into the same `before_request`/`after_request` plugin pipeline, but the detection logic (PII models, secret patterns, injection scoring, schema/regex engines) is closed-source and only runs in managed deployments.
+Ferro Labs Managed runs the same [11 open-source plugins](/plugins) as the self-hosted gateway, then adds a Cloud policy layer for tenant- and project-scoped rules that do not exist in the OSS binary.
 
-| Plugin | What it guards | Typical action |
+## CEL custom policy rules
+
+Managed deployments can evaluate [Common Expression Language (CEL)](https://github.com/google/cel-go) predicates before sending a request upstream. A rule must return a boolean; a match can block, warn, or log.
+
+```text
+prompt_tokens > 4000
+model == "gpt-4" && user_role != "admin"
+contains_pii && pii_types.exists(type, type == "ssn")
+injection_categories.exists(category, category == "system_override")
+```
+
+CEL rules can use these variables:
+
+| Variable | Type | Meaning |
 |---|---|---|
-| `pii-redact` | Personally identifiable information in request or response content | Redact in place, or block the request |
-| `secret-scan` | Leaked API keys, credentials, and tokens in request content | Block, or warn and pass through |
-| `prompt-shield` | Prompt injection and jailbreak attempts in user messages | Block above a confidence threshold |
-| `schema-guard` | Model output conformance to a JSON Schema | Block non-conforming responses |
-| `regex-guard` | Custom regex-defined patterns (SSNs, business rules) | Block, or warn and pass through |
+| `model`, `provider`, `user_role` | string | Request routing and caller attributes |
+| `prompt_tokens`, `message_count`, `total_chars` | integer | Request size attributes |
+| `contains_pii` | boolean | Whether the OSS PII detector found a supported entity |
+| `pii_types` | list of strings | Detected entity names such as `email` or `ssn`; never the matched text |
+| `injection_categories` | list of strings | Prompt-shield category names; there is no numeric injection score |
+| `hour_of_day`, `day_of_week` | integer | Evaluation time; `day_of_week` uses Monday as 0 |
 
-:::info Ferro Labs Managed
-These five plugins are **not included in the open-source build** — they are only available on [Ferro Labs Managed](/ferrocloud/overview). Join the [waitlist](https://www.ferrolabs.ai/) for access.
-:::
+Rules are scoped to a project or the whole workspace and evaluated in their configured order. The first blocking match stops the request; non-blocking matches remain observable without hiding a later block.
+
+Expressions are validated before storage, limited to 4,096 bytes, compiled and cached per rule, and capped at 100 ms per evaluation. A stored rule that cannot compile or finish in time fails open for that rule and emits a warning and fail-open metric. Workspace log-only mode records matches without blocking.
+
+CEL availability is plan-gated in Ferro Labs Managed. Use the dashboard rule builder or the managed guardrail API; `POST /api/v1/guardrails/rules/dry-run` evaluates a draft with the same CEL compiler and evaluator used on live traffic.
+
+## External moderation providers
+
+Managed deployments can also run consent-gated external preflight checks:
+
+| Provider | Purpose | Default behavior on provider failure |
+|---|---|---|
+| Lakera Guard | Prompt-attack and safety screening through Lakera's API | Fail open and record the failure |
+| OpenAI Moderation | Content moderation through OpenAI's moderation API | Fail open and record the failure |
+
+These providers are configured in the integrations hub rather than as gateway plugins. No request content is sent to an external guardrail provider until data-sharing consent is enabled.
+
+## What remains open source
+
+PII redaction, secret scanning, prompt shielding, schema validation, and regex rules now ship in the Apache-licensed gateway. See [Content guardrails](/plugins/guardrails) for their configuration and supported actions.
 
 ## Related
 
-- [Plugins overview](/plugins) — the 6 OSS plugins and the shared pipeline stages
+- [Plugin system](/plugins)
+- [OSS vs Ferro Labs Managed](/guides/oss-vs-ferrocloud)
 - [Ferro Labs Managed overview](/ferrocloud/overview)
-- [OSS vs. Ferro Labs Managed](/guides/oss-vs-ferrocloud)

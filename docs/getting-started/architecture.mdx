@@ -71,7 +71,7 @@ sequenceDiagram
         Pipe->>Pipe: skip if circuit OPEN
         Pipe->>Prov: call under retry + breaker + concurrency limit
         Prov-->>Pipe: response / error
-        alt pool mode (fallback, loadbalance, least-latency,<br/>cost-optimized, ab-test) and target failed
+        alt pool mode (fallback, load-balance, least-latency,<br/>cost-optimized, ab-test) and target failed
             Pipe->>Pipe: advance to next candidate
         else named mode (single, conditional, content-based)<br/>or success
             Pipe->>Pipe: stop
@@ -119,7 +119,7 @@ the pass-through proxy, which still runs the governed lifecycle above.
 ### Routing strategy
 
 Selects and orders candidate targets — nothing more. All 8 modes implement
-one method, `SelectTargets`: `single`, `fallback`, `loadbalance`,
+one method, `SelectTargets`: `single`, `fallback`, `load-balance`,
 `conditional`, `content-based`, `least-latency`, `cost-optimized`, and
 `ab-test`. See [Routing](/routing) for per-strategy config and examples.
 
@@ -168,7 +168,7 @@ routing mode makes it **happen** (decides whether to try a sibling at all).
 
 | | Modes | On a target failure |
 |---|---|---|
-| **Pool** | `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test` | the walk advances to the next candidate after a failover-safe failure; any other `4xx` is returned |
+| **Pool** | `fallback`, `load-balance`, `least-latency`, `cost-optimized`, `ab-test` | the walk advances to the next candidate after a failover-safe failure; any other `4xx` is returned |
 | **Named** | `single`, `conditional`, `content-based` | the walk stays inside what was named: `single` stops; a rule walks its `target_keys` chain on the same failover-safe failures and stops at its end |
 
 A pool mode picks its head target for a reason that's about the *pool* —
@@ -216,7 +216,7 @@ unset) keeps each replica's copy independent and loses it on restart.
   at a shared `postgres` DSN so keys, config history, and logs agree across
   instances (per-process state above still won't share).
 - Configure a `circuit_breaker` on any target that can fail, and prefer a
-  pool routing mode (`fallback`/`loadbalance`) over a named one where
+  pool routing mode (`fallback`/`load-balance`) over a named one where
   interchangeable providers exist — that's what makes failover automatic
   rather than a manual failure to notice.
 - Use `/metrics` and `/admin/logs` to tune retry, concurrency, and routing

@@ -1,7 +1,7 @@
 # Ferro Labs AI Gateway — Full Documentation
 
 > Machine-readable corpus of the entire docs site. The curated index is at /llms.txt.
-> Generated from 85 pages. Canonical site: https://docs.ferrolabs.ai
+> Generated from 86 pages. Canonical site: https://docs.ferrolabs.ai
 
 
 
@@ -1328,7 +1328,53 @@ python3 plot.py results/
 Source: https://docs.ferrolabs.ai/changelog/
 ================================================================================
 
-Full release notes are also on [GitHub Releases](https://github.com/ferro-labs/ai-gateway/releases). **v1.5.2 is the latest tag.**
+Full release notes are also on [GitHub Releases](https://github.com/ferro-labs/ai-gateway/releases). **v1.5.8 is the latest tag.**
+
+## v1.5.8 — 2026-09-16 — Guardrail observability and broader secret detection
+
+- **Observe PII before enforcing** — `pii-redact` accepts `action: log`, recording entity names while forwarding the request unchanged.
+- **Reusable detectors for embedders** — `piiredact.Detect` and `promptshield.Detect` expose the same built-in checks as pure functions, returning sorted match names and never the matched text.
+- **More precise secret audit trails** — Anthropic keys now report as `anthropic_key`, separately from `openai_key`.
+- **Seven new credential kinds** — `gitlab_token`, `npm_token`, `huggingface_token`, `sendgrid_key`, `twilio_key`, `azure_storage_key`, and `slack_webhook`.
+
+---
+
+## v1.5.7 — 2026-09-16 — Five OSS content guardrails
+
+The open-source gateway now ships `regex-guard`, `pii-redact`, `secret-scan`, `prompt-shield`, and `schema-guard`, with catalog entries, config validation, and full request/response text projection. See [Content guardrails](/plugins/guardrails).
+
+- Guardrails inspect message content parts, reasoning content, and tool-call arguments rather than only plain message bodies.
+- Stage restrictions are enforced: PII and prompt shielding run before requests, schema validation runs after responses, and response scanning requires an appropriate `after_request` entry.
+- Unknown actions, selectors, kinds, categories, malformed schemas, and empty patterns fail `ferrogw validate` and startup instead of silently enabling an inert or over-broad policy.
+- `pii-redact` rewrites chat-shaped requests; on surfaces that cannot consume the rewritten body, a match is denied rather than leaked upstream. Credit-card matches require a valid Luhn check digit.
+
+---
+
+## v1.5.6 — 2026-09-14 — Canonical routing names and strict circuit breakers
+
+- **`load-balance` is the canonical strategy spelling.** The legacy `loadbalance` value remains accepted and is normalized, so existing configurations continue to start.
+- **Explicit invalid circuit-breaker values now fail validation.** Writing zero or empty values for `failure_threshold`, `success_threshold`, `max_half_threshold`, or `timeout` no longer falls through to defaults. Omit those fields to retain the defaults (`5`, `1`, `1`, and `30s`).
+
+---
+
+## v1.5.5 — 2026-09-14 — Stricter routing validation
+
+- Retry status codes must be valid HTTP statuses, conditional values must be valid for their predicate, and A/B variant labels must be unique. Invalid routing config now fails before serving traffic.
+
+---
+
+## v1.5.4 — 2026-09-05 — Request identity and attempt tracing
+
+- `X-User-ID`, `X-Session-ID`, and W3C baggage can populate request identity across logs, lifecycle events, and spans; the OpenAI `user` field takes precedence for the end user.
+- Optional `gateway.routing.attempt` spans make retries and cross-target failover visible, while pass-through and fixed-target forwards propagate W3C trace context by default.
+
+---
+
+## v1.5.3 — 2026-09-03 — Admin and MCP security hardening
+
+- Admin config writes can no longer add or change stdio MCP commands, arguments, or environment variables, or widen an MCP server's allowed tool set. Upgrade before granting remote config-write access.
+
+---
 
 ## v1.5.2 — 2026-09-03 — Routing depth
 
@@ -1340,7 +1386,7 @@ Every routed surface now ranks through one strategy implementation, and the rout
 - **`targets[].timeout`** bounds one physical attempt inside `request_timeout`, so a hung primary no longer consumes the whole request budget before a pool mode moves on. Streams are bounded only until the provider answers.
 - **`429` cooldown** — a target that answers `429` is parked for its `Retry-After` (five seconds when absent, a minute at most) so the next request does not pay another `429` on it. Process-local; the breaker is untouched.
 - **Typed context-length failover** — a provider's own statement that the prompt exceeded its context window (the OpenAI-compatible, Anthropic and Gemini envelopes) fails over to a sibling, whose model may have a larger window. Every other `4xx` still stops.
-- **`strategy.sticky: { on: user, ttl: "1h" }`** under `loadbalance` and `ab-test` pins a `user` to one target or variant with a stateless hash. See [Load balance](/routing/loadbalance#sticky-sessions).
+- **`strategy.sticky: { on: user, ttl: "1h" }`** under `load-balance` and `ab-test` pins a `user` to one target or variant with a stateless hash. See [Load balance](/routing/loadbalance#sticky-sessions).
 - **`target_keys: [a, b]`** on `conditions[]` and `content_conditions[]` names an ordered chain for a rule, walked on failover-safe failures and never left. See [Conditional](/routing/conditional).
 - **Conditional predicates** `user`, `stream`, `has_tools`, and `metadata` + `field` reading the single `X-Gateway-Metadata` request header.
 - **`strategy.failover_on_status_codes`** adds upstream statuses to the failover-safe set; `400`, `401`, `403`, `404` and `422` cannot be listed.
@@ -1847,7 +1893,7 @@ tuning, load testing, and runbook creation by a Ferro Labs solutions engineer.
 |---|---|---|
 | All 30 providers | ✅ | ✅ |
 | All 8 routing strategies | ✅ | ✅ |
-| 6 OSS + 5 enterprise plugins | 6 OSS | ✅ All 11 |
+| All 11 OSS plugins | ✅ | ✅ |
 | MCP integration | ✅ | ✅ |
 | Prometheus metrics | ✅ | ✅ |
 | Community support | ✅ | ✅ |
@@ -2074,7 +2120,7 @@ On routed surfaces — chat completions, streaming, embeddings, images — `X-Pr
 <summary className={styles.q}>What happens if a provider is down?</summary>
 <div className={styles.a}>
 
-Depends on the strategy. Pool modes — `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test` — advance to the next target in the pool after a failover-safe failure — the provider was unreachable, timed out, returned `408`/`429`/`5xx`, or is circuit-open or saturated; any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the caller instead. Named modes — `single`, `conditional`, `content-based` — stay inside what was named: `single` reports its one target's failure, and a `conditional` or `content-based` rule walks its `target_keys` chain on the same failover-safe failures without ever reaching a target it did not name. Every mode skips a target whose circuit breaker is open, or that is parked after a `429`, among the candidates it offers; if every target for a model is open, the request gets `503`. `targets[].retry` is honored under every mode, so set `attempts: 1` to keep single-attempt behavior even in a pool.
+Depends on the strategy. Pool modes — `fallback`, `load-balance`, `least-latency`, `cost-optimized`, `ab-test` — advance to the next target in the pool after a failover-safe failure — the provider was unreachable, timed out, returned `408`/`429`/`5xx`, or is circuit-open or saturated; any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the caller instead. Named modes — `single`, `conditional`, `content-based` — stay inside what was named: `single` reports its one target's failure, and a `conditional` or `content-based` rule walks its `target_keys` chain on the same failover-safe failures without ever reaching a target it did not name. Every mode skips a target whose circuit breaker is open, or that is parked after a `429`, among the candidates it offers; if every target for a model is open, the request gets `503`. `targets[].retry` is honored under every mode, so set `attempts: 1` to keep single-attempt behavior even in a pool.
 
 </div>
 </details>
@@ -2257,7 +2303,7 @@ Source: https://docs.ferrolabs.ai/ferrocloud/overview/
 
 # Ferro Labs Managed — Managed AI Gateway
 
-Ferro Labs Managed is the hosted, multi-tenant version of the Ferro Labs AI Gateway. Built on the same open-source engine that powers the self-hosted gateway — including its embedded dashboard, per-request cost tracking, and budget enforcement — Ferro Labs Managed adds isolated tenant instances, semantic caching, SSO/SAML, cross-tenant durable billing, and enterprise security plugins, all operated by Ferro Labs so you never touch infrastructure.
+Ferro Labs Managed is the hosted, multi-tenant version of the Ferro Labs AI Gateway. Built on the same open-source engine that powers the self-hosted gateway — including its 11 built-in plugins, embedded dashboard, per-request cost tracking, and budget enforcement — Ferro Labs Managed adds isolated tenant instances, semantic caching, SSO/SAML, cross-tenant durable billing, and fleet controls, all operated by Ferro Labs so you never touch infrastructure.
 
 ## Architecture
 
@@ -2289,7 +2335,7 @@ The self-hosted OSS gateway already ships an embedded dashboard, persists per-re
 1. **Multi-tenancy and isolation** — Each tenant gets its own isolated gateway instance and credential boundary, rather than the single shared instance a self-hosted deployment runs.
 2. **Zero ops** — No servers to provision, no containers to update, no TLS certificates to rotate. Ferro Labs handles uptime, scaling, and upgrades.
 3. **Semantic caching** — Similarity-based cache hits across paraphrased prompts, beyond the OSS response-cache plugin's exact-match semantics. See [Semantic cache](/ferrocloud/semantic-cache).
-4. **SSO/SAML and enterprise security plugins** — SAML 2.0/OIDC sign-in, directory sync, and five additional guardrail plugins (`pii-redact`, `secret-scan`, `prompt-shield`, `schema-guard`, and `regex-guard`) available exclusively on Ferro Labs Managed Pro and Enterprise plans.
+4. **SSO/SAML and organizational controls** — SAML 2.0/OIDC sign-in, directory sync, centralized policy deployment, and team-level access controls. The five deterministic content guardrails are part of the OSS engine and work in either edition; Managed adds [CEL custom policy and external moderation preflight](/plugins/enterprise).
 5. **Cross-tenant durable billing** — Consolidated usage metering and invoicing across teams, projects, and tenants, on top of the per-request cost tracking the OSS gateway already records locally.
 6. **Team management** — Invite teammates, assign roles, and scope API keys to projects — all from the dashboard.
 
@@ -2302,6 +2348,7 @@ Ferro Labs Managed is currently in early access. Sign up to get notified when yo
 ## Related pages
 
 - [OSS vs Ferro Labs Managed](/guides/oss-vs-ferrocloud)
+- [Managed guardrails](/plugins/enterprise)
 - [Semantic cache](/ferrocloud/semantic-cache)
 - [Enterprise features](/enterprise)
 
@@ -3533,7 +3580,7 @@ sequenceDiagram
         Pipe->>Pipe: skip if circuit OPEN
         Pipe->>Prov: call under retry + breaker + concurrency limit
         Prov-->>Pipe: response / error
-        alt pool mode (fallback, loadbalance, least-latency,<br/>cost-optimized, ab-test) and target failed
+        alt pool mode (fallback, load-balance, least-latency,<br/>cost-optimized, ab-test) and target failed
             Pipe->>Pipe: advance to next candidate
         else named mode (single, conditional, content-based)<br/>or success
             Pipe->>Pipe: stop
@@ -3581,7 +3628,7 @@ the pass-through proxy, which still runs the governed lifecycle above.
 ### Routing strategy
 
 Selects and orders candidate targets — nothing more. All 8 modes implement
-one method, `SelectTargets`: `single`, `fallback`, `loadbalance`,
+one method, `SelectTargets`: `single`, `fallback`, `load-balance`,
 `conditional`, `content-based`, `least-latency`, `cost-optimized`, and
 `ab-test`. See [Routing](/routing) for per-strategy config and examples.
 
@@ -3630,7 +3677,7 @@ routing mode makes it **happen** (decides whether to try a sibling at all).
 
 | | Modes | On a target failure |
 |---|---|---|
-| **Pool** | `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test` | the walk advances to the next candidate after a failover-safe failure; any other `4xx` is returned |
+| **Pool** | `fallback`, `load-balance`, `least-latency`, `cost-optimized`, `ab-test` | the walk advances to the next candidate after a failover-safe failure; any other `4xx` is returned |
 | **Named** | `single`, `conditional`, `content-based` | the walk stays inside what was named: `single` stops; a rule walks its `target_keys` chain on the same failover-safe failures and stops at its end |
 
 A pool mode picks its head target for a reason that's about the *pool* —
@@ -3678,7 +3725,7 @@ unset) keeps each replica's copy independent and loses it on restart.
   at a shared `postgres` DSN so keys, config history, and logs agree across
   instances (per-process state above still won't share).
 - Configure a `circuit_breaker` on any target that can fail, and prefer a
-  pool routing mode (`fallback`/`loadbalance`) over a named one where
+  pool routing mode (`fallback`/`load-balance`) over a named one where
   interchangeable providers exist — that's what makes failover automatic
   rather than a manual failure to notice.
 - Use `/metrics` and `/admin/logs` to tune retry, concurrency, and routing
@@ -3717,7 +3764,7 @@ Each target carries:
 | Field | Purpose |
 |---|---|
 | `virtual_key` | Names the registered provider this target routes to (required) |
-| `weight` | Relative share under `loadbalance`; `0` drains the target (ignored by every other mode) |
+| `weight` | Relative share under `load-balance`; `0` drains the target (ignored by every other mode) |
 | `retry` | `attempts`, `on_status_codes`, `initial_backoff_ms` — honoured under **every** routing mode, not just `fallback` |
 | `circuit_breaker` | `failure_threshold`, `success_threshold`, `timeout` — one breaker per target, shared across chat, streaming, embeddings, and images |
 | `concurrency` | `max_concurrency`, `queue_size` — caps in-flight requests per target; overflow returns `429` |
@@ -3731,7 +3778,7 @@ The strategy controls which target(s) a request is offered to, and in what order
 |---|---|
 | `single` | Always route to the first target. Simplest setup. |
 | `fallback` | Try targets in declared order; advance to the next target after a failover-safe failure. |
-| `loadbalance` | Distribute requests across targets by weight. |
+| `load-balance` | Distribute requests across targets by weight. |
 | `conditional` | Match `model` (exact) or `model_prefix` (prefix) against declared rules; first match wins. |
 | `least-latency` | Route to the compatible target with the lowest observed p50 latency. |
 | `cost-optimized` | Estimate input cost from the model catalog and route to the cheapest compatible target. |
@@ -3740,7 +3787,7 @@ The strategy controls which target(s) a request is offered to, and in what order
 
 One pipeline governs chat, streaming, embeddings, images, rerank, moderation, transcription and speech, and one ranker orders targets for all of them, so retry, circuit-breaking and candidate order behave identically across every surface. Strategies split into two families:
 
-- **Pool modes** (`fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test`) advance past a target that failed in a failover-safe way — transport error, attempt timeout, `408`/`429`/`5xx`, open circuit, saturation — to the next candidate; any other `4xx` is returned to the client.
+- **Pool modes** (`fallback`, `load-balance`, `least-latency`, `cost-optimized`, `ab-test`) advance past a target that failed in a failover-safe way — transport error, attempt timeout, `408`/`429`/`5xx`, open circuit, saturation — to the next candidate; any other `4xx` is returned to the client.
 - **Named modes** (`single`, `conditional`, `content-based`) stay inside what was named: `single` reports its one target's failure; a rule walks its `target_keys` chain on the same failover-safe failures and never reaches a target it did not name.
 
 Every mode skips a target whose circuit is open, or that is parked after a `429`, among the candidates it offers; if every candidate is unavailable, the request is still attempted and returns `503`. A rule with one target offers no other candidate.
@@ -3761,11 +3808,16 @@ Plugins are **global**, configured under a single top-level `plugins:` list — 
 
 ### OSS plugins
 
-These 6 plugins ship with the open-source gateway. Three of them are multi-stage — they must be listed once per stage with **byte-identical config**, or the gateway refuses to start:
+These 11 plugins ship with the open-source gateway. Plugins that run at multiple stages must be listed once per stage with **byte-identical config**, or the gateway refuses to start:
 
 | Plugin | Stage(s) | Purpose |
 |---|---|---|
 | `word-filter` | `before_request` (optionally also `after_request`) | Reject request or response text containing a blocked substring |
+| `regex-guard` | `before_request` (optionally also `after_request`) | Match named regular expressions against request or response text |
+| `pii-redact` | `before_request` | Block, redact, or observe email, phone, SSN, credit-card, and custom-pattern matches |
+| `secret-scan` | `before_request` (optionally also `after_request`) | Detect curated credentials and custom secret patterns |
+| `prompt-shield` | `before_request` | Detect common prompt-injection and jailbreak phrasing |
+| `schema-guard` | `after_request` | Validate response output against a JSON Schema subset |
 | `max-token` | `before_request` | Reject requests exceeding token, message-count, or input-length limits |
 | `rate-limit` | `before_request` | Token-bucket rate limiting (global, per-key, per-user) |
 | `budget` | `before_request` **+** `after_request` | Check and record per-API-key USD spend; over the cap returns `402 insufficient_quota` |
@@ -3776,23 +3828,7 @@ These 6 plugins ship with the open-source gateway. Three of them are multi-stage
 
 **SkipProvider**: when `response-cache` serves a hit, it sets `SkipProvider` on the request, which skips only the call to the upstream provider — every remaining `before_request` plugin and the whole `after_request` stage still run, so rate limiting, budget checks, and logging behave the same whether or not the response came from cache.
 
-### Ferro Labs Managed plugins
-
-These 5 plugins require [Ferro Labs Managed](https://www.ferrolabs.ai/) because they depend on ML inference services that run server-side:
-
-| Plugin | Stage | Purpose |
-|---|---|---|
-| `pii-redact` | before_request | Detect and redact PII entities using NER models |
-| `secret-scan` | before_request | Block requests containing leaked API keys or credentials |
-| `prompt-shield` | before_request | Score and block prompt injection attempts |
-| `schema-guard` | after_request | Validate model JSON output against a JSON Schema |
-| `regex-guard` | before_request | Block requests matching configurable regex patterns |
-
-:::note Ferro Labs Managed feature
-The 5 enterprise plugins require a Ferro Labs Managed account. [Join the waitlist →](https://www.ferrolabs.ai/)
-:::
-
-See [Plugins](/plugins) for full configuration examples.
+See [Content guardrails](/plugins/guardrails) for full configuration examples and stage restrictions.
 
 ## MCP integration
 
@@ -3810,7 +3846,7 @@ The operations dashboard ships **embedded** in the OSS binary and is served from
 
 ## Ferro Labs Managed
 
-[Ferro Labs Managed](/ferrocloud/overview) is the managed, multi-tenant version of the AI Gateway hosted by Ferro Labs. It wraps the same OSS engine with per-tenant isolation, durable billing, [semantic caching](/ferrocloud/semantic-cache), SSO/SAML, audit logs, and the 5 enterprise security plugins listed above. See [OSS vs Ferro Labs Managed](/guides/oss-vs-ferrocloud) for a full comparison.
+[Ferro Labs Managed](/ferrocloud/overview) is the managed, multi-tenant version of the AI Gateway hosted by Ferro Labs. It wraps the same OSS engine with per-tenant isolation, durable billing, [semantic caching](/ferrocloud/semantic-cache), SSO/SAML, fleet controls, and managed operations. See [OSS vs Ferro Labs Managed](/guides/oss-vs-ferrocloud) for a full comparison.
 
 ## Observability
 
@@ -3846,7 +3882,7 @@ Source: https://docs.ferrolabs.ai/getting-started/configuration/
 </Head>
 
 :::info As of v1.5.x
-This page documents the config schema shipped by v1.5.2. Keys introduced on the v1.5 line — `targets[].timeout`, `strategy.sticky`, `strategy.failover_on_status_codes`, `conditions[].target_keys` — are rejected by a v1.4 binary's strict decoder. `apiVersion` is advisory — an unrecognized value is kept and only logged as a warning, so a newer config file still starts on an older binary as long as it uses only keys that binary knows.
+This page documents the config schema shipped by v1.5.8. Keys introduced on the v1.5 line — `targets[].timeout`, `strategy.sticky`, `strategy.failover_on_status_codes`, `conditions[].target_keys` — are rejected by a v1.4 binary's strict decoder. `apiVersion` is advisory — an unrecognized value is kept and only logged as a warning, so a newer config file still starts on an older binary as long as it uses only keys that binary knows.
 :::
 
 The gateway loads configuration from a YAML or JSON file at the path set by `GATEWAY_CONFIG`.
@@ -3881,21 +3917,21 @@ The top-level `strategy` block controls how requests are routed.
 
 ```yaml
 strategy:
-  mode: fallback  # single | fallback | loadbalance | conditional | least-latency | cost-optimized | content-based | ab-test
+  mode: fallback  # single | fallback | load-balance | conditional | least-latency | cost-optimized | content-based | ab-test
 ```
 
 | Mode | Family | Description |
 |---|---|---|
 | `single` | Named | Route every request to `targets[0]` only. |
 | `fallback` | Pool | Try targets in declared order; advance to the next after a failover-safe failure. |
-| `loadbalance` | Pool | Weighted random distribution across targets (`targets[].weight`). |
+| `load-balance` | Pool | Weighted random distribution across targets (`targets[].weight`). |
 | `conditional` | Named | Match a request field (`model`, `model_prefix`, `user`, `stream`, `has_tools`, or a `metadata` header entry) to a target or an ordered `target_keys` chain; first match wins. |
 | `least-latency` | Pool | Route to the compatible target with the lowest observed p50 time to first byte for the upstream model; samples expire and one request in ten explores a runner-up. |
 | `cost-optimized` | Pool | Estimate input plus output cost from the model catalog and pick the cheapest compatible target; equal-cost targets draw by `weight`. |
 | `content-based` | Named | Route on user-message content by substring or regex; first match wins. |
 | `ab-test` | Pool | Split traffic across labeled, weighted variants for comparison testing. |
 
-The mode families matter for failure handling: a **pool** mode (`fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test`) advances the request pipeline to the next candidate target when one fails in a failover-safe way — a transport error, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, an open circuit, or saturation; any other `4xx` is returned to the client, and the request's own cancellation or deadline stops routing. A **named** mode (`single`, `conditional`, `content-based`) stays inside what was named: `single` reports its one target's failure, and a rule walks its `target_keys` chain on the same failover-safe failures and stops at its end — it never reaches a target the rule did not name. `strategy.failover_on_status_codes` adds upstream statuses to the failover-safe set (never `400`, `401`, `403`, `404` or `422`).
+The mode families matter for failure handling: a **pool** mode (`fallback`, `load-balance`, `least-latency`, `cost-optimized`, `ab-test`) advances the request pipeline to the next candidate target when one fails in a failover-safe way — a transport error, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, an open circuit, or saturation; any other `4xx` is returned to the client, and the request's own cancellation or deadline stops routing. A **named** mode (`single`, `conditional`, `content-based`) stays inside what was named: `single` reports its one target's failure, and a rule walks its `target_keys` chain on the same failover-safe failures and stops at its end — it never reaches a target the rule did not name. `strategy.failover_on_status_codes` adds upstream statuses to the failover-safe set (never `400`, `401`, `403`, `404` or `422`).
 
 Two rules hold under **every** mode, named or pool:
 - `targets[].retry` is honored regardless of mode — it re-asks the *same* target the number of configured times. Whether a *different* target is asked afterward is the mode's decision alone.
@@ -3953,13 +3989,13 @@ Three condition types, evaluated over **user-role messages only** (system and as
 
 ```yaml
 strategy:
-  mode: loadbalance          # or ab-test
+  mode: load-balance         # or ab-test
   sticky:
     on: user                 # the only supported key
     ttl: 1h                  # optional; a pin lasts at most one window
 ```
 
-Under `loadbalance` and `ab-test`, `sticky` pins each request to the same target — or variant — for the same `user` field, so a conversation keeps its provider prompt cache and a session does not flip variants. It is a stateless hash: no shared state, the same answer on every replica, a random draw for a request without `user`. Refused under any other mode.
+Under `load-balance` and `ab-test`, `sticky` pins each request to the same target — or variant — for the same `user` field, so a conversation keeps its provider prompt cache and a session does not flip variants. It is a stateless hash: no shared state, the same answer on every replica, a random draw for a request without `user`. Refused under any other mode.
 
 ### A/B test routing
 
@@ -3984,7 +4020,7 @@ Targets are provider references. Each `virtual_key` must name a registered provi
 ```yaml
 targets:
   - virtual_key: openai
-    weight: 1.0           # relative share under loadbalance only; ignored elsewhere
+    weight: 1.0           # relative share under load-balance only; ignored elsewhere
     retry:
       attempts: 3
       on_status_codes: [429, 502, 503]   # omit for the default policy: transport errors + 408/429/5xx
@@ -4006,7 +4042,7 @@ targets:
 | Field | Type | Notes |
 |---|---|---|
 | `virtual_key` | string, required | Names a registered provider. |
-| `weight` | float64 | Relative share under `loadbalance`, and the tie-break among equal-cost targets under `cost-optimized`. `0` drains the target. Negative (any mode that reads it) or all-zero under `loadbalance` is a load error. |
+| `weight` | float64 | Relative share under `load-balance`, and the tie-break among equal-cost targets under `cost-optimized`. `0` drains the target. Negative (any mode that reads it) or all-zero under `load-balance` is a load error. |
 | `timeout` | duration | Bound on one attempt against this target (`"8s"`), inside `request_timeout`. A unary attempt is bounded through its response; a streaming attempt only until the provider answers. A timed-out attempt is failover-safe. Must be a positive Go duration. |
 | `models` | []string | Operator-declared model ids this target serves, in addition to whatever the catalog and live discovery already report. Exact ids only — wildcards are rejected at load. Purely additive: it never hides models the target already serves, and declaring one the catalog already knows is a harmless no-op. Advertised on `/v1/models`. |
 | `model_map` | map | Per-target translation of a name clients use into this target's upstream model id (`smart: gpt-4o-mini`). The visible name routes to this target and is listed in `/v1/models`; the upstream call and pricing use the mapped id; the response carries the visible name. Per target, unlike the global `aliases`. See [Routing](/routing#one-model-name-different-upstream-ids). |
@@ -4014,7 +4050,7 @@ targets:
 | `circuit_breaker` | object | One breaker per `virtual_key`, shared across chat, streaming, embeddings, *and* image generation to that target — a target that fails only on one surface still opens the shared breaker and stops serving all four. |
 | `concurrency` | object | `max_concurrency` (1..10000) and `queue_size`. A streaming request holds its slot until the stream ends, not just until headers arrive. Overflow past the queue is `429`. |
 
-A `429`, a client disconnect, a caller-supplied deadline, an unsupported-parameter rejection, and a concurrency shed do **not** count toward opening the circuit breaker. A redirect, a `5xx`, a connection failure, and the gateway's own `request_timeout` or stream idle bound elapsing all do.
+A `429`, a client disconnect, a caller-supplied deadline, an unsupported-parameter rejection, and a concurrency shed do **not** count toward opening the circuit breaker. A redirect, a `5xx`, a connection failure, and the gateway's own `request_timeout` or stream idle bound elapsing all do. Inside a configured `circuit_breaker` block, omitted thresholds and timeout retain the defaults shown above; an explicitly written zero, negative, or empty value is rejected as of v1.5.6.
 
 ### Declared models (`targets[].models`) {#declared-models}
 
@@ -4157,7 +4193,7 @@ An exhausted budget rejects the request with **`402 insufficient_quota`**, not a
 
 Plugin `config` string values support `${VAR}` — see [`${VAR}` resolution](#var-resolution) below.
 
-See [Plugins](/plugins) for all 6 built-in OSS plugins (`word-filter`, `max-token`, `response-cache`, `request-logger`, `rate-limit`, `budget`) and their full option sets. The 5 additional guardrails (pii-redact, secret-scan, prompt-shield, schema-guard, regex-guard) are Ferro Labs Managed-only — see [Enterprise plugins](/plugins/enterprise).
+See [Plugins](/plugins) for all 11 built-in OSS plugins and their full option sets. The five content guardrails (`pii-redact`, `secret-scan`, `prompt-shield`, `schema-guard`, `regex-guard`) are documented together under [Content guardrails](/plugins/guardrails).
 
 ## MCP servers
 
@@ -4267,13 +4303,13 @@ Config string values in `plugins[].config`, `mcp_servers[].headers`, `mcp_server
 
 ## Complete example
 
-Copy [`config.example.yaml`](https://github.com/ferro-labs/ai-gateway/blob/main/config.example.yaml) from the repository for a fully annotated example covering all 30 providers, both routing families, all 6 OSS plugins with correct multi-stage registration, MCP (both transports), compatibility, and observability.
+Copy [`config.example.yaml`](https://github.com/ferro-labs/ai-gateway/blob/main/config.example.yaml) from the repository for a fully annotated example covering all 30 providers, both routing families, all 11 OSS plugins with correct multi-stage registration, MCP (both transports), compatibility, and observability.
 
 ## Related pages
 
 - [Routing](/routing) — all 8 strategies with examples
 - [Plugins](/plugins) — detailed OSS plugin documentation
-- [Enterprise plugins](/plugins/enterprise) — Ferro Labs Managed guardrails (pii-redact, secret-scan, prompt-shield, schema-guard, regex-guard)
+- [Content guardrails](/plugins/guardrails) — PII, secret, injection, regex, and response-schema policies
 - [MCP integration](/guides/mcp) — tool server setup and the agentic loop
 - [Provider configuration](/providers/configuration) — per-provider env vars and base URL overrides
 
@@ -4339,11 +4375,11 @@ verifies SHA-256, but it does not expose `-VerifySignature`; mandatory cosign
 verification is currently available only in the Linux/macOS installer.
 
 ```bash title="Pin a version, using the environment form"
-curl -fsSL https://get.ferrolabs.ai/install.sh | FERROGW_VERSION=v1.5.2 sh
+curl -fsSL https://get.ferrolabs.ai/install.sh | FERROGW_VERSION=v1.5.8 sh
 ```
 
 ```bash title="Or pass flags explicitly"
-curl -fsSL https://get.ferrolabs.ai/install.sh | sh -s -- --version v1.5.2
+curl -fsSL https://get.ferrolabs.ai/install.sh | sh -s -- --version v1.5.8
 ```
 
 ### Where it installs
@@ -4406,8 +4442,8 @@ cosign signature over it, and one SPDX SBOM per archive. Download them from the
 [releases page](https://github.com/ferro-labs/ai-gateway/releases).
 
 Archives are named `ferrogw_<version>_<os>_<arch>.tar.gz` — `.zip` on Windows.
-Note the version in the filename carries **no `v` prefix**: tag `v1.5.2` produces
-`ferrogw_1.5.2_linux_amd64.tar.gz`.
+Note the version in the filename carries **no `v` prefix**: tag `v1.5.8` produces
+`ferrogw_1.5.8_linux_amd64.tar.gz`.
 
 ### Verifying a download
 
@@ -4502,7 +4538,7 @@ It matters less if you call exactly one provider directly and have no near-term 
 |:---|:---|:---|
 | Routing | 8 strategies (single, fallback, load balance, least latency, cost-optimized, content-based, A/B test, conditional). `targets` is an allowlist — a provider you've configured only routes traffic if it's listed there. | [Routing](/routing) |
 | Providers | 30 providers and 2,500+ models behind one API, with a capability matrix for which OpenAI parameters each one supports. | [Providers](/providers) |
-| Plugins & guardrails | 6 built-in plugins — word filter, max-token, response cache, rate limit, budget, request logger — running at `before_request`, `after_request`, and `on_error` stages. | [Plugins](/plugins) |
+| Plugins & guardrails | 11 built-in OSS plugins, including PII redaction, secret scanning, prompt-injection detection, regex policies, and response-schema validation, running at `before_request`, `after_request`, and `on_error` stages. | [Plugins](/plugins) |
 | Admin API & key management | Scoped API keys (`read_only` / `admin`), dashboard sessions, an audit trail, and config history with rollback. | [Admin API](/api-reference/admin) |
 | Embedded dashboard | An operations console compiled into the binary and served from the gateway's own root — no separate image or origin to deploy. | [Dashboard guide](/guides/dashboard) |
 | Observability | OpenTelemetry tracing, Prometheus metrics, and request logs carrying `duration_ms`, `ttft_ms`, and `cost_usd`. | [Monitoring](/operations/monitoring) |
@@ -4850,7 +4886,7 @@ merges or de-duplicates against it.
 ## Routing pipeline: one walk for every surface
 
 Chat, streaming, embeddings, and image generation all route through the same
-walk. A routing strategy (`single`, `fallback`, `loadbalance`,
+walk. A routing strategy (`single`, `fallback`, `load-balance`,
 `least-latency`, `cost-optimized`, `conditional`, `content-based`, `ab-test`)
 decides target **order** only — retry, circuit breaking, concurrency limiting,
 and error classification live once in the pipeline, so the four surfaces
@@ -4868,7 +4904,7 @@ by the mode:
 
 | Mode family | Modes | On a failed target |
 |---|---|---|
-| Pool | `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test` | Advances to the next candidate after a failover-safe failure; other `4xx` are returned |
+| Pool | `fallback`, `load-balance`, `least-latency`, `cost-optimized`, `ab-test` | Advances to the next candidate after a failover-safe failure; other `4xx` are returned |
 | Named | `single`, `conditional`, `content-based` | Stays inside what was named: `single` stops; a rule walks its `target_keys` chain and stops at its end |
 
 Both families skip a target whose circuit breaker is **open**, or that is
@@ -5665,7 +5701,7 @@ For a detailed comparison of Ferro Labs vs LiteLLM and other alternatives, see [
 | Provider credentials | `LITELLM_*` env vars | `virtual_keys` block or `FERRO_*` env vars |
 | Routing | `router_settings` | `strategy.mode` |
 | Fallback | `fallbacks` list | `strategy: {mode: fallback}` |
-| Load balancing | `routing_strategy: simple-shuffle` | `strategy: {mode: loadbalance}` |
+| Load balancing | `routing_strategy: simple-shuffle` | `strategy: {mode: load-balance}` |
 | Rate limiting | `router_settings.rpm_limit` | `rate-limit` plugin |
 | Caching | Redis/S3 integrations | `response-cache` plugin |
 | Request logging | LiteLLM callbacks | `request-logger` plugin |
@@ -5809,8 +5845,8 @@ plugins:
 
 | LiteLLM `routing_strategy` | Ferro `strategy.mode` |
 |---|---|
-| `simple-shuffle` | `loadbalance` |
-| `least-busy` | `loadbalance` |
+| `simple-shuffle` | `load-balance` |
+| `least-busy` | `load-balance` |
 | `latency-based-routing` | `least-latency` |
 | `cost-based-routing` | `cost-optimized` |
 | Fallbacks list | `fallback` |
@@ -5843,7 +5879,7 @@ For a detailed comparison of Ferro Labs vs OpenRouter and other alternatives, se
 | Model selection | `provider/model` slug (`openai/gpt-4o`) | Plain model ID (`gpt-4o`) routed via `targets` |
 | Fallbacks | `models: [...]` array / `route: fallback` | `strategy: {mode: fallback}` |
 | Provider routing prefs | `provider` object (order, allow/deny) | `targets` order + `strategy.mode` |
-| Load balancing | OpenRouter chooses a provider for you | `strategy: {mode: loadbalance}` + `weight` |
+| Load balancing | OpenRouter chooses a provider for you | `strategy: {mode: load-balance}` + `weight` |
 | Caching | OpenRouter prompt caching (provider-side) | `response-cache` plugin (exact-match) |
 | Usage / cost tracking | OpenRouter dashboard | `budget` plugin + admin API |
 | Self-hosting | Not available (hosted SaaS) | Self-hosted by default |
@@ -5974,7 +6010,7 @@ Where OpenRouter automatically distributes traffic across providers, Ferro makes
 
 ```yaml
 strategy:
-  mode: loadbalance
+  mode: load-balance
 
 targets:
   - virtual_key: openai
@@ -6036,7 +6072,7 @@ plugins:
 
 - **OpenRouter is hosted; Ferro is self-hosted.** You bring your own provider keys and run the gateway yourself. See [getting started](/getting-started/quickstart) for Docker and binary options.
 - **`provider/model` slugs are not supported.** Pass plain model IDs and let `targets`/`strategy` choose the provider, or define `aliases`. This is the only required code change for most apps.
-- **Automatic provider selection** in OpenRouter becomes explicit routing in Ferro — `fallback`, `loadbalance`, `conditional`, and more. See [Routing policies](/routing).
+- **Automatic provider selection** in OpenRouter becomes explicit routing in Ferro — `fallback`, `load-balance`, `conditional`, and more. See [Routing policies](/routing).
 - **OpenRouter dashboard & analytics**: The OSS gateway exposes structured logs via the `request-logger` plugin and a queryable admin API. Hosted dashboards and durable analytics are in [Ferro Labs Managed](https://ferrolabs.ai). See [OSS vs Ferro Labs Managed](/guides/oss-vs-ferrocloud).
 
 
@@ -6058,11 +6094,11 @@ For a detailed comparison of Ferro Labs vs Portkey and other alternatives, see [
 | Gateway request header | `x-portkey-api-key` + `x-portkey-config` | Standard `Authorization: Bearer` header |
 | Configs (routing rules) | Portkey Config objects (JSON/dashboard) | `config.yaml` strategy block |
 | Fallback | `strategy: {mode: fallback}` in Portkey Config | `strategy: {mode: fallback}` |
-| Load balancing | `strategy: {mode: loadbalance}` + `weight` | `strategy: {mode: loadbalance}` + `weight` |
+| Load balancing | `strategy: {mode: loadbalance}` + `weight` | `strategy: {mode: load-balance}` + `weight` |
 | Retries | `retry: {attempts: N}` per target | `retry: {attempts: N}` per target |
 | Caching | Portkey semantic cache (cloud) | `response-cache` plugin (exact-match) |
 | Observability | Portkey logs dashboard | `request-logger` plugin + admin API |
-| Guardrails | Portkey Guardrails (cloud) | `word-filter`, `max-token`, `rate-limit` plugins (OSS) |
+| Guardrails | Portkey Guardrails (cloud) | 11 OSS plugins, including PII, secret, prompt-injection, regex, and schema guardrails |
 | Prompt templates | Portkey Prompt Library | `prompt_templates` in `config.yaml` |
 
 ## Step 1 — Start the gateway
@@ -6155,7 +6191,7 @@ Model names are identical — no changes to your messages or parameters needed.
 
 # Ferro config.yaml:
 strategy:
-  mode: loadbalance
+  mode: load-balance
 
 targets:
   - virtual_key: openai
@@ -6426,7 +6462,7 @@ Not every declared constant is wired into a live span yet — the **Status** col
 |---|---|---|
 | `ferro.schema.version` | Emitted | Attribute schema version (`1.0.0-draft`) |
 | `ferro.gateway.trace_id` | Emitted | Unified trace ID (same value as the log `trace_id` / `X-Request-ID`) |
-| `ferro.routing.strategy` | Emitted | Routing strategy used (`fallback`, `loadbalance`, …) |
+| `ferro.routing.strategy` | Emitted | Routing strategy used (`fallback`, `load-balance`, …) |
 | `ferro.routing.target_key` | Emitted | Selected target / virtual key |
 | `ferro.cost.usd` | Emitted | Estimated total request cost in USD |
 | `ferro.cost.input_usd` / `ferro.cost.output_usd` | Emitted | Estimated input / output cost |
@@ -6608,24 +6644,23 @@ For orchestrator wiring (Kubernetes probes, load-balancer health checks) and the
 Source: https://docs.ferrolabs.ai/guides/oss-vs-ferrocloud/
 ================================================================================
 
-The open-source gateway is the engine that powers both editions. Ferro Labs Managed wraps it with multi-tenancy, a management dashboard, durable billing, semantic caching, and enterprise security plugins.
+The open-source gateway is the engine that powers both editions. Ferro Labs Managed wraps it with multi-tenancy, fleet and team controls, durable billing, semantic caching, SSO, and managed operations.
 
 ## Feature comparison
 
 | Feature | OSS Gateway | Ferro Labs Managed |
 |---|---|---|
 | **Providers** | 30 providers, 2,500+ models | ✅ Same |
-| **Routing strategies** | 8 (single, fallback, loadbalance, conditional, least-latency, cost-optimized, content-based, ab-test) | ✅ Same |
+| **Routing strategies** | 8 (single, fallback, load-balance, conditional, least-latency, cost-optimized, content-based, ab-test) | ✅ Same |
 | **Streaming** | ✅ SSE + full MCP agentic loop | ✅ Same |
 | **MCP tool servers** | ✅ | ✅ Same |
-| **OSS Plugins** | ✅ 6 plugins | ✅ 6 plugins |
-| | `word-filter`, `max-token`, `response-cache`, `request-logger`, `rate-limit`, `budget` | Same |
-| **Enterprise Plugins** | — | ✅ 5 additional plugins (Ferro Labs Managed) |
-| | | `pii-redact`, `secret-scan`, `prompt-shield`, `schema-guard`, `regex-guard` |
+| **OSS plugins** | ✅ 11 plugins | ✅ Same |
+| | `word-filter`, `max-token`, `response-cache`, `request-logger`, `rate-limit`, `budget`, `pii-redact`, `secret-scan`, `prompt-shield`, `schema-guard`, `regex-guard` | Same |
+| **Managed guardrails** | — | ✅ CEL custom policy rules + consent-gated Lakera Guard and OpenAI Moderation preflight |
 | **Prompt templates** | ✅ Config-file defined | ✅ Config-file + Dashboard UI (Ferro Labs Managed) |
 | **Admin REST API** | ✅ Full read/write | ✅ Same + Team scoping (Ferro Labs Managed) |
 | **Multi-tenancy** | — | ✅ Isolated per-tenant gateway instances (Ferro Labs Managed) |
-| **Dashboard** | — | ✅ Usage, cost, logs, key management (Ferro Labs Managed) |
+| **Dashboard** | ✅ Embedded operations dashboard | ✅ Managed fleet and team controls |
 | **Virtual key management** | Config file | ✅ Dashboard + API (Ferro Labs Managed) |
 | **Spend tracking** | In-memory (resets on restart) | ✅ Durable (PostgreSQL), per-key/team (Ferro Labs Managed) |
 | **Semantic caching** | — | ✅ pgvector-based similarity cache (Ferro Labs Managed) |
@@ -6647,19 +6682,21 @@ The open-source AI Gateway is fully available for self-hosting today. Ferro Labs
 Ferro Labs Managed pricing and feature tiers will be announced when the platform exits early access. [Join the waitlist →](https://www.ferrolabs.ai/)
 :::
 
-## Security plugins (detail)
+## Content guardrails
 
-The five enterprise security plugins require Ferro Labs Managed because they depend on ML inference services that run server-side:
+The five content guardrails ship in the Apache-licensed OSS gateway and run locally:
 
-| Plugin | What it does | Requires |
-|---|---|---|
-| `pii-redact` | Detects and redacts PII (names, emails, phone numbers, SSNs…) using NER models | Ferro Labs Managed |
-| `secret-scan` | Detects leaked API keys, tokens, and credentials using pattern + entropy analysis | Ferro Labs Managed |
-| `prompt-shield` | Scores user messages for prompt injection attempts using a fine-tuned classifier | Ferro Labs Managed |
-| `schema-guard` | Validates model JSON output against a JSON Schema before returning to client | Ferro Labs Managed |
-| `regex-guard` | Blocks / warns on arbitrary regex rules (custom compliance patterns) | Ferro Labs Managed |
+| Plugin | What it does |
+|---|---|
+| `pii-redact` | Detects email, phone, SSN, credit cards, and custom patterns; blocks, redacts, or records. |
+| `secret-scan` | Detects curated credential formats and custom patterns in requests and responses. |
+| `prompt-shield` | Detects common prompt-injection and jailbreak phrasing with deterministic heuristics. |
+| `schema-guard` | Validates model output against the supported JSON Schema subset. |
+| `regex-guard` | Blocks, warns, or logs arbitrary named regex rules. |
 
-The OSS `word-filter` plugin provides simple keyword blocking without a cloud dependency.
+See [Content guardrails](/plugins/guardrails) for actions, supported kinds, and stage restrictions.
+
+Ferro Labs Managed additionally provides project- and workspace-scoped [CEL custom policy rules and external moderation preflight](/plugins/enterprise).
 
 ## When to use the OSS gateway
 
@@ -6671,8 +6708,8 @@ The OSS `word-filter` plugin provides simple keyword blocking without a cloud de
 ## When to use Ferro Labs Managed
 
 - You need multi-tenant isolation (SaaS product built on top of Ferro)
-- You need PII redaction, prompt injection protection, or secret scanning
 - You want a managed dashboard with spend controls and team management
+- You need CEL rules that combine request, identity, time, PII, and prompt-injection attributes
 - You prefer SLA-backed infrastructure without DevOps overhead
 
 ## Migration path: OSS → Ferro Labs Managed
@@ -6681,9 +6718,7 @@ Start with the open-source gateway. Upgrade to Ferro Labs Managed when you hit o
 
 1. **You need multi-tenant isolation.** Your SaaS product has multiple customers and you need per-tenant gateway instances, usage tracking, and billing. The OSS gateway is single-tenant by design.
 
-2. **You need enterprise security plugins.** Your compliance team requires PII redaction, prompt injection detection, or secret scanning. These plugins depend on ML inference services that only run in Ferro Labs Managed.
-
-3. **You need durable spend tracking.** The OSS `budget` plugin tracks spend in-memory — it resets on restart. Ferro Labs Managed stores spend data in PostgreSQL with per-key, per-team granularity and Stripe billing integration.
+2. **You need durable spend tracking.** The OSS `budget` plugin tracks spend in-memory — it resets on restart. Ferro Labs Managed stores spend data in PostgreSQL with per-key, per-team granularity and Stripe billing integration.
 
 :::tip Start OSS, upgrade when ready
 Your `config.yaml` is compatible between OSS and Ferro Labs Managed. Migration is a deployment change, not a config rewrite. [Join the Ferro Labs Managed waitlist →](https://www.ferrolabs.ai/)
@@ -8252,7 +8287,7 @@ If your stack is deeply Python and you rely on tight LangChain integration, Lite
 
 **Best fit: Ferro Labs Managed**
 
-When you need multi-tenant isolation, a dashboard, enterprise plugins, and someone else handling uptime, Ferro Labs Managed gives you the same gateway engine as a managed service. Portkey is also worth evaluating here if you don't need self-hosting as a fallback.
+When you need multi-tenant isolation, fleet and team controls, and someone else handling uptime, Ferro Labs Managed gives you the same gateway engine as a managed service. Portkey is also worth evaluating here if you don't need self-hosting as a fallback.
 
 ## What Ferro Labs Does Better
 
@@ -11567,7 +11602,7 @@ Every inference route needs a bearer token unless you explicitly set `ALLOW_UNAU
 |---|---|
 | **30 AI providers** | OpenAI, Anthropic, Gemini, Vertex AI, Mistral, Groq, Cohere, DeepSeek, Together, Perplexity, Fireworks, AI21, Azure OpenAI, Azure AI Foundry, xAI, Ollama, Ollama Cloud, Replicate, AWS Bedrock, Hugging Face, Cerebras, NVIDIA NIM, Cloudflare Workers AI, Databricks, Novita, Qwen, Moonshot, SambaNova, DeepInfra, OpenRouter — [see the matrix →](/providers) |
 | **8 routing strategies** | Single, fallback, weighted load balancing, least-latency, cost-optimized, conditional, content-based, and A/B test — [routing guide →](/routing) |
-| **6 built-in plugins** | Word filter, max-token, rate limit, budget, response cache, request logger — plus [5 Ferro Labs Managed](/plugins/enterprise) security plugins. [Plugin catalogue →](/plugins) |
+| **11 built-in OSS plugins** | Word filter, max-token, rate limit, budget, response cache, request logger, plus [five content guardrails](/plugins/guardrails) for regex, PII, secrets, prompt injection, and response schemas. [Plugin catalogue →](/plugins) |
 | **Unified request pipeline** | Chat, streaming, embeddings, and image generation share one routing pipeline — retry, circuit breaking, per-target concurrency, timeouts, metrics, and request logging are true of every surface. |
 | **Native endpoints** | Chat completions, embeddings, images, **rerank, moderations, audio (STT/TTS), files & batches, and `/v1/responses`** — governed and priced, not blindly proxied. [API reference →](/api-reference/overview) |
 | **MCP tool-calling** | Model Context Protocol servers over **HTTP or stdio** (run any `npx`/`uvx` server as a managed subprocess), with per-turn guardrails and budgeting on agentic loops. [MCP guide →](/guides/mcp) |
@@ -11591,7 +11626,7 @@ The dashboard now ships **embedded** in the OSS binary, all four core surfaces s
 ### Core reference
 - [Providers](/providers) — all 30 providers, supported endpoints, and how to enable them
 - [Routing](/routing) — the 8 strategies, with pool-vs-named behaviour and examples
-- [Plugins](/plugins) — the 6 built-in plugins, config, and pipeline stages
+- [Plugins](/plugins) — the 11 built-in plugins, config, and pipeline stages
 - [Dashboard](/guides/dashboard) — the embedded console
 - [API reference](/api-reference/overview) — endpoints, streaming, admin, and errors
 
@@ -11602,7 +11637,7 @@ The dashboard now ships **embedded** in the OSS binary, all four core surfaces s
 - [Troubleshooting](/guides/troubleshooting)
 
 :::info Ferro Labs Managed
-Need multi-tenancy, hosted infrastructure, semantic caching, and enterprise security plugins on top of the OSS engine? [Ferro Labs Managed](/ferrocloud/overview) is in early access — [join the waitlist →](https://www.ferrolabs.ai/).
+Need multi-tenancy, hosted infrastructure, semantic caching, SSO, and managed operations on top of the OSS engine? [Ferro Labs Managed](/ferrocloud/overview) is in early access — [join the waitlist →](https://www.ferrolabs.ai/).
 :::
 
 {/* No page-local JSON-LD here: the site-wide graph in docusaurus.config.ts
@@ -11823,7 +11858,7 @@ ferrogw status --gateway-url http://localhost:8080
 
 ```text
   [OK] http://localhost:8080 -- healthy (4ms)
-  Version: 1.5.2
+  Version: 1.5.8
   Providers: 30 (412 models)
 ```
 
@@ -11870,7 +11905,7 @@ ferrogw version
 ```
 
 ```text
-  Version      1.5.2
+  Version      1.5.8
   Commit       a1b2c3d
   Built        2026-06-01T12:00:00Z
   Go           go1.25.0
@@ -12177,7 +12212,7 @@ Filter gateway logs by `trace_id` in your aggregator to correlate all events for
 
 - **Circuit breakers** — configured per target (`targets[].circuit_breaker`), one breaker per target shared across every surface; every routing strategy skips an open circuit among the candidates it offers. A target that answers `429` is parked for its `Retry-After` (a minute at most) the same way, without its breaker counting the rate limit as a failure. Both are local to one gateway process. State is exposed on `gateway_circuit_breaker_state` and, with request context, on `GET /health`.
 - **Retries** — configurable per target with status-code filtering (`retry.on_status_codes`), honored under every strategy including `single` (set `attempts: 1` to keep single-attempt behavior).
-- **Fallback and pool strategies** — `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, and `ab-test` all advance past an open-circuit target, or one that failed in a failover-safe way (transport error, attempt timeout, `408`/`429`/`5xx`, saturation), automatically, while any other `4xx` is returned to the client; `single` commits to one target and reports its outcome, and a `conditional` or `content-based` rule walks its `target_keys` chain and stops at its end. `targets[].timeout` bounds one attempt so a hung target is failover-safe. See [Routing](/routing).
+- **Fallback and pool strategies** — `fallback`, `load-balance`, `least-latency`, `cost-optimized`, and `ab-test` all advance past an open-circuit target, or one that failed in a failover-safe way (transport error, attempt timeout, `408`/`429`/`5xx`, saturation), automatically, while any other `4xx` is returned to the client; `single` commits to one target and reports its outcome, and a `conditional` or `content-based` rule walks its `target_keys` chain and stops at its end. `targets[].timeout` bounds one attempt so a hung target is failover-safe. See [Routing](/routing).
 
 ## Load balancer and orchestrator health checks
 
@@ -12545,29 +12580,192 @@ plugins:
 
 
 ================================================================================
-# Ferro Labs Managed Plugins
+# Managed guardrails
 Source: https://docs.ferrolabs.ai/plugins/enterprise/
 ================================================================================
 
-Ferro Labs Managed adds five security plugins on top of the [6 open-source plugins](/plugins) that ship with the AI Gateway. They slot into the same `before_request`/`after_request` plugin pipeline, but the detection logic (PII models, secret patterns, injection scoring, schema/regex engines) is closed-source and only runs in managed deployments.
+Ferro Labs Managed runs the same [11 open-source plugins](/plugins) as the self-hosted gateway, then adds a Cloud policy layer for tenant- and project-scoped rules that do not exist in the OSS binary.
 
-| Plugin | What it guards | Typical action |
+## CEL custom policy rules
+
+Managed deployments can evaluate [Common Expression Language (CEL)](https://github.com/google/cel-go) predicates before sending a request upstream. A rule must return a boolean; a match can block, warn, or log.
+
+```text
+prompt_tokens > 4000
+model == "gpt-4" && user_role != "admin"
+contains_pii && pii_types.exists(type, type == "ssn")
+injection_categories.exists(category, category == "system_override")
+```
+
+CEL rules can use these variables:
+
+| Variable | Type | Meaning |
 |---|---|---|
-| `pii-redact` | Personally identifiable information in request or response content | Redact in place, or block the request |
-| `secret-scan` | Leaked API keys, credentials, and tokens in request content | Block, or warn and pass through |
-| `prompt-shield` | Prompt injection and jailbreak attempts in user messages | Block above a confidence threshold |
-| `schema-guard` | Model output conformance to a JSON Schema | Block non-conforming responses |
-| `regex-guard` | Custom regex-defined patterns (SSNs, business rules) | Block, or warn and pass through |
+| `model`, `provider`, `user_role` | string | Request routing and caller attributes |
+| `prompt_tokens`, `message_count`, `total_chars` | integer | Request size attributes |
+| `contains_pii` | boolean | Whether the OSS PII detector found a supported entity |
+| `pii_types` | list of strings | Detected entity names such as `email` or `ssn`; never the matched text |
+| `injection_categories` | list of strings | Prompt-shield category names; there is no numeric injection score |
+| `hour_of_day`, `day_of_week` | integer | Evaluation time; `day_of_week` uses Monday as 0 |
 
-:::info Ferro Labs Managed
-These five plugins are **not included in the open-source build** — they are only available on [Ferro Labs Managed](/ferrocloud/overview). Join the [waitlist](https://www.ferrolabs.ai/) for access.
-:::
+Rules are scoped to a project or the whole workspace and evaluated in their configured order. The first blocking match stops the request; non-blocking matches remain observable without hiding a later block.
+
+Expressions are validated before storage, limited to 4,096 bytes, compiled and cached per rule, and capped at 100 ms per evaluation. A stored rule that cannot compile or finish in time fails open for that rule and emits a warning and fail-open metric. Workspace log-only mode records matches without blocking.
+
+CEL availability is plan-gated in Ferro Labs Managed. Use the dashboard rule builder or the managed guardrail API; `POST /api/v1/guardrails/rules/dry-run` evaluates a draft with the same CEL compiler and evaluator used on live traffic.
+
+## External moderation providers
+
+Managed deployments can also run consent-gated external preflight checks:
+
+| Provider | Purpose | Default behavior on provider failure |
+|---|---|---|
+| Lakera Guard | Prompt-attack and safety screening through Lakera's API | Fail open and record the failure |
+| OpenAI Moderation | Content moderation through OpenAI's moderation API | Fail open and record the failure |
+
+These providers are configured in the integrations hub rather than as gateway plugins. No request content is sent to an external guardrail provider until data-sharing consent is enabled.
+
+## What remains open source
+
+PII redaction, secret scanning, prompt shielding, schema validation, and regex rules now ship in the Apache-licensed gateway. See [Content guardrails](/plugins/guardrails) for their configuration and supported actions.
 
 ## Related
 
-- [Plugins overview](/plugins) — the 6 OSS plugins and the shared pipeline stages
+- [Plugin system](/plugins)
+- [OSS vs Ferro Labs Managed](/guides/oss-vs-ferrocloud)
 - [Ferro Labs Managed overview](/ferrocloud/overview)
-- [OSS vs. Ferro Labs Managed](/guides/oss-vs-ferrocloud)
+
+
+
+================================================================================
+# Content guardrails
+Source: https://docs.ferrolabs.ai/plugins/guardrails/
+================================================================================
+
+Five content guardrails ship in the open-source gateway as of v1.5.7. They use the same global [plugin pipeline](/plugins) as the other built-ins. A guardrail listed at a stage where it cannot act is a startup error, also reported by `ferrogw validate`.
+
+| Plugin | Stage(s) | Actions | Purpose |
+|---|---|---|---|
+| `regex-guard` | `before_request`, optionally `after_request` | `block`, `warn`, `log` | Match custom named regular expressions. |
+| `pii-redact` | `before_request` | `block`, `redact`, `log` | Detect email, phone, SSN, credit cards, or custom patterns. |
+| `secret-scan` | `before_request`, optionally `after_request` | `block`, `warn`, `log` | Detect curated credential formats or custom patterns. |
+| `prompt-shield` | `before_request` | `block`, `warn`, `log` | Detect common prompt-injection and jailbreak phrasing. |
+| `schema-guard` | `after_request` | `block`, `warn`, `log` | Validate output against the supported JSON Schema subset. |
+
+Only `block` rejects for `regex-guard`, `secret-scan`, and `prompt-shield`; `warn` and `log` record and forward. `pii-redact` can rewrite supported request surfaces, and `schema-guard` evaluates the completed response.
+
+## Regex guard
+
+`rules` is required. A rule's `apply_to` and the plugin entry's `stage` must agree, so output screening requires an `after_request` entry.
+
+```yaml
+plugins:
+  - name: regex-guard
+    type: guardrail
+    stage: before_request
+    enabled: true
+    config:
+      action: block
+      rules:
+        - name: internal-ticket-id
+          pattern: '\bINC-\d{6}\b'
+          apply_to: input       # input | output | both
+          action: block         # block | warn | log
+```
+
+## PII redaction
+
+The built-in entities are `email`, `phone`, `ssn`, and `credit_card`; card candidates must pass a Luhn check. Omit `entities` to enable all built-ins. `action: log`, added in v1.5.8, records detections without denying or rewriting.
+
+```yaml
+plugins:
+  - name: pii-redact
+    type: guardrail
+    stage: before_request
+    enabled: true
+    config:
+      action: redact            # block | redact | log
+      entities: [email, ssn]
+      patterns: ['\bACME-\d{6}\b']
+      redact_placeholder: "[REDACTED]"
+```
+
+`redact` rewrites `/v1/chat/completions` and `/v1/completions`. Other surfaces forward their own body unchanged, so a detection under `redact` is denied rather than silently sent upstream. `block` and `log` behave consistently on every surface.
+
+## Secret scanning
+
+Omit `kinds` to enable all curated formats. v1.5.8 distinguishes `anthropic_key` from `openai_key` and adds `gitlab_token`, `npm_token`, `huggingface_token`, `sendgrid_key`, `twilio_key`, `azure_storage_key`, and `slack_webhook`.
+
+```yaml
+plugins:
+  - name: secret-scan
+    type: guardrail
+    stage: before_request
+    enabled: true
+    config:
+      action: block
+      kinds: [aws_access_key, anthropic_key, private_key]
+
+  # Add an identical entry to screen model output too.
+  - name: secret-scan
+    type: guardrail
+    stage: after_request
+    enabled: true
+    config:
+      action: block
+      kinds: [aws_access_key, anthropic_key, private_key]
+```
+
+The full curated set is `aws_access_key`, `github_token`, `slack_token`, `anthropic_key`, `openai_key`, `google_api_key`, `stripe_key`, `private_key`, `jwt`, `gitlab_token`, `npm_token`, `huggingface_token`, `sendgrid_key`, `twilio_key`, `azure_storage_key`, and `slack_webhook`.
+
+## Prompt shield
+
+Prompt shield uses deterministic heuristics over common written forms, not a classifier. Treat it as one defense layer and measure `warn` or `log` before enforcing on adversarial traffic.
+
+```yaml
+plugins:
+  - name: prompt-shield
+    type: guardrail
+    stage: before_request
+    enabled: true
+    config:
+      action: block
+      categories: [system_override, instruction_leak]
+```
+
+Omit `categories` to enable `system_override`, `role_manipulation`, `instruction_leak`, and `delimiter_attack`.
+
+## Schema guard
+
+Schema guard supports `type`, `required`, and `properties`. Unsupported keywords are ignored; malformed supported keywords fail validation. On a streamed response it can report a violation, but cannot unsend chunks already delivered.
+
+```yaml
+plugins:
+  - name: schema-guard
+    type: guardrail
+    stage: after_request
+    enabled: true
+    config:
+      action: block
+      schema:
+        type: object
+        required: [name, score]
+        properties:
+          name: {type: string}
+          score: {type: number}
+```
+
+## Validation behavior
+
+Unknown actions, entities, kinds, categories, or `apply_to` values fail configuration validation. Present-but-empty selectors also fail when they would make a plugin inspect nothing; omit a selector to accept its documented default. Empty custom regex patterns are rejected because they match every request.
+
+For embedders, v1.5.8 also exports `piiredact.Detect(text)` and `promptshield.Detect(text)`. These pure functions return sorted built-in entity/category names and never return matched text; custom configured patterns are not included.
+
+## Related
+
+- [Plugin system](/plugins)
+- [Configuration reference](/getting-started/configuration#plugins)
+- [Changelog](/changelog)
 
 
 
@@ -12639,7 +12837,7 @@ plugins:
 Source: https://docs.ferrolabs.ai/plugins/overview/
 ================================================================================
 
-Plugins are the Ferro Labs AI Gateway's middleware. Each one runs at fixed points in the request lifecycle and can inspect the request, mutate it, deny it, skip the provider call, or record what happened. The six built-in plugins — guardrails, a rate limiter, a spend budget, a response cache, and a request logger — are all built on the same interface an out-of-tree plugin uses, so nothing about the built-ins is privileged.
+Plugins are the Ferro Labs AI Gateway's middleware. Each one runs at fixed points in the request lifecycle and can inspect the request, mutate it, deny it, skip the provider call, or record what happened. The 11 built-in plugins — guardrails, a rate limiter, a spend budget, a response cache, and a request logger — are all built on the same interface an out-of-tree plugin uses, so nothing about the built-ins is privileged.
 
 ## What a plugin is
 
@@ -12765,18 +12963,23 @@ Two admin endpoints answer different questions:
 
 ## Built-in plugins
 
-Six plugins ship with the open-source gateway. Each has its own page for full configuration and gotchas.
+Eleven plugins ship with the open-source gateway.
 
 | Plugin | Type | Stages | Purpose |
 |---|---|---|---|
 | [`word-filter`](/plugins/word-filter) | guardrail | before_request (+ after_request) | Reject a request — or screen a response — whose text contains a blocked entry as a substring. |
+| [`regex-guard`](/plugins/guardrails#regex-guard) | guardrail | before_request (+ after_request) | Match custom named regular expressions against request or response text. |
+| [`pii-redact`](/plugins/guardrails#pii-redaction) | guardrail | before_request | Block, redact, or observe detected PII and custom patterns. |
+| [`secret-scan`](/plugins/guardrails#secret-scanning) | guardrail | before_request (+ after_request) | Detect curated credential formats and custom patterns. |
+| [`prompt-shield`](/plugins/guardrails#prompt-shield) | guardrail | before_request | Detect common prompt-injection and jailbreak phrasing. |
+| [`schema-guard`](/plugins/guardrails#schema-guard) | guardrail | after_request | Validate completed output against a JSON Schema subset. |
 | [`max-token`](/plugins/max-token) | guardrail | before_request | Reject a request over a completion-token ceiling, message count, or input length; never imposes a ceiling. |
 | [`rate-limit`](/plugins/rate-limit) | ratelimit | before_request | Token-bucket limits globally and per API key or user, independent of the per-IP HTTP limiter. |
 | [`budget`](/plugins/budget) | ratelimit | before_request + after_request | Soft per-API-key USD spend cap computed from token usage; `402 insufficient_quota` once exhausted. |
 | [`response-cache`](/plugins/response-cache) | transform | before_request + after_request | Serve an identical repeated chat request from an in-memory cache, scoped to the credential that primed it. |
 | [`request-logger`](/plugins/request-logger) | logging | before_request + after_request + on_error | Structured per-request logs, optionally persisted to power the dashboard's Request Logs page. |
 
-Advanced guardrails — PII redaction, prompt-injection shielding, secret scanning, schema validation — are available in Ferro Labs Managed. See [Enterprise plugins](/plugins/enterprise).
+See [Content guardrails](/plugins/guardrails) for their actions, stage restrictions, complete kind lists, and validation behavior.
 
 ## Related
 
@@ -12785,7 +12988,8 @@ Advanced guardrails — PII redaction, prompt-injection shielding, secret scanni
 - [Cost tracking](/guides/cost-tracking) — pairing `budget` with request-log cost data
 - [Request logging](/operations/request-logging) — persisting `request-logger` output
 - [MCP tool calling](/guides/mcp) — how plugins re-run across agentic loop turns
-- [Enterprise plugins](/plugins/enterprise) — managed guardrails beyond the OSS set
+- [Content guardrails](/plugins/guardrails) — regex, PII, secret, injection, and response-schema policies
+- [Managed guardrails](/plugins/enterprise) — CEL custom policy and external moderation preflight in Ferro Labs Managed
 
 
 
@@ -13428,7 +13632,7 @@ See [Routing](/routing) and [Provider configuration](/providers/configuration).
 
 ## Endpoint-support matrix
 
-Which OpenAI-compatible surface each provider implements, as of **v1.5.2**. This
+Which OpenAI-compatible surface each provider implements, as of **v1.5.8**. This
 mirrors the machine-checked matrix in the gateway source (`providers/README.md`),
 which fails the build if a provider's real interface set ever drifts from it.
 
@@ -13536,7 +13740,7 @@ above). For every provider's exact environment variables, optional
 Source: https://docs.ferrolabs.ai/routing/ab-test/
 ================================================================================
 
-A/B test splits live traffic across two or more labelled variants by weighted random draw. It optimizes for **comparing** models or providers under real production traffic — measuring quality, cost, or latency differences during a migration — not for failover order (`fallback`), even load distribution (`loadbalance`), or measured speed (`least-latency`). Every request is answered by one real provider: this is **not** a shadow-traffic or mirroring mode. Set `strategy.mode: ab-test` to use it.
+A/B test splits live traffic across two or more labelled variants by weighted random draw. It optimizes for **comparing** models or providers under real production traffic — measuring quality, cost, or latency differences during a migration — not for failover order (`fallback`), even load distribution (`load-balance`), or measured speed (`least-latency`). Every request is answered by one real provider: this is **not** a shadow-traffic or mirroring mode. Set `strategy.mode: ab-test` to use it.
 
 :::tip In plain words
 Send a share of live traffic to a challenger and the rest to your control, label each request, and compare the labelled results later. Every request is answered by one variant only — nothing is duplicated. If the drawn variant is unreachable, times out or is overloaded, another target in the pool answers, but the request keeps its original label so the experiment stays honest.
@@ -13616,7 +13820,7 @@ targets:
 
 - Comparing model quality or cost across providers under real production traffic before committing fully.
 - A gradual migration: shift weights toward the challenger over successive deploys, then remove the control once satisfied.
-- Draining a variant to zero traffic (`weight: 0`) before removing it from the config, the same pattern `loadbalance` uses for targets.
+- Draining a variant to zero traffic (`weight: 0`) before removing it from the config, the same pattern `load-balance` uses for targets.
 
 ## Gotchas
 
@@ -13624,7 +13828,7 @@ targets:
 - **The draw is over eligible variants, not all configured variants.** Only variants whose provider is registered and that support the requested model are candidates. If `control` serves `gpt-4o` and `challenger` doesn't, every `gpt-4o` request goes to `control` regardless of the configured weight — the effective split differs per model when variants serve different model sets.
 - **The variant label travels with the request** as `ferro.routing.ab_variant_label` on the request's observability events — the `gateway.request.completed` / `gateway.request.failed` event and, where attempt events are enabled, each `gateway.routing.attempt` event. Those events reach registered exporters (the LangSmith and Langfuse plugins, or your own) and a custom observability provider; the label is not a span attribute, a metric label, or a `request-logger` column. It is the label of the variant that was *drawn*, even when a failover meant another target produced the answer: an intent-to-treat record, so a challenger is charged for its failures rather than hidden behind the control. This is how you attribute observed outcomes back to `control` vs. `challenger` after the fact.
 - **`weight: 0` drains a variant.** A drained variant is excluded from the draw entirely; it can never win, even if it's technically eligible.
-- **`ab_variants[].weight` is what counts — `targets[].weight` is ignored under this mode.** `targets[].weight` only matters under `loadbalance`; don't expect it to influence the A/B split.
+- **`ab_variants[].weight` is what counts — `targets[].weight` is ignored under this mode.** `targets[].weight` only matters under `load-balance`; don't expect it to influence the A/B split.
 - **Weights are relative, not percentages.** `weight: 70` and `weight: 30` behave identically to `weight: 7` and `weight: 3` — only the ratio matters.
 - **This is a pool mode, but the draw itself is not retried.** Once a variant is drawn, that variant's target leads; after a failover-safe failure the pipeline advances through the remaining configured targets like any pool mode, while any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the client. There is no re-draw — a failed request does not get a second chance at a different variant within the same routing decision.
 - **A negative weight, an all-zero weight set, or a variant without a `label` is a load error**, not a runtime failure — `ferrogw validate` and gateway startup reject it before traffic is served.
@@ -13723,7 +13927,7 @@ targets:
 - Deterministic pinning: a specific model, tenant or request shape must always be served by a specific backend, for compliance, contractual, or data-residency reasons — not "prefer this provider," but "only this provider."
 - Routing whole model families by prefix (`claude-`, `gpt-`, `gemini-`) to their native provider without listing every model name individually.
 - A pinned rule that still needs a stand-in: name the stand-in in `target_keys`, and it is used only when the preferred member is at fault.
-- Any setup where `fallback`'s or `loadbalance`'s willingness to pick a different provider is the behaviour you need to prevent, not add.
+- Any setup where `fallback`'s or `load-balance`'s willingness to pick a different provider is the behaviour you need to prevent, not add.
 
 ## Gotchas
 
@@ -13835,7 +14039,7 @@ targets:
 Source: https://docs.ferrolabs.ai/routing/cost-optimized/
 ================================================================================
 
-Cost-optimized routes each request to the cheapest model-compatible target, ranked by **estimated input plus output cost** from the built-in model catalog. It optimizes for **spend** — not failover order (`fallback`), distribution (`loadbalance`), or latency (`least-latency`). Set `strategy.mode: cost-optimized` to use it.
+Cost-optimized routes each request to the cheapest model-compatible target, ranked by **estimated input plus output cost** from the built-in model catalog. It optimizes for **spend** — not failover order (`fallback`), distribution (`load-balance`), or latency (`least-latency`). Set `strategy.mode: cost-optimized` to use it.
 
 :::tip In plain words
 Each request goes to the cheapest provider that serves the model, using the built-in price list, a rough guess at how many tokens the prompt is, and the completion budget the request asked for. If the cheapest one is unreachable, times out or is overloaded, the next-cheapest takes over; two providers that cost the same share the traffic by `weight`. A provider with no known price is used last (the default), skipped, or treated as free — your choice.
@@ -13935,7 +14139,7 @@ targets:
 Source: https://docs.ferrolabs.ai/routing/fallback/
 ================================================================================
 
-Fallback tries targets in the order you declare them, advancing to the next target when the current one fails in a way another provider can fix. It optimizes for **availability**: a request that failed because a provider was unreachable, timed out or overloaded is answered by the next-best provider instead of being reported as a failure — not for spreading load (`loadbalance`), speed (`least-latency`), or cost (`cost-optimized`). Set `strategy.mode: fallback` to use it.
+Fallback tries targets in the order you declare them, advancing to the next target when the current one fails in a way another provider can fix. It optimizes for **availability**: a request that failed because a provider was unreachable, timed out or overloaded is answered by the next-best provider instead of being reported as a failure — not for spreading load (`load-balance`), speed (`least-latency`), or cost (`cost-optimized`). Set `strategy.mode: fallback` to use it.
 
 :::tip In plain words
 List your providers in the order you trust them. If the first is unreachable, times out or is overloaded, the same request goes to the next one and the client never sees the failure. If the first says the *request* is wrong — bad key, unknown model, invalid input — the client gets that answer, because another provider cannot fix it.
@@ -14012,12 +14216,12 @@ A request for `smart` is served by OpenAI as `gpt-4o` and, on failover, by Anthr
 
 - A primary provider plus one or more backups, where getting an answer from *someone* matters more than getting it from the preferred provider every time.
 - Declared priority matters: you want traffic to favor a specific provider (cheapest, fastest, contractually preferred) and spill to the next one only when the preferred provider fails.
-- You want failover without hand-tuning weights (`loadbalance`) or relying on measured latency (`least-latency`).
+- You want failover without hand-tuning weights (`load-balance`) or relying on measured latency (`least-latency`).
 
 ## Gotchas
 
 - **Fallback holds no retry policy of its own.** `targets[].retry.*` is the pipeline's config, resolved per target and applied identically under every routing mode. What's specific to `fallback` is only the decision to advance to the *next* target once that target's retry budget is spent.
-- **Declared order is priority order — there are no weights.** `targets[].weight` is read only by `loadbalance`; under `fallback`, the first entry in `targets[]` is always tried first.
+- **Declared order is priority order — there are no weights.** `targets[].weight` is read only by `load-balance`; under `fallback`, the first entry in `targets[]` is always tried first.
 - **Not every failure fails over.** Any other `4xx` from a target — `400`, `401`, `403`, `404`, `422`, and the rest — is returned to the client; another provider cannot fix a malformed request or a revoked key. An attempt that timed out waiting on the target, an open circuit and a full concurrency queue advance to the next target at once, without spending a retry; a transport failure, `408`, `429` and `5xx` advance once the retry budget is spent. The client's own cancellation or deadline stops routing entirely — nothing is retried or advanced on the caller's behalf.
 - **A `Retry-After` hint longer than 30 seconds abandons the target instead of waiting on it.** The gateway won't hold a request open past that cap; it advances to the next target immediately and logs that the target was abandoned.
 - **Only deterministic-retry statuses are retried by default.** With no `on_status_codes` set, retries apply to transport failures plus `408`, `429`, and `5xx`. Every other 4xx (e.g. `400`, `401`, `404`) is treated as a client error that a retry against the same target cannot fix.
@@ -14038,7 +14242,7 @@ A request for `smart` is served by OpenAI as `gpt-4o` and, on failover, by Anthr
 Source: https://docs.ferrolabs.ai/routing/least-latency/
 ================================================================================
 
-Least-latency routes to the compatible target with the lowest observed **p50** latency for the request's upstream model. It optimizes for **how quickly a provider begins answering** across interchangeable providers — not for cost (`cost-optimized`), declared failover order (`fallback`), or an even traffic split (`loadbalance`). Set `strategy.mode: least-latency` to use it.
+Least-latency routes to the compatible target with the lowest observed **p50** latency for the request's upstream model. It optimizes for **how quickly a provider begins answering** across interchangeable providers — not for cost (`cost-optimized`), declared failover order (`fallback`), or an even traffic split (`load-balance`). Set `strategy.mode: least-latency` to use it.
 
 :::tip In plain words
 Every completed request is timed, and each new request goes to the provider with the lowest median time so far for that model. A provider nobody has timed yet is tried first so it gets measured; one nobody has timed in the last five minutes counts as untimed again. One request in ten goes to a measured runner-up on purpose, so a provider that has recovered gets noticed. "Time" is how long the provider took to *start* answering — a stream's first chunk — so a model that writes longer answers does not look slower than a terse one.
@@ -14097,7 +14301,7 @@ targets:
 - **Unseen targets jump the queue by design.** A target with no live samples for the model is shuffled to the front ahead of every sampled target, so adding a new target to the pool means it briefly absorbs traffic while it's profiled — this is intentional cold-start behaviour, not a bug.
 - **About one request in ten goes to a runner-up.** The leader takes the large majority, not everything. A dashboard that expects 100 % on the fastest provider is reading the exploration share.
 - **Samples expire and reset with the process.** A target with no sample newer than five minutes reads as unseen again; a restart, redeploy, or rolling update wipes all history. Neither is shared between gateway instances.
-- **`weight` is ignored.** `targets[].weight` has no effect under this mode — it is read by `loadbalance` and, for equal-cost ties, `cost-optimized`.
+- **`weight` is ignored.** `targets[].weight` has no effect under this mode — it is read by `load-balance` and, for equal-cost ties, `cost-optimized`.
 - **This is a pool mode.** The pipeline advances past an open-circuit or parked target, or one that failed in a failover-safe way, to the next one in p50 order; any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the client. Failover falls out of the mode family, not out of anything latency-specific.
 - **Only model-compatible targets are eligible.** A target whose provider isn't registered, or that doesn't serve the requested model, is filtered out before latency ordering is applied.
 
@@ -14116,7 +14320,7 @@ targets:
 Source: https://docs.ferrolabs.ai/routing/loadbalance/
 ================================================================================
 
-Load balance spreads traffic across two or more targets by weighted random selection. It optimizes for **distributing** load across interchangeable providers — not for failover order (`fallback`), latency (`least-latency`), or cost (`cost-optimized`). Set `strategy.mode: loadbalance` to use it.
+Load balance spreads traffic across two or more targets by weighted random selection. It optimizes for **distributing** load across interchangeable providers — not for failover order (`fallback`), latency (`least-latency`), or cost (`cost-optimized`). Set `strategy.mode: load-balance` to use it. The legacy `loadbalance` spelling remains accepted and is normalized for backward compatibility.
 
 :::tip In plain words
 Split traffic between providers by weight — `weight: 7` and `weight: 3` means roughly 70/30 over time. A request whose chosen provider is unreachable, times out or is overloaded is handed to another provider in the pool; one the provider rejected as a bad request comes back as-is. `weight: 0` stops new traffic to a provider without deleting it.
@@ -14135,7 +14339,7 @@ With OpenAI at `weight: 7` and Anthropic at `weight: 3`, each request draws a st
 
 ## Behaviour
 
-`loadbalance` is a **pool mode**: after a failover-safe failure (a transport failure, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, an open circuit, or a full concurrency queue) the pipeline advances to the next target in the rotated order rather than reporting the failure back to the caller; any other `4xx` is returned to the client. `targets[].retry` still governs how many times any one target is retried before the pipeline moves on.
+`load-balance` is a **pool mode**: after a failover-safe failure (a transport failure, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, an open circuit, or a full concurrency queue) the pipeline advances to the next target in the rotated order rather than reporting the failure back to the caller; any other `4xx` is returned to the client. `targets[].retry` still governs how many times any one target is retried before the pipeline moves on.
 
 On each request, `LoadBalance.SelectTargets` (`internal/strategies/loadbalance.go`) filters `targets[]` down to those whose provider is registered and whose `SupportsModel(req.Model)` returns true, then picks a weight-biased starting index (`weightedStartIndex`, `internal/strategies/targetorder.go`) and returns the full compatible list **rotated** from that index. The first key in the returned order is the weighted pick the pipeline commits to first; the rest stay available as substitutes the pipeline may use before committing — for example when the picked target's circuit is open. `SelectTargets` returns `nil` (the caller reports 404 `model_not_found`) when no compatible target exists, or when every compatible target has been drained to weight `0`.
 
@@ -14143,7 +14347,7 @@ On each request, `LoadBalance.SelectTargets` (`internal/strategies/loadbalance.g
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `strategy.mode` | string | — | Set to `loadbalance`. |
+| `strategy.mode` | string | — | Set to `load-balance`. |
 | `targets[].weight` | float64 | `0` if omitted (YAML `omitempty`) | This target's relative share of traffic. Read here and, for equal-cost ties, by `cost-optimized`; ignored by every other mode. `0` means the target receives zero traffic — it can never be the rotation's start index. |
 | `strategy.sticky.on` | string | — | Set to `user` to pin each request to the same start target for the same `user` field: a stateless hash, so a conversation keeps its provider prompt cache without any shared state, and every replica with this config answers the same. A request with no `user` draws at random. |
 | `strategy.sticky.ttl` | duration | none | Rotates pins: a `user` stays pinned for at most one window (`"1h"`), after which it may hash to another target. |
@@ -14152,7 +14356,7 @@ On each request, `LoadBalance.SelectTargets` (`internal/strategies/loadbalance.g
 
 ```yaml
 strategy:
-  mode: loadbalance
+  mode: load-balance
   sticky:
     on: user     # the request's `user` field
     ttl: 1h      # optional; a pin lasts at most one window
@@ -14164,7 +14368,7 @@ With `sticky`, every request carrying the same `user` starts on the same target,
 
 ```yaml
 strategy:
-  mode: loadbalance
+  mode: load-balance
 
 targets:
   - virtual_key: openai
@@ -14198,9 +14402,9 @@ Every response still says `"model": "smart"`. See [One model name, different ups
 ## Gotchas
 
 - **Weights are relative, not percentages.** `weight: 0.7` and `weight: 0.3` behave identically to `weight: 7` and `weight: 3` — only the ratio between targets matters.
-- **Omitting `weight` yields `0`, not an even split.** Because `weight` uses YAML `omitempty`, a target with no `weight` key defaults to `0.0` — silent zero traffic. This is an easy foot-gun: set `weight` explicitly on every target under `loadbalance`.
+- **Omitting `weight` yields `0`, not an even split.** Because `weight` uses YAML `omitempty`, a target with no `weight` key defaults to `0.0` — silent zero traffic. This is an easy foot-gun: set `weight` explicitly on every target under `load-balance`.
 - **An all-zero or negative weight set is rejected at load.** `ferrogw validate` (and gateway startup) reject a negative weight outright and reject a config where every target's weight sums to zero — but one *forgotten* weight on an otherwise-valid config passes validation and silently drains just that target.
-- **This is a pool mode.** The pipeline advances past an open-circuit target, or one that failed in a failover-safe way, to the next one in the rotated order; any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the client. A `loadbalance` config gets failover "for free" as a side effect of the mode family, not because of anything weight-specific.
+- **This is a pool mode.** The pipeline advances past an open-circuit target, or one that failed in a failover-safe way, to the next one in the rotated order; any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the client. A `load-balance` config gets failover "for free" as a side effect of the mode family, not because of anything weight-specific.
 - **Only model-compatible targets are eligible.** A target whose provider isn't registered, or that doesn't serve the requested model, is filtered out before weighting is applied — it never wins the draw regardless of its configured weight.
 - **Sticky hashing changes the draw, not the pool.** `sticky: { on: user }` maps each `user` into the same weight-proportional draw every time, so a pinned user still lands on a target in proportion to the weights; changing weights or the target set re-maps a share of users. A `weight: 0` target is never pinned to.
 - Selection uses `math/rand`, deliberately — this is a load-shaping decision, not a security-sensitive one.
@@ -14233,7 +14437,7 @@ You tell the gateway which providers it may use (`targets`) and one rule for cho
 |---|---|---|
 | One provider, nothing clever | [`single`](/routing/single) | Everything goes to OpenAI; the gateway adds keys, limits, plugins and logs. |
 | A main provider and a backup | [`fallback`](/routing/fallback) | OpenAI first; if it is down or overloaded, Anthropic answers the same request. |
-| Traffic shared between providers | [`loadbalance`](/routing/loadbalance) | 70 % OpenAI, 30 % Azure OpenAI; `weight: 0` drains one before you remove it. |
+| Traffic shared between providers | [`load-balance`](/routing/loadbalance) | 70 % OpenAI, 30 % Azure OpenAI; `weight: 0` drains one before you remove it. |
 | Whoever answers fastest right now | [`least-latency`](/routing/least-latency) | Groq, OpenAI and Anthropic all serve the model; the quickest one keeps getting the traffic. |
 | The cheapest provider per request | [`cost-optimized`](/routing/cost-optimized) | DeepSeek, OpenAI and Anthropic serve the model; the cheapest listed price wins. |
 | Some models pinned to one provider | [`conditional`](/routing/conditional) | `claude-*` only ever goes to Anthropic, whatever else is configured. |
@@ -14255,7 +14459,7 @@ Routing is two top-level blocks in `config.yaml` (or JSON): a `strategy:` block 
 
 ```yaml
 strategy:
-  mode: fallback   # single | fallback | loadbalance | least-latency |
+  mode: fallback   # single | fallback | load-balance | least-latency |
                    # cost-optimized | conditional | content-based | ab-test
 
 targets:
@@ -14265,7 +14469,7 @@ targets:
   - virtual_key: anthropic
 ```
 
-Mode-specific keys live under `strategy:` alongside `mode`: `conditions[]` (conditional), `content_conditions[]` (content-based), `ab_variants[]` (ab-test), `unpriced_strategy` (cost-optimized) and `sticky` (loadbalance and ab-test). Each is documented on that strategy's own page. One key applies to every pool mode and rule chain:
+Mode-specific keys live under `strategy:` alongside `mode`: `conditions[]` (conditional), `content_conditions[]` (content-based), `ab_variants[]` (ab-test), `unpriced_strategy` (cost-optimized) and `sticky` (load-balance and ab-test). Each is documented on that strategy's own page. One key applies to every pool mode and rule chain:
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -14282,7 +14486,7 @@ Every entry names one provider registration and optionally attaches per-target r
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `virtual_key` | string | — (required) | Names a provider registration, typically the provider id. `ferrogw validate` rejects a key no built-in provider matches. |
-| `weight` | float64 | `0` | Relative share under `loadbalance`, and the tie-break among equal-cost targets under `cost-optimized`; ignored by every other mode. `0` means zero traffic — the drain lever. |
+| `weight` | float64 | `0` | Relative share under `load-balance`, and the tie-break among equal-cost targets under `cost-optimized`; ignored by every other mode. `0` means zero traffic — the drain lever. |
 | `models` | []string | — | Extra exact model IDs this target serves, added to the routing index and `/v1/models`. **Additive only** (never hides what a target already serves), **no wildcards** (rejected at load). |
 | `model_map` | map | — | Per-target translation of a name clients use into this target's upstream model ID (`smart: gpt-4o-mini`). The visible name routes to this target and appears in `/v1/models`; the upstream call and pricing use the mapped ID; the response says the visible name. See [One model name, different upstream IDs](#one-model-name-different-upstream-ids). |
 | `timeout` | duration | none | Bound on **one** attempt against this target, inside `request_timeout` (which stays authoritative for the whole request). A unary attempt is bounded through its response; a streaming attempt only until the provider answers, since a stream that has begun cannot be replayed elsewhere. An attempt that times out is failover-safe, so a hung primary no longer consumes the whole request budget. |
@@ -14341,7 +14545,7 @@ The pipeline splits the modes by what their leading candidate *means*, and that 
 
 | Family | Modes | On a target failure |
 |---|---|---|
-| **Pool** | `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test` | Advances to the next candidate after a **failover-safe** failure; any other failure is returned. |
+| **Pool** | `fallback`, `load-balance`, `least-latency`, `cost-optimized`, `ab-test` | Advances to the next candidate after a **failover-safe** failure; any other failure is returned. |
 | **Named** | `single`, `conditional`, `content-based` | Stays inside what was named: `single` stops; a rule walks its `target_keys` chain on the same failover-safe failures and stops at its end. |
 
 A **pool** mode picks its head for a reason that is about the pool rather than the individual target — spread the load, take the cheapest, take the fastest, split the traffic — from targets the operator declared interchangeable, so carrying a failed request to a sibling is what was asked for. A **named** mode picks its head because something named that target specifically (`single` names it; a `conditional` or `content-based` rule matched it), so serving from anyone the rule did not name would demote the rule to a suggestion. A rule may name an ordered chain (`target_keys`); the chain is walked like a pool and is a hard boundary — a rule with one target is exact, and that target being down is the corresponding error, not a sibling's answer.
@@ -14459,7 +14663,7 @@ With `targets: [openai]` and `retry.attempts: 3`:
 
 ## Behaviour
 
-`single` is a **named mode** — the opposite of a pool mode like `fallback` or `loadbalance`. `Single.SelectTargets` (`internal/strategies/single.go`) returns a one-element slice built once at construction, `[]string{targets[0].VirtualKey}`. It never looks at the request, never checks which model was asked for, and never sees `targets[1:]` at all — `buildStrategy` (`gateway_strategy.go`) constructs `Single` from `targets[0]` alone, so any additional entries in `targets[]` are configured but structurally invisible to this strategy. There is no failover: a failure at `targets[0]` — after `targets[].retry` exhausts its attempts against that same target — is the answer the caller gets.
+`single` is a **named mode** — the opposite of a pool mode like `fallback` or `load-balance`. `Single.SelectTargets` (`internal/strategies/single.go`) returns a one-element slice built once at construction, `[]string{targets[0].VirtualKey}`. It never looks at the request, never checks which model was asked for, and never sees `targets[1:]` at all — `buildStrategy` (`gateway_strategy.go`) constructs `Single` from `targets[0]` alone, so any additional entries in `targets[]` are configured but structurally invisible to this strategy. There is no failover: a failure at `targets[0]` — after `targets[].retry` exhausts its attempts against that same target — is the answer the caller gets.
 
 An open circuit breaker on `targets[0]` behaves differently here than under a pool mode, and it's worth being precise about it. The pipeline's open-circuit filter (`healthyKeys`, `gateway_pipeline.go`) only filters when the strategy handed it **more than one** candidate to choose from — with a single-element list, it returns that element unfiltered, open or not. So under `single`, an open circuit does not divert traffic anywhere: the request is still attempted, the circuit breaker itself refuses the call, and the gateway answers `503 upstream_unavailable`. That's a different outcome from `fallback`, where an open circuit on the lead target *is* passed over in favor of the next one in `targets[]` — `single` has no such list to fall back into. A `conditional` or `content-based` rule with one target behaves exactly like `single` here; a rule with a `target_keys` chain moves on to the next chain member.
 
@@ -14473,7 +14677,7 @@ An open circuit breaker on `targets[0]` behaves differently here than under a po
 | `targets[0].retry.on_status_codes` | []int | transport errors + `408`, `429`, `5xx` | Restricts retries to these HTTP status codes; other 4xx codes are deterministic client errors and are never retried. |
 | `targets[0].retry.initial_backoff_ms` | int | `100` | Base for full-jitter exponential backoff between attempts against `targets[0]`. |
 | `targets[0].circuit_breaker.*` | object | no breaker unless set (`failure_threshold: 5`, `success_threshold: 1`, `timeout: "30s"` if configured) | See the behaviour note above — with one candidate, an open circuit fails the request rather than routing around it. |
-| `targets[].weight` | float64 | `0` | Ignored under `single`. Only `loadbalance` reads it. |
+| `targets[].weight` | float64 | `0` | Ignored under `single`. Only `load-balance` reads it. |
 
 ## Minimal working YAML
 
@@ -14499,7 +14703,7 @@ targets:
 - **Readiness doesn't know that either.** `/readyz` and startup logging check whether each *configured* target's provider is registered, not which one `single` would actually pick — so a config with a broken `targets[0]` and a perfectly healthy `targets[1]` still reports `200 ready`. Put the target you mean to use first.
 - **No failover, by design.** A failure at `targets[0]` — once `retry.attempts` is exhausted — is the response the caller gets. Add `retry` to absorb transient errors against that one target; switch strategies if a hard outage should move traffic elsewhere.
 - **An open circuit doesn't skip the target — it fails the request.** Because `SelectTargets` always returns exactly one key, the pipeline's open-circuit filter has nothing to filter between and never fires. The call is attempted anyway, the breaker refuses it, and the caller gets `503 upstream_unavailable` — even if another configured target could serve the model. This is easy to assume works like `fallback`'s circuit handling; it doesn't.
-- **`weight` is silently accepted and silently ignored.** Setting `targets[0].weight` (or any other target's) does nothing under `single` — it only affects `loadbalance`.
+- **`weight` is silently accepted and silently ignored.** Setting `targets[0].weight` (or any other target's) does nothing under `single` — it only affects `load-balance`.
 
 ## Related
 

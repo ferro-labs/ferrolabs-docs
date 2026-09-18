@@ -17,7 +17,7 @@ You tell the gateway which providers it may use (`targets`) and one rule for cho
 |---|---|---|
 | One provider, nothing clever | [`single`](/routing/single) | Everything goes to OpenAI; the gateway adds keys, limits, plugins and logs. |
 | A main provider and a backup | [`fallback`](/routing/fallback) | OpenAI first; if it is down or overloaded, Anthropic answers the same request. |
-| Traffic shared between providers | [`loadbalance`](/routing/loadbalance) | 70 % OpenAI, 30 % Azure OpenAI; `weight: 0` drains one before you remove it. |
+| Traffic shared between providers | [`load-balance`](/routing/loadbalance) | 70 % OpenAI, 30 % Azure OpenAI; `weight: 0` drains one before you remove it. |
 | Whoever answers fastest right now | [`least-latency`](/routing/least-latency) | Groq, OpenAI and Anthropic all serve the model; the quickest one keeps getting the traffic. |
 | The cheapest provider per request | [`cost-optimized`](/routing/cost-optimized) | DeepSeek, OpenAI and Anthropic serve the model; the cheapest listed price wins. |
 | Some models pinned to one provider | [`conditional`](/routing/conditional) | `claude-*` only ever goes to Anthropic, whatever else is configured. |
@@ -39,7 +39,7 @@ Routing is two top-level blocks in `config.yaml` (or JSON): a `strategy:` block 
 
 ```yaml
 strategy:
-  mode: fallback   # single | fallback | loadbalance | least-latency |
+  mode: fallback   # single | fallback | load-balance | least-latency |
                    # cost-optimized | conditional | content-based | ab-test
 
 targets:
@@ -49,7 +49,7 @@ targets:
   - virtual_key: anthropic
 ```
 
-Mode-specific keys live under `strategy:` alongside `mode`: `conditions[]` (conditional), `content_conditions[]` (content-based), `ab_variants[]` (ab-test), `unpriced_strategy` (cost-optimized) and `sticky` (loadbalance and ab-test). Each is documented on that strategy's own page. One key applies to every pool mode and rule chain:
+Mode-specific keys live under `strategy:` alongside `mode`: `conditions[]` (conditional), `content_conditions[]` (content-based), `ab_variants[]` (ab-test), `unpriced_strategy` (cost-optimized) and `sticky` (load-balance and ab-test). Each is documented on that strategy's own page. One key applies to every pool mode and rule chain:
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -66,7 +66,7 @@ Every entry names one provider registration and optionally attaches per-target r
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `virtual_key` | string | — (required) | Names a provider registration, typically the provider id. `ferrogw validate` rejects a key no built-in provider matches. |
-| `weight` | float64 | `0` | Relative share under `loadbalance`, and the tie-break among equal-cost targets under `cost-optimized`; ignored by every other mode. `0` means zero traffic — the drain lever. |
+| `weight` | float64 | `0` | Relative share under `load-balance`, and the tie-break among equal-cost targets under `cost-optimized`; ignored by every other mode. `0` means zero traffic — the drain lever. |
 | `models` | []string | — | Extra exact model IDs this target serves, added to the routing index and `/v1/models`. **Additive only** (never hides what a target already serves), **no wildcards** (rejected at load). |
 | `model_map` | map | — | Per-target translation of a name clients use into this target's upstream model ID (`smart: gpt-4o-mini`). The visible name routes to this target and appears in `/v1/models`; the upstream call and pricing use the mapped ID; the response says the visible name. See [One model name, different upstream IDs](#one-model-name-different-upstream-ids). |
 | `timeout` | duration | none | Bound on **one** attempt against this target, inside `request_timeout` (which stays authoritative for the whole request). A unary attempt is bounded through its response; a streaming attempt only until the provider answers, since a stream that has begun cannot be replayed elsewhere. An attempt that times out is failover-safe, so a hung primary no longer consumes the whole request budget. |
@@ -125,7 +125,7 @@ The pipeline splits the modes by what their leading candidate *means*, and that 
 
 | Family | Modes | On a target failure |
 |---|---|---|
-| **Pool** | `fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test` | Advances to the next candidate after a **failover-safe** failure; any other failure is returned. |
+| **Pool** | `fallback`, `load-balance`, `least-latency`, `cost-optimized`, `ab-test` | Advances to the next candidate after a **failover-safe** failure; any other failure is returned. |
 | **Named** | `single`, `conditional`, `content-based` | Stays inside what was named: `single` stops; a rule walks its `target_keys` chain on the same failover-safe failures and stops at its end. |
 
 A **pool** mode picks its head for a reason that is about the pool rather than the individual target — spread the load, take the cheapest, take the fastest, split the traffic — from targets the operator declared interchangeable, so carrying a failed request to a sibling is what was asked for. A **named** mode picks its head because something named that target specifically (`single` names it; a `conditional` or `content-based` rule matched it), so serving from anyone the rule did not name would demote the rule to a suggestion. A rule may name an ordered chain (`target_keys`); the chain is walked like a pool and is a hard boundary — a rule with one target is exact, and that target being down is the corresponding error, not a sibling's answer.

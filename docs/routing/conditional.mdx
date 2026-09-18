@@ -82,7 +82,7 @@ targets:
 - Deterministic pinning: a specific model, tenant or request shape must always be served by a specific backend, for compliance, contractual, or data-residency reasons — not "prefer this provider," but "only this provider."
 - Routing whole model families by prefix (`claude-`, `gpt-`, `gemini-`) to their native provider without listing every model name individually.
 - A pinned rule that still needs a stand-in: name the stand-in in `target_keys`, and it is used only when the preferred member is at fault.
-- Any setup where `fallback`'s or `loadbalance`'s willingness to pick a different provider is the behaviour you need to prevent, not add.
+- Any setup where `fallback`'s or `load-balance`'s willingness to pick a different provider is the behaviour you need to prevent, not add.
 
 ## Gotchas
 

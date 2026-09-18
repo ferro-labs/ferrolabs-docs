@@ -24,7 +24,7 @@ It matters less if you call exactly one provider directly and have no near-term 
 |:---|:---|:---|
 | Routing | 8 strategies (single, fallback, load balance, least latency, cost-optimized, content-based, A/B test, conditional). `targets` is an allowlist — a provider you've configured only routes traffic if it's listed there. | [Routing](/routing) |
 | Providers | 30 providers and 2,500+ models behind one API, with a capability matrix for which OpenAI parameters each one supports. | [Providers](/providers) |
-| Plugins & guardrails | 6 built-in plugins — word filter, max-token, response cache, rate limit, budget, request logger — running at `before_request`, `after_request`, and `on_error` stages. | [Plugins](/plugins) |
+| Plugins & guardrails | 11 built-in OSS plugins, including PII redaction, secret scanning, prompt-injection detection, regex policies, and response-schema validation, running at `before_request`, `after_request`, and `on_error` stages. | [Plugins](/plugins) |
 | Admin API & key management | Scoped API keys (`read_only` / `admin`), dashboard sessions, an audit trail, and config history with rollback. | [Admin API](/api-reference/admin) |
 | Embedded dashboard | An operations console compiled into the binary and served from the gateway's own root — no separate image or origin to deploy. | [Dashboard guide](/guides/dashboard) |
 | Observability | OpenTelemetry tracing, Prometheus metrics, and request logs carrying `duration_ms`, `ttft_ms`, and `cost_usd`. | [Monitoring](/operations/monitoring) |

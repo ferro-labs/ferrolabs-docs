@@ -40,13 +40,13 @@ const structuredData = {
       name: 'Ferro Labs AI Gateway',
       applicationCategory: 'DeveloperApplication',
       operatingSystem: 'Linux, macOS, Windows, Docker, Kubernetes',
-      softwareVersion: '1.5.2',
+      softwareVersion: '1.5.8',
       // Folded in from the former homepage-local block, so the site keeps ONE
       // SoftwareApplication entity instead of two conflicting copies.
       license: 'https://opensource.org/licenses/Apache-2.0',
       sameAs: ['https://github.com/ferro-labs/ai-gateway'],
       description:
-        'Open-source, high-performance AI gateway written in Go. Routes LLM requests across 30 providers and 2,500+ models through a single OpenAI-compatible API, with 6 built-in plugins, 8 routing strategies, MCP tool-calling, and an embedded dashboard.',
+        'Open-source, high-performance AI gateway written in Go. Routes LLM requests across 30 providers and 2,500+ models through a single OpenAI-compatible API, with 11 built-in plugins, 8 routing strategies, MCP tool-calling, and an embedded dashboard.',
       url: SITE_URL,
       offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
       publisher: { '@id': `${SITE_URL}/#organization` },
@@ -72,7 +72,7 @@ const structuredData = {
 
 const config: Config = {
   title: 'Ferro Labs AI Gateway',
-  tagline: 'One gateway for every AI model — 30 providers, 2,500+ models, 6 built-in plugins, 8 routing strategies.',
+  tagline: 'One gateway for every AI model — 30 providers, 2,500+ models, 11 built-in plugins, 8 routing strategies.',
   favicon: 'assets/branding/favicon.ico',
 
   // Future flags, see https://docusaurus.io/docs/api/docusaurus-config#future
@@ -279,9 +279,9 @@ const config: Config = {
     ],
     announcementBar: {
       // New id so it re-shows to anyone who dismissed the previous bar.
-      id: 'v152-released',
+      id: 'v158-released',
       content:
-        '🚀 <strong>v1.5.2 is out</strong> — one ranker on every surface, per-target timeouts, 429 cooldown, sticky sessions, rule target chains, and attribution headers on every routed response. <a href="/changelog/">See what changed →</a>',
+        '🚀 <strong>v1.5.8 is out</strong> — five OSS content guardrails, observe-only PII detection, expanded secret scanning, stricter config validation, and canonical <code>load-balance</code> routing. <a href="/changelog/">See what changed →</a>',
       backgroundColor: '#ecfdf5',
       textColor: '#065f46',
       isCloseable: true,

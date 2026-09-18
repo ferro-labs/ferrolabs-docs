@@ -1,10 +1,10 @@
 ---
 title: Load balance routing strategy
-description: "Configure strategy.mode: loadbalance in Ferro Labs AI Gateway for weighted-random traffic across model-compatible targets, plus draining a target via weight: 0."
+description: "Configure strategy.mode: load-balance in Ferro Labs AI Gateway for weighted-random traffic across model-compatible targets, plus draining a target via weight: 0."
 keywords: [load balance routing, weighted random routing, AI gateway load balancing, weight 0 drain, ai-gateway strategy.mode, targets weight]
 ---
 
-Load balance spreads traffic across two or more targets by weighted random selection. It optimizes for **distributing** load across interchangeable providers — not for failover order (`fallback`), latency (`least-latency`), or cost (`cost-optimized`). Set `strategy.mode: loadbalance` to use it.
+Load balance spreads traffic across two or more targets by weighted random selection. It optimizes for **distributing** load across interchangeable providers — not for failover order (`fallback`), latency (`least-latency`), or cost (`cost-optimized`). Set `strategy.mode: load-balance` to use it. The legacy `loadbalance` spelling remains accepted and is normalized for backward compatibility.
 
 :::tip In plain words
 Split traffic between providers by weight — `weight: 7` and `weight: 3` means roughly 70/30 over time. A request whose chosen provider is unreachable, times out or is overloaded is handed to another provider in the pool; one the provider rejected as a bad request comes back as-is. `weight: 0` stops new traffic to a provider without deleting it.
@@ -23,7 +23,7 @@ With OpenAI at `weight: 7` and Anthropic at `weight: 3`, each request draws a st
 
 ## Behaviour
 
-`loadbalance` is a **pool mode**: after a failover-safe failure (a transport failure, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, an open circuit, or a full concurrency queue) the pipeline advances to the next target in the rotated order rather than reporting the failure back to the caller; any other `4xx` is returned to the client. `targets[].retry` still governs how many times any one target is retried before the pipeline moves on.
+`load-balance` is a **pool mode**: after a failover-safe failure (a transport failure, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, an open circuit, or a full concurrency queue) the pipeline advances to the next target in the rotated order rather than reporting the failure back to the caller; any other `4xx` is returned to the client. `targets[].retry` still governs how many times any one target is retried before the pipeline moves on.
 
 On each request, `LoadBalance.SelectTargets` (`internal/strategies/loadbalance.go`) filters `targets[]` down to those whose provider is registered and whose `SupportsModel(req.Model)` returns true, then picks a weight-biased starting index (`weightedStartIndex`, `internal/strategies/targetorder.go`) and returns the full compatible list **rotated** from that index. The first key in the returned order is the weighted pick the pipeline commits to first; the rest stay available as substitutes the pipeline may use before committing — for example when the picked target's circuit is open. `SelectTargets` returns `nil` (the caller reports 404 `model_not_found`) when no compatible target exists, or when every compatible target has been drained to weight `0`.
 
@@ -31,7 +31,7 @@ On each request, `LoadBalance.SelectTargets` (`internal/strategies/loadbalance.g
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `strategy.mode` | string | — | Set to `loadbalance`. |
+| `strategy.mode` | string | — | Set to `load-balance`. |
 | `targets[].weight` | float64 | `0` if omitted (YAML `omitempty`) | This target's relative share of traffic. Read here and, for equal-cost ties, by `cost-optimized`; ignored by every other mode. `0` means the target receives zero traffic — it can never be the rotation's start index. |
 | `strategy.sticky.on` | string | — | Set to `user` to pin each request to the same start target for the same `user` field: a stateless hash, so a conversation keeps its provider prompt cache without any shared state, and every replica with this config answers the same. A request with no `user` draws at random. |
 | `strategy.sticky.ttl` | duration | none | Rotates pins: a `user` stays pinned for at most one window (`"1h"`), after which it may hash to another target. |
@@ -40,7 +40,7 @@ On each request, `LoadBalance.SelectTargets` (`internal/strategies/loadbalance.g
 
 ```yaml
 strategy:
-  mode: loadbalance
+  mode: load-balance
   sticky:
     on: user     # the request's `user` field
     ttl: 1h      # optional; a pin lasts at most one window
@@ -52,7 +52,7 @@ With `sticky`, every request carrying the same `user` starts on the same target,
 
 ```yaml
 strategy:
-  mode: loadbalance
+  mode: load-balance
 
 targets:
   - virtual_key: openai
@@ -86,9 +86,9 @@ Every response still says `"model": "smart"`. See [One model name, different ups
 ## Gotchas
 
 - **Weights are relative, not percentages.** `weight: 0.7` and `weight: 0.3` behave identically to `weight: 7` and `weight: 3` — only the ratio between targets matters.
-- **Omitting `weight` yields `0`, not an even split.** Because `weight` uses YAML `omitempty`, a target with no `weight` key defaults to `0.0` — silent zero traffic. This is an easy foot-gun: set `weight` explicitly on every target under `loadbalance`.
+- **Omitting `weight` yields `0`, not an even split.** Because `weight` uses YAML `omitempty`, a target with no `weight` key defaults to `0.0` — silent zero traffic. This is an easy foot-gun: set `weight` explicitly on every target under `load-balance`.
 - **An all-zero or negative weight set is rejected at load.** `ferrogw validate` (and gateway startup) reject a negative weight outright and reject a config where every target's weight sums to zero — but one *forgotten* weight on an otherwise-valid config passes validation and silently drains just that target.
-- **This is a pool mode.** The pipeline advances past an open-circuit target, or one that failed in a failover-safe way, to the next one in the rotated order; any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the client. A `loadbalance` config gets failover "for free" as a side effect of the mode family, not because of anything weight-specific.
+- **This is a pool mode.** The pipeline advances past an open-circuit target, or one that failed in a failover-safe way, to the next one in the rotated order; any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the client. A `load-balance` config gets failover "for free" as a side effect of the mode family, not because of anything weight-specific.
 - **Only model-compatible targets are eligible.** A target whose provider isn't registered, or that doesn't serve the requested model, is filtered out before weighting is applied — it never wins the draw regardless of its configured weight.
 - **Sticky hashing changes the draw, not the pool.** `sticky: { on: user }` maps each `user` into the same weight-proportional draw every time, so a pinned user still lands on a target in proportion to the weights; changing weights or the target set re-maps a share of users. A `weight: 0` target is never pinned to.
 - Selection uses `math/rand`, deliberately — this is a load-shaping decision, not a security-sensitive one.

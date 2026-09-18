@@ -1,12 +1,12 @@
 ---
 title: "Ferro Labs Managed — Managed AI Gateway"
-description: "Ferro Labs Managed is the hosted, multi-tenant AI Gateway: isolated tenants, semantic caching, SSO/SAML, and enterprise security plugins on the OSS engine."
+description: "Ferro Labs Managed is the hosted, multi-tenant AI Gateway: isolated tenants, semantic caching, SSO/SAML, fleet controls, and managed operations on the OSS engine."
 keywords: [Ferro Labs Managed, managed AI gateway, multi-tenant LLM proxy, hosted AI gateway, enterprise AI gateway SaaS]
 ---
 
 # Ferro Labs Managed — Managed AI Gateway
 
-Ferro Labs Managed is the hosted, multi-tenant version of the Ferro Labs AI Gateway. Built on the same open-source engine that powers the self-hosted gateway — including its embedded dashboard, per-request cost tracking, and budget enforcement — Ferro Labs Managed adds isolated tenant instances, semantic caching, SSO/SAML, cross-tenant durable billing, and enterprise security plugins, all operated by Ferro Labs so you never touch infrastructure.
+Ferro Labs Managed is the hosted, multi-tenant version of the Ferro Labs AI Gateway. Built on the same open-source engine that powers the self-hosted gateway — including its 11 built-in plugins, embedded dashboard, per-request cost tracking, and budget enforcement — Ferro Labs Managed adds isolated tenant instances, semantic caching, SSO/SAML, cross-tenant durable billing, and fleet controls, all operated by Ferro Labs so you never touch infrastructure.
 
 ## Architecture
 
@@ -38,7 +38,7 @@ The self-hosted OSS gateway already ships an embedded dashboard, persists per-re
 1. **Multi-tenancy and isolation** — Each tenant gets its own isolated gateway instance and credential boundary, rather than the single shared instance a self-hosted deployment runs.
 2. **Zero ops** — No servers to provision, no containers to update, no TLS certificates to rotate. Ferro Labs handles uptime, scaling, and upgrades.
 3. **Semantic caching** — Similarity-based cache hits across paraphrased prompts, beyond the OSS response-cache plugin's exact-match semantics. See [Semantic cache](/ferrocloud/semantic-cache).
-4. **SSO/SAML and enterprise security plugins** — SAML 2.0/OIDC sign-in, directory sync, and five additional guardrail plugins (`pii-redact`, `secret-scan`, `prompt-shield`, `schema-guard`, and `regex-guard`) available exclusively on Ferro Labs Managed Pro and Enterprise plans.
+4. **SSO/SAML and organizational controls** — SAML 2.0/OIDC sign-in, directory sync, centralized policy deployment, and team-level access controls. The five deterministic content guardrails are part of the OSS engine and work in either edition; Managed adds [CEL custom policy and external moderation preflight](/plugins/enterprise).
 5. **Cross-tenant durable billing** — Consolidated usage metering and invoicing across teams, projects, and tenants, on top of the per-request cost tracking the OSS gateway already records locally.
 6. **Team management** — Invite teammates, assign roles, and scope API keys to projects — all from the dashboard.
 
@@ -51,5 +51,6 @@ Ferro Labs Managed is currently in early access. Sign up to get notified when yo
 ## Related pages
 
 - [OSS vs Ferro Labs Managed](/guides/oss-vs-ferrocloud)
+- [Managed guardrails](/plugins/enterprise)
 - [Semantic cache](/ferrocloud/semantic-cache)
 - [Enterprise features](/enterprise)

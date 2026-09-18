@@ -16,7 +16,7 @@ For a detailed comparison of Ferro Labs vs LiteLLM and other alternatives, see [
 | Provider credentials | `LITELLM_*` env vars | `virtual_keys` block or `FERRO_*` env vars |
 | Routing | `router_settings` | `strategy.mode` |
 | Fallback | `fallbacks` list | `strategy: {mode: fallback}` |
-| Load balancing | `routing_strategy: simple-shuffle` | `strategy: {mode: loadbalance}` |
+| Load balancing | `routing_strategy: simple-shuffle` | `strategy: {mode: load-balance}` |
 | Rate limiting | `router_settings.rpm_limit` | `rate-limit` plugin |
 | Caching | Redis/S3 integrations | `response-cache` plugin |
 | Request logging | LiteLLM callbacks | `request-logger` plugin |
@@ -160,8 +160,8 @@ plugins:
 
 | LiteLLM `routing_strategy` | Ferro `strategy.mode` |
 |---|---|
-| `simple-shuffle` | `loadbalance` |
-| `least-busy` | `loadbalance` |
+| `simple-shuffle` | `load-balance` |
+| `least-busy` | `load-balance` |
 | `latency-based-routing` | `least-latency` |
 | `cost-based-routing` | `cost-optimized` |
 | Fallbacks list | `fallback` |

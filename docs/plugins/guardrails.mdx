@@ -1,0 +1,130 @@
+---
+title: Content guardrails
+description: "Configure the five OSS content guardrails: regex matching, PII redaction, secret scanning, prompt-injection detection, and response schema validation."
+keywords: [AI gateway guardrails, PII redaction, secret scanning, prompt injection, JSON schema validation, regex guard]
+---
+
+Five content guardrails ship in the open-source gateway as of v1.5.7. They use the same global [plugin pipeline](/plugins) as the other built-ins. A guardrail listed at a stage where it cannot act is a startup error, also reported by `ferrogw validate`.
+
+| Plugin | Stage(s) | Actions | Purpose |
+|---|---|---|---|
+| `regex-guard` | `before_request`, optionally `after_request` | `block`, `warn`, `log` | Match custom named regular expressions. |
+| `pii-redact` | `before_request` | `block`, `redact`, `log` | Detect email, phone, SSN, credit cards, or custom patterns. |
+| `secret-scan` | `before_request`, optionally `after_request` | `block`, `warn`, `log` | Detect curated credential formats or custom patterns. |
+| `prompt-shield` | `before_request` | `block`, `warn`, `log` | Detect common prompt-injection and jailbreak phrasing. |
+| `schema-guard` | `after_request` | `block`, `warn`, `log` | Validate output against the supported JSON Schema subset. |
+
+Only `block` rejects for `regex-guard`, `secret-scan`, and `prompt-shield`; `warn` and `log` record and forward. `pii-redact` can rewrite supported request surfaces, and `schema-guard` evaluates the completed response.
+
+## Regex guard
+
+`rules` is required. A rule's `apply_to` and the plugin entry's `stage` must agree, so output screening requires an `after_request` entry.
+
+```yaml
+plugins:
+  - name: regex-guard
+    type: guardrail
+    stage: before_request
+    enabled: true
+    config:
+      action: block
+      rules:
+        - name: internal-ticket-id
+          pattern: '\bINC-\d{6}\b'
+          apply_to: input       # input | output | both
+          action: block         # block | warn | log
+```
+
+## PII redaction
+
+The built-in entities are `email`, `phone`, `ssn`, and `credit_card`; card candidates must pass a Luhn check. Omit `entities` to enable all built-ins. `action: log`, added in v1.5.8, records detections without denying or rewriting.
+
+```yaml
+plugins:
+  - name: pii-redact
+    type: guardrail
+    stage: before_request
+    enabled: true
+    config:
+      action: redact            # block | redact | log
+      entities: [email, ssn]
+      patterns: ['\bACME-\d{6}\b']
+      redact_placeholder: "[REDACTED]"
+```
+
+`redact` rewrites `/v1/chat/completions` and `/v1/completions`. Other surfaces forward their own body unchanged, so a detection under `redact` is denied rather than silently sent upstream. `block` and `log` behave consistently on every surface.
+
+## Secret scanning
+
+Omit `kinds` to enable all curated formats. v1.5.8 distinguishes `anthropic_key` from `openai_key` and adds `gitlab_token`, `npm_token`, `huggingface_token`, `sendgrid_key`, `twilio_key`, `azure_storage_key`, and `slack_webhook`.
+
+```yaml
+plugins:
+  - name: secret-scan
+    type: guardrail
+    stage: before_request
+    enabled: true
+    config:
+      action: block
+      kinds: [aws_access_key, anthropic_key, private_key]
+
+  # Add an identical entry to screen model output too.
+  - name: secret-scan
+    type: guardrail
+    stage: after_request
+    enabled: true
+    config:
+      action: block
+      kinds: [aws_access_key, anthropic_key, private_key]
+```
+
+The full curated set is `aws_access_key`, `github_token`, `slack_token`, `anthropic_key`, `openai_key`, `google_api_key`, `stripe_key`, `private_key`, `jwt`, `gitlab_token`, `npm_token`, `huggingface_token`, `sendgrid_key`, `twilio_key`, `azure_storage_key`, and `slack_webhook`.
+
+## Prompt shield
+
+Prompt shield uses deterministic heuristics over common written forms, not a classifier. Treat it as one defense layer and measure `warn` or `log` before enforcing on adversarial traffic.
+
+```yaml
+plugins:
+  - name: prompt-shield
+    type: guardrail
+    stage: before_request
+    enabled: true
+    config:
+      action: block
+      categories: [system_override, instruction_leak]
+```
+
+Omit `categories` to enable `system_override`, `role_manipulation`, `instruction_leak`, and `delimiter_attack`.
+
+## Schema guard
+
+Schema guard supports `type`, `required`, and `properties`. Unsupported keywords are ignored; malformed supported keywords fail validation. On a streamed response it can report a violation, but cannot unsend chunks already delivered.
+
+```yaml
+plugins:
+  - name: schema-guard
+    type: guardrail
+    stage: after_request
+    enabled: true
+    config:
+      action: block
+      schema:
+        type: object
+        required: [name, score]
+        properties:
+          name: {type: string}
+          score: {type: number}
+```
+
+## Validation behavior
+
+Unknown actions, entities, kinds, categories, or `apply_to` values fail configuration validation. Present-but-empty selectors also fail when they would make a plugin inspect nothing; omit a selector to accept its documented default. Empty custom regex patterns are rejected because they match every request.
+
+For embedders, v1.5.8 also exports `piiredact.Detect(text)` and `promptshield.Detect(text)`. These pure functions return sorted built-in entity/category names and never return matched text; custom configured patterns are not included.
+
+## Related
+
+- [Plugin system](/plugins)
+- [Configuration reference](/getting-started/configuration#plugins)
+- [Changelog](/changelog)

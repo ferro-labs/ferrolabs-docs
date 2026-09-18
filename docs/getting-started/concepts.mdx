@@ -21,7 +21,7 @@ Each target carries:
 | Field | Purpose |
 |---|---|
 | `virtual_key` | Names the registered provider this target routes to (required) |
-| `weight` | Relative share under `loadbalance`; `0` drains the target (ignored by every other mode) |
+| `weight` | Relative share under `load-balance`; `0` drains the target (ignored by every other mode) |
 | `retry` | `attempts`, `on_status_codes`, `initial_backoff_ms` — honoured under **every** routing mode, not just `fallback` |
 | `circuit_breaker` | `failure_threshold`, `success_threshold`, `timeout` — one breaker per target, shared across chat, streaming, embeddings, and images |
 | `concurrency` | `max_concurrency`, `queue_size` — caps in-flight requests per target; overflow returns `429` |
@@ -35,7 +35,7 @@ The strategy controls which target(s) a request is offered to, and in what order
 |---|---|
 | `single` | Always route to the first target. Simplest setup. |
 | `fallback` | Try targets in declared order; advance to the next target after a failover-safe failure. |
-| `loadbalance` | Distribute requests across targets by weight. |
+| `load-balance` | Distribute requests across targets by weight. |
 | `conditional` | Match `model` (exact) or `model_prefix` (prefix) against declared rules; first match wins. |
 | `least-latency` | Route to the compatible target with the lowest observed p50 latency. |
 | `cost-optimized` | Estimate input cost from the model catalog and route to the cheapest compatible target. |
@@ -44,7 +44,7 @@ The strategy controls which target(s) a request is offered to, and in what order
 
 One pipeline governs chat, streaming, embeddings, images, rerank, moderation, transcription and speech, and one ranker orders targets for all of them, so retry, circuit-breaking and candidate order behave identically across every surface. Strategies split into two families:
 
-- **Pool modes** (`fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test`) advance past a target that failed in a failover-safe way — transport error, attempt timeout, `408`/`429`/`5xx`, open circuit, saturation — to the next candidate; any other `4xx` is returned to the client.
+- **Pool modes** (`fallback`, `load-balance`, `least-latency`, `cost-optimized`, `ab-test`) advance past a target that failed in a failover-safe way — transport error, attempt timeout, `408`/`429`/`5xx`, open circuit, saturation — to the next candidate; any other `4xx` is returned to the client.
 - **Named modes** (`single`, `conditional`, `content-based`) stay inside what was named: `single` reports its one target's failure; a rule walks its `target_keys` chain on the same failover-safe failures and never reaches a target it did not name.
 
 Every mode skips a target whose circuit is open, or that is parked after a `429`, among the candidates it offers; if every candidate is unavailable, the request is still attempted and returns `503`. A rule with one target offers no other candidate.
@@ -65,11 +65,16 @@ Plugins are **global**, configured under a single top-level `plugins:` list — 
 
 ### OSS plugins
 
-These 6 plugins ship with the open-source gateway. Three of them are multi-stage — they must be listed once per stage with **byte-identical config**, or the gateway refuses to start:
+These 11 plugins ship with the open-source gateway. Plugins that run at multiple stages must be listed once per stage with **byte-identical config**, or the gateway refuses to start:
 
 | Plugin | Stage(s) | Purpose |
 |---|---|---|
 | `word-filter` | `before_request` (optionally also `after_request`) | Reject request or response text containing a blocked substring |
+| `regex-guard` | `before_request` (optionally also `after_request`) | Match named regular expressions against request or response text |
+| `pii-redact` | `before_request` | Block, redact, or observe email, phone, SSN, credit-card, and custom-pattern matches |
+| `secret-scan` | `before_request` (optionally also `after_request`) | Detect curated credentials and custom secret patterns |
+| `prompt-shield` | `before_request` | Detect common prompt-injection and jailbreak phrasing |
+| `schema-guard` | `after_request` | Validate response output against a JSON Schema subset |
 | `max-token` | `before_request` | Reject requests exceeding token, message-count, or input-length limits |
 | `rate-limit` | `before_request` | Token-bucket rate limiting (global, per-key, per-user) |
 | `budget` | `before_request` **+** `after_request` | Check and record per-API-key USD spend; over the cap returns `402 insufficient_quota` |
@@ -80,23 +85,7 @@ These 6 plugins ship with the open-source gateway. Three of them are multi-stage
 
 **SkipProvider**: when `response-cache` serves a hit, it sets `SkipProvider` on the request, which skips only the call to the upstream provider — every remaining `before_request` plugin and the whole `after_request` stage still run, so rate limiting, budget checks, and logging behave the same whether or not the response came from cache.
 
-### Ferro Labs Managed plugins
-
-These 5 plugins require [Ferro Labs Managed](https://www.ferrolabs.ai/) because they depend on ML inference services that run server-side:
-
-| Plugin | Stage | Purpose |
-|---|---|---|
-| `pii-redact` | before_request | Detect and redact PII entities using NER models |
-| `secret-scan` | before_request | Block requests containing leaked API keys or credentials |
-| `prompt-shield` | before_request | Score and block prompt injection attempts |
-| `schema-guard` | after_request | Validate model JSON output against a JSON Schema |
-| `regex-guard` | before_request | Block requests matching configurable regex patterns |
-
-:::note Ferro Labs Managed feature
-The 5 enterprise plugins require a Ferro Labs Managed account. [Join the waitlist →](https://www.ferrolabs.ai/)
-:::
-
-See [Plugins](/plugins) for full configuration examples.
+See [Content guardrails](/plugins/guardrails) for full configuration examples and stage restrictions.
 
 ## MCP integration
 
@@ -114,7 +103,7 @@ The operations dashboard ships **embedded** in the OSS binary and is served from
 
 ## Ferro Labs Managed
 
-[Ferro Labs Managed](/ferrocloud/overview) is the managed, multi-tenant version of the AI Gateway hosted by Ferro Labs. It wraps the same OSS engine with per-tenant isolation, durable billing, [semantic caching](/ferrocloud/semantic-cache), SSO/SAML, audit logs, and the 5 enterprise security plugins listed above. See [OSS vs Ferro Labs Managed](/guides/oss-vs-ferrocloud) for a full comparison.
+[Ferro Labs Managed](/ferrocloud/overview) is the managed, multi-tenant version of the AI Gateway hosted by Ferro Labs. It wraps the same OSS engine with per-tenant isolation, durable billing, [semantic caching](/ferrocloud/semantic-cache), SSO/SAML, fleet controls, and managed operations. See [OSS vs Ferro Labs Managed](/guides/oss-vs-ferrocloud) for a full comparison.
 
 ## Observability
 

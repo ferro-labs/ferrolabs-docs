@@ -1,10 +1,56 @@
 ---
 title: Changelog
-description: "Release history for Ferro Labs AI Gateway v0.4.5 through v1.5.2: the v1.5.2 routing depth release, the v1.5.1 routing correction, and the importable v1.5.0 runtime."
-keywords: [AI gateway changelog, LLM proxy releases, AI gateway version history, AI gateway v1.5.2, sticky routing, target_keys, attribution headers, model_map, failover-safe routing, AI gateway v1.4.0 breaking changes, embedded dashboard, unified routing pipeline, MCP stdio transport, OpenTelemetry tracing, gateway updates]
+description: "Release history for Ferro Labs AI Gateway v0.4.5 through v1.5.8, including OSS content guardrails, stricter validation, request identity, and routing fixes."
+keywords: [AI gateway changelog, LLM proxy releases, AI gateway version history, AI gateway v1.5.8, content guardrails, PII redaction, secret scanning, load-balance routing, request identity, sticky routing, target_keys, attribution headers, model_map, failover-safe routing, embedded dashboard, gateway updates]
 ---
 
-Full release notes are also on [GitHub Releases](https://github.com/ferro-labs/ai-gateway/releases). **v1.5.2 is the latest tag.**
+Full release notes are also on [GitHub Releases](https://github.com/ferro-labs/ai-gateway/releases). **v1.5.8 is the latest tag.**
+
+## v1.5.8 — 2026-09-16 — Guardrail observability and broader secret detection
+
+- **Observe PII before enforcing** — `pii-redact` accepts `action: log`, recording entity names while forwarding the request unchanged.
+- **Reusable detectors for embedders** — `piiredact.Detect` and `promptshield.Detect` expose the same built-in checks as pure functions, returning sorted match names and never the matched text.
+- **More precise secret audit trails** — Anthropic keys now report as `anthropic_key`, separately from `openai_key`.
+- **Seven new credential kinds** — `gitlab_token`, `npm_token`, `huggingface_token`, `sendgrid_key`, `twilio_key`, `azure_storage_key`, and `slack_webhook`.
+
+---
+
+## v1.5.7 — 2026-09-16 — Five OSS content guardrails
+
+The open-source gateway now ships `regex-guard`, `pii-redact`, `secret-scan`, `prompt-shield`, and `schema-guard`, with catalog entries, config validation, and full request/response text projection. See [Content guardrails](/plugins/guardrails).
+
+- Guardrails inspect message content parts, reasoning content, and tool-call arguments rather than only plain message bodies.
+- Stage restrictions are enforced: PII and prompt shielding run before requests, schema validation runs after responses, and response scanning requires an appropriate `after_request` entry.
+- Unknown actions, selectors, kinds, categories, malformed schemas, and empty patterns fail `ferrogw validate` and startup instead of silently enabling an inert or over-broad policy.
+- `pii-redact` rewrites chat-shaped requests; on surfaces that cannot consume the rewritten body, a match is denied rather than leaked upstream. Credit-card matches require a valid Luhn check digit.
+
+---
+
+## v1.5.6 — 2026-09-14 — Canonical routing names and strict circuit breakers
+
+- **`load-balance` is the canonical strategy spelling.** The legacy `loadbalance` value remains accepted and is normalized, so existing configurations continue to start.
+- **Explicit invalid circuit-breaker values now fail validation.** Writing zero or empty values for `failure_threshold`, `success_threshold`, `max_half_threshold`, or `timeout` no longer falls through to defaults. Omit those fields to retain the defaults (`5`, `1`, `1`, and `30s`).
+
+---
+
+## v1.5.5 — 2026-09-14 — Stricter routing validation
+
+- Retry status codes must be valid HTTP statuses, conditional values must be valid for their predicate, and A/B variant labels must be unique. Invalid routing config now fails before serving traffic.
+
+---
+
+## v1.5.4 — 2026-09-05 — Request identity and attempt tracing
+
+- `X-User-ID`, `X-Session-ID`, and W3C baggage can populate request identity across logs, lifecycle events, and spans; the OpenAI `user` field takes precedence for the end user.
+- Optional `gateway.routing.attempt` spans make retries and cross-target failover visible, while pass-through and fixed-target forwards propagate W3C trace context by default.
+
+---
+
+## v1.5.3 — 2026-09-03 — Admin and MCP security hardening
+
+- Admin config writes can no longer add or change stdio MCP commands, arguments, or environment variables, or widen an MCP server's allowed tool set. Upgrade before granting remote config-write access.
+
+---
 
 ## v1.5.2 — 2026-09-03 — Routing depth
 
@@ -16,7 +62,7 @@ Every routed surface now ranks through one strategy implementation, and the rout
 - **`targets[].timeout`** bounds one physical attempt inside `request_timeout`, so a hung primary no longer consumes the whole request budget before a pool mode moves on. Streams are bounded only until the provider answers.
 - **`429` cooldown** — a target that answers `429` is parked for its `Retry-After` (five seconds when absent, a minute at most) so the next request does not pay another `429` on it. Process-local; the breaker is untouched.
 - **Typed context-length failover** — a provider's own statement that the prompt exceeded its context window (the OpenAI-compatible, Anthropic and Gemini envelopes) fails over to a sibling, whose model may have a larger window. Every other `4xx` still stops.
-- **`strategy.sticky: { on: user, ttl: "1h" }`** under `loadbalance` and `ab-test` pins a `user` to one target or variant with a stateless hash. See [Load balance](/routing/loadbalance#sticky-sessions).
+- **`strategy.sticky: { on: user, ttl: "1h" }`** under `load-balance` and `ab-test` pins a `user` to one target or variant with a stateless hash. See [Load balance](/routing/loadbalance#sticky-sessions).
 - **`target_keys: [a, b]`** on `conditions[]` and `content_conditions[]` names an ordered chain for a rule, walked on failover-safe failures and never left. See [Conditional](/routing/conditional).
 - **Conditional predicates** `user`, `stream`, `has_tools`, and `metadata` + `field` reading the single `X-Gateway-Metadata` request header.
 - **`strategy.failover_on_status_codes`** adds upstream statuses to the failover-safe set; `400`, `401`, `403`, `404` and `422` cannot be listed.

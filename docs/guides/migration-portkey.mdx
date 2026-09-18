@@ -16,11 +16,11 @@ For a detailed comparison of Ferro Labs vs Portkey and other alternatives, see [
 | Gateway request header | `x-portkey-api-key` + `x-portkey-config` | Standard `Authorization: Bearer` header |
 | Configs (routing rules) | Portkey Config objects (JSON/dashboard) | `config.yaml` strategy block |
 | Fallback | `strategy: {mode: fallback}` in Portkey Config | `strategy: {mode: fallback}` |
-| Load balancing | `strategy: {mode: loadbalance}` + `weight` | `strategy: {mode: loadbalance}` + `weight` |
+| Load balancing | `strategy: {mode: loadbalance}` + `weight` | `strategy: {mode: load-balance}` + `weight` |
 | Retries | `retry: {attempts: N}` per target | `retry: {attempts: N}` per target |
 | Caching | Portkey semantic cache (cloud) | `response-cache` plugin (exact-match) |
 | Observability | Portkey logs dashboard | `request-logger` plugin + admin API |
-| Guardrails | Portkey Guardrails (cloud) | `word-filter`, `max-token`, `rate-limit` plugins (OSS) |
+| Guardrails | Portkey Guardrails (cloud) | 11 OSS plugins, including PII, secret, prompt-injection, regex, and schema guardrails |
 | Prompt templates | Portkey Prompt Library | `prompt_templates` in `config.yaml` |
 
 ## Step 1 — Start the gateway
@@ -113,7 +113,7 @@ Model names are identical — no changes to your messages or parameters needed.
 
 # Ferro config.yaml:
 strategy:
-  mode: loadbalance
+  mode: load-balance
 
 targets:
   - virtual_key: openai
