@@ -18,7 +18,7 @@ For a detailed comparison of Ferro Labs vs OpenRouter and other alternatives, se
 | Model selection | `provider/model` slug (`openai/gpt-4o`) | Plain model ID (`gpt-4o`) routed via `targets` |
 | Fallbacks | `models: [...]` array / `route: fallback` | `strategy: {mode: fallback}` |
 | Provider routing prefs | `provider` object (order, allow/deny) | `targets` order + `strategy.mode` |
-| Load balancing | OpenRouter chooses a provider for you | `strategy: {mode: loadbalance}` + `weight` |
+| Load balancing | OpenRouter chooses a provider for you | `strategy: {mode: load-balance}` + `weight` |
 | Caching | OpenRouter prompt caching (provider-side) | `response-cache` plugin (exact-match) |
 | Usage / cost tracking | OpenRouter dashboard | `budget` plugin + admin API |
 | Self-hosting | Not available (hosted SaaS) | Self-hosted by default |
@@ -149,7 +149,7 @@ Where OpenRouter automatically distributes traffic across providers, Ferro makes
 
 ```yaml
 strategy:
-  mode: loadbalance
+  mode: load-balance
 
 targets:
   - virtual_key: openai
@@ -211,5 +211,5 @@ plugins:
 
 - **OpenRouter is hosted; Ferro is self-hosted.** You bring your own provider keys and run the gateway yourself. See [getting started](/getting-started/quickstart) for Docker and binary options.
 - **`provider/model` slugs are not supported.** Pass plain model IDs and let `targets`/`strategy` choose the provider, or define `aliases`. This is the only required code change for most apps.
-- **Automatic provider selection** in OpenRouter becomes explicit routing in Ferro — `fallback`, `loadbalance`, `conditional`, and more. See [Routing policies](/routing).
+- **Automatic provider selection** in OpenRouter becomes explicit routing in Ferro — `fallback`, `load-balance`, `conditional`, and more. See [Routing policies](/routing).
 - **OpenRouter dashboard & analytics**: The OSS gateway exposes structured logs via the `request-logger` plugin and a queryable admin API. Hosted dashboards and durable analytics are in [Ferro Labs Managed](https://ferrolabs.ai). See [OSS vs Ferro Labs Managed](/guides/oss-vs-ferrocloud).

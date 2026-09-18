@@ -17,7 +17,7 @@ import Head from '@docusaurus/Head';
 </Head>
 
 :::info As of v1.5.x
-This page documents the config schema shipped by v1.5.2. Keys introduced on the v1.5 line — `targets[].timeout`, `strategy.sticky`, `strategy.failover_on_status_codes`, `conditions[].target_keys` — are rejected by a v1.4 binary's strict decoder. `apiVersion` is advisory — an unrecognized value is kept and only logged as a warning, so a newer config file still starts on an older binary as long as it uses only keys that binary knows.
+This page documents the config schema shipped by v1.5.8. Keys introduced on the v1.5 line — `targets[].timeout`, `strategy.sticky`, `strategy.failover_on_status_codes`, `conditions[].target_keys` — are rejected by a v1.4 binary's strict decoder. `apiVersion` is advisory — an unrecognized value is kept and only logged as a warning, so a newer config file still starts on an older binary as long as it uses only keys that binary knows.
 :::
 
 The gateway loads configuration from a YAML or JSON file at the path set by `GATEWAY_CONFIG`.
@@ -52,21 +52,21 @@ The top-level `strategy` block controls how requests are routed.
 
 ```yaml
 strategy:
-  mode: fallback  # single | fallback | loadbalance | conditional | least-latency | cost-optimized | content-based | ab-test
+  mode: fallback  # single | fallback | load-balance | conditional | least-latency | cost-optimized | content-based | ab-test
 ```
 
 | Mode | Family | Description |
 |---|---|---|
 | `single` | Named | Route every request to `targets[0]` only. |
 | `fallback` | Pool | Try targets in declared order; advance to the next after a failover-safe failure. |
-| `loadbalance` | Pool | Weighted random distribution across targets (`targets[].weight`). |
+| `load-balance` | Pool | Weighted random distribution across targets (`targets[].weight`). |
 | `conditional` | Named | Match a request field (`model`, `model_prefix`, `user`, `stream`, `has_tools`, or a `metadata` header entry) to a target or an ordered `target_keys` chain; first match wins. |
 | `least-latency` | Pool | Route to the compatible target with the lowest observed p50 time to first byte for the upstream model; samples expire and one request in ten explores a runner-up. |
 | `cost-optimized` | Pool | Estimate input plus output cost from the model catalog and pick the cheapest compatible target; equal-cost targets draw by `weight`. |
 | `content-based` | Named | Route on user-message content by substring or regex; first match wins. |
 | `ab-test` | Pool | Split traffic across labeled, weighted variants for comparison testing. |
 
-The mode families matter for failure handling: a **pool** mode (`fallback`, `loadbalance`, `least-latency`, `cost-optimized`, `ab-test`) advances the request pipeline to the next candidate target when one fails in a failover-safe way — a transport error, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, an open circuit, or saturation; any other `4xx` is returned to the client, and the request's own cancellation or deadline stops routing. A **named** mode (`single`, `conditional`, `content-based`) stays inside what was named: `single` reports its one target's failure, and a rule walks its `target_keys` chain on the same failover-safe failures and stops at its end — it never reaches a target the rule did not name. `strategy.failover_on_status_codes` adds upstream statuses to the failover-safe set (never `400`, `401`, `403`, `404` or `422`).
+The mode families matter for failure handling: a **pool** mode (`fallback`, `load-balance`, `least-latency`, `cost-optimized`, `ab-test`) advances the request pipeline to the next candidate target when one fails in a failover-safe way — a transport error, an attempt that timed out waiting on the target, `408`, `429`, `5xx`, an open circuit, or saturation; any other `4xx` is returned to the client, and the request's own cancellation or deadline stops routing. A **named** mode (`single`, `conditional`, `content-based`) stays inside what was named: `single` reports its one target's failure, and a rule walks its `target_keys` chain on the same failover-safe failures and stops at its end — it never reaches a target the rule did not name. `strategy.failover_on_status_codes` adds upstream statuses to the failover-safe set (never `400`, `401`, `403`, `404` or `422`).
 
 Two rules hold under **every** mode, named or pool:
 - `targets[].retry` is honored regardless of mode — it re-asks the *same* target the number of configured times. Whether a *different* target is asked afterward is the mode's decision alone.
@@ -124,13 +124,13 @@ Three condition types, evaluated over **user-role messages only** (system and as
 
 ```yaml
 strategy:
-  mode: loadbalance          # or ab-test
+  mode: load-balance         # or ab-test
   sticky:
     on: user                 # the only supported key
     ttl: 1h                  # optional; a pin lasts at most one window
 ```
 
-Under `loadbalance` and `ab-test`, `sticky` pins each request to the same target — or variant — for the same `user` field, so a conversation keeps its provider prompt cache and a session does not flip variants. It is a stateless hash: no shared state, the same answer on every replica, a random draw for a request without `user`. Refused under any other mode.
+Under `load-balance` and `ab-test`, `sticky` pins each request to the same target — or variant — for the same `user` field, so a conversation keeps its provider prompt cache and a session does not flip variants. It is a stateless hash: no shared state, the same answer on every replica, a random draw for a request without `user`. Refused under any other mode.
 
 ### A/B test routing
 
@@ -155,7 +155,7 @@ Targets are provider references. Each `virtual_key` must name a registered provi
 ```yaml
 targets:
   - virtual_key: openai
-    weight: 1.0           # relative share under loadbalance only; ignored elsewhere
+    weight: 1.0           # relative share under load-balance only; ignored elsewhere
     retry:
       attempts: 3
       on_status_codes: [429, 502, 503]   # omit for the default policy: transport errors + 408/429/5xx
@@ -177,7 +177,7 @@ targets:
 | Field | Type | Notes |
 |---|---|---|
 | `virtual_key` | string, required | Names a registered provider. |
-| `weight` | float64 | Relative share under `loadbalance`, and the tie-break among equal-cost targets under `cost-optimized`. `0` drains the target. Negative (any mode that reads it) or all-zero under `loadbalance` is a load error. |
+| `weight` | float64 | Relative share under `load-balance`, and the tie-break among equal-cost targets under `cost-optimized`. `0` drains the target. Negative (any mode that reads it) or all-zero under `load-balance` is a load error. |
 | `timeout` | duration | Bound on one attempt against this target (`"8s"`), inside `request_timeout`. A unary attempt is bounded through its response; a streaming attempt only until the provider answers. A timed-out attempt is failover-safe. Must be a positive Go duration. |
 | `models` | []string | Operator-declared model ids this target serves, in addition to whatever the catalog and live discovery already report. Exact ids only — wildcards are rejected at load. Purely additive: it never hides models the target already serves, and declaring one the catalog already knows is a harmless no-op. Advertised on `/v1/models`. |
 | `model_map` | map | Per-target translation of a name clients use into this target's upstream model id (`smart: gpt-4o-mini`). The visible name routes to this target and is listed in `/v1/models`; the upstream call and pricing use the mapped id; the response carries the visible name. Per target, unlike the global `aliases`. See [Routing](/routing#one-model-name-different-upstream-ids). |
@@ -185,7 +185,7 @@ targets:
 | `circuit_breaker` | object | One breaker per `virtual_key`, shared across chat, streaming, embeddings, *and* image generation to that target — a target that fails only on one surface still opens the shared breaker and stops serving all four. |
 | `concurrency` | object | `max_concurrency` (1..10000) and `queue_size`. A streaming request holds its slot until the stream ends, not just until headers arrive. Overflow past the queue is `429`. |
 
-A `429`, a client disconnect, a caller-supplied deadline, an unsupported-parameter rejection, and a concurrency shed do **not** count toward opening the circuit breaker. A redirect, a `5xx`, a connection failure, and the gateway's own `request_timeout` or stream idle bound elapsing all do.
+A `429`, a client disconnect, a caller-supplied deadline, an unsupported-parameter rejection, and a concurrency shed do **not** count toward opening the circuit breaker. A redirect, a `5xx`, a connection failure, and the gateway's own `request_timeout` or stream idle bound elapsing all do. Inside a configured `circuit_breaker` block, omitted thresholds and timeout retain the defaults shown above; an explicitly written zero, negative, or empty value is rejected as of v1.5.6.
 
 ### Declared models (`targets[].models`) {#declared-models}
 
@@ -328,7 +328,7 @@ An exhausted budget rejects the request with **`402 insufficient_quota`**, not a
 
 Plugin `config` string values support `${VAR}` — see [`${VAR}` resolution](#var-resolution) below.
 
-See [Plugins](/plugins) for all 6 built-in OSS plugins (`word-filter`, `max-token`, `response-cache`, `request-logger`, `rate-limit`, `budget`) and their full option sets. The 5 additional guardrails (pii-redact, secret-scan, prompt-shield, schema-guard, regex-guard) are Ferro Labs Managed-only — see [Enterprise plugins](/plugins/enterprise).
+See [Plugins](/plugins) for all 11 built-in OSS plugins and their full option sets. The five content guardrails (`pii-redact`, `secret-scan`, `prompt-shield`, `schema-guard`, `regex-guard`) are documented together under [Content guardrails](/plugins/guardrails).
 
 ## MCP servers
 
@@ -438,12 +438,12 @@ Config string values in `plugins[].config`, `mcp_servers[].headers`, `mcp_server
 
 ## Complete example
 
-Copy [`config.example.yaml`](https://github.com/ferro-labs/ai-gateway/blob/main/config.example.yaml) from the repository for a fully annotated example covering all 30 providers, both routing families, all 6 OSS plugins with correct multi-stage registration, MCP (both transports), compatibility, and observability.
+Copy [`config.example.yaml`](https://github.com/ferro-labs/ai-gateway/blob/main/config.example.yaml) from the repository for a fully annotated example covering all 30 providers, both routing families, all 11 OSS plugins with correct multi-stage registration, MCP (both transports), compatibility, and observability.
 
 ## Related pages
 
 - [Routing](/routing) — all 8 strategies with examples
 - [Plugins](/plugins) — detailed OSS plugin documentation
-- [Enterprise plugins](/plugins/enterprise) — Ferro Labs Managed guardrails (pii-redact, secret-scan, prompt-shield, schema-guard, regex-guard)
+- [Content guardrails](/plugins/guardrails) — PII, secret, injection, regex, and response-schema policies
 - [MCP integration](/guides/mcp) — tool server setup and the agentic loop
 - [Provider configuration](/providers/configuration) — per-provider env vars and base URL overrides

@@ -4,7 +4,7 @@ description: "Configure strategy.mode: least-latency to route to the target with
 keywords: [least-latency routing, p50 latency routing, AI gateway latency-based routing, ai-gateway strategy.mode, cold-start profiling, latency tracker, time to first chunk, exploration]
 ---
 
-Least-latency routes to the compatible target with the lowest observed **p50** latency for the request's upstream model. It optimizes for **how quickly a provider begins answering** across interchangeable providers — not for cost (`cost-optimized`), declared failover order (`fallback`), or an even traffic split (`loadbalance`). Set `strategy.mode: least-latency` to use it.
+Least-latency routes to the compatible target with the lowest observed **p50** latency for the request's upstream model. It optimizes for **how quickly a provider begins answering** across interchangeable providers — not for cost (`cost-optimized`), declared failover order (`fallback`), or an even traffic split (`load-balance`). Set `strategy.mode: least-latency` to use it.
 
 :::tip In plain words
 Every completed request is timed, and each new request goes to the provider with the lowest median time so far for that model. A provider nobody has timed yet is tried first so it gets measured; one nobody has timed in the last five minutes counts as untimed again. One request in ten goes to a measured runner-up on purpose, so a provider that has recovered gets noticed. "Time" is how long the provider took to *start* answering — a stream's first chunk — so a model that writes longer answers does not look slower than a terse one.
@@ -63,7 +63,7 @@ targets:
 - **Unseen targets jump the queue by design.** A target with no live samples for the model is shuffled to the front ahead of every sampled target, so adding a new target to the pool means it briefly absorbs traffic while it's profiled — this is intentional cold-start behaviour, not a bug.
 - **About one request in ten goes to a runner-up.** The leader takes the large majority, not everything. A dashboard that expects 100 % on the fastest provider is reading the exploration share.
 - **Samples expire and reset with the process.** A target with no sample newer than five minutes reads as unseen again; a restart, redeploy, or rolling update wipes all history. Neither is shared between gateway instances.
-- **`weight` is ignored.** `targets[].weight` has no effect under this mode — it is read by `loadbalance` and, for equal-cost ties, `cost-optimized`.
+- **`weight` is ignored.** `targets[].weight` has no effect under this mode — it is read by `load-balance` and, for equal-cost ties, `cost-optimized`.
 - **This is a pool mode.** The pipeline advances past an open-circuit or parked target, or one that failed in a failover-safe way, to the next one in p50 order; any other `4xx` (`400`, `401`, `403`, `404`, `422`, …) is returned to the client. Failover falls out of the mode family, not out of anything latency-specific.
 - **Only model-compatible targets are eligible.** A target whose provider isn't registered, or that doesn't serve the requested model, is filtered out before latency ordering is applied.
 

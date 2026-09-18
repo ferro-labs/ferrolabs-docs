@@ -5,7 +5,7 @@ keywords: [AI gateway plugins, plugin pipeline, before_request, after_request, o
 slug: /plugins
 ---
 
-Plugins are the Ferro Labs AI Gateway's middleware. Each one runs at fixed points in the request lifecycle and can inspect the request, mutate it, deny it, skip the provider call, or record what happened. The six built-in plugins — guardrails, a rate limiter, a spend budget, a response cache, and a request logger — are all built on the same interface an out-of-tree plugin uses, so nothing about the built-ins is privileged.
+Plugins are the Ferro Labs AI Gateway's middleware. Each one runs at fixed points in the request lifecycle and can inspect the request, mutate it, deny it, skip the provider call, or record what happened. The 11 built-in plugins — guardrails, a rate limiter, a spend budget, a response cache, and a request logger — are all built on the same interface an out-of-tree plugin uses, so nothing about the built-ins is privileged.
 
 ## What a plugin is
 
@@ -131,18 +131,23 @@ Two admin endpoints answer different questions:
 
 ## Built-in plugins
 
-Six plugins ship with the open-source gateway. Each has its own page for full configuration and gotchas.
+Eleven plugins ship with the open-source gateway.
 
 | Plugin | Type | Stages | Purpose |
 |---|---|---|---|
 | [`word-filter`](/plugins/word-filter) | guardrail | before_request (+ after_request) | Reject a request — or screen a response — whose text contains a blocked entry as a substring. |
+| [`regex-guard`](/plugins/guardrails#regex-guard) | guardrail | before_request (+ after_request) | Match custom named regular expressions against request or response text. |
+| [`pii-redact`](/plugins/guardrails#pii-redaction) | guardrail | before_request | Block, redact, or observe detected PII and custom patterns. |
+| [`secret-scan`](/plugins/guardrails#secret-scanning) | guardrail | before_request (+ after_request) | Detect curated credential formats and custom patterns. |
+| [`prompt-shield`](/plugins/guardrails#prompt-shield) | guardrail | before_request | Detect common prompt-injection and jailbreak phrasing. |
+| [`schema-guard`](/plugins/guardrails#schema-guard) | guardrail | after_request | Validate completed output against a JSON Schema subset. |
 | [`max-token`](/plugins/max-token) | guardrail | before_request | Reject a request over a completion-token ceiling, message count, or input length; never imposes a ceiling. |
 | [`rate-limit`](/plugins/rate-limit) | ratelimit | before_request | Token-bucket limits globally and per API key or user, independent of the per-IP HTTP limiter. |
 | [`budget`](/plugins/budget) | ratelimit | before_request + after_request | Soft per-API-key USD spend cap computed from token usage; `402 insufficient_quota` once exhausted. |
 | [`response-cache`](/plugins/response-cache) | transform | before_request + after_request | Serve an identical repeated chat request from an in-memory cache, scoped to the credential that primed it. |
 | [`request-logger`](/plugins/request-logger) | logging | before_request + after_request + on_error | Structured per-request logs, optionally persisted to power the dashboard's Request Logs page. |
 
-Advanced guardrails — PII redaction, prompt-injection shielding, secret scanning, schema validation — are available in Ferro Labs Managed. See [Enterprise plugins](/plugins/enterprise).
+See [Content guardrails](/plugins/guardrails) for their actions, stage restrictions, complete kind lists, and validation behavior.
 
 ## Related
 
@@ -151,4 +156,5 @@ Advanced guardrails — PII redaction, prompt-injection shielding, secret scanni
 - [Cost tracking](/guides/cost-tracking) — pairing `budget` with request-log cost data
 - [Request logging](/operations/request-logging) — persisting `request-logger` output
 - [MCP tool calling](/guides/mcp) — how plugins re-run across agentic loop turns
-- [Enterprise plugins](/plugins/enterprise) — managed guardrails beyond the OSS set
+- [Content guardrails](/plugins/guardrails) — regex, PII, secret, injection, and response-schema policies
+- [Managed guardrails](/plugins/enterprise) — CEL custom policy and external moderation preflight in Ferro Labs Managed

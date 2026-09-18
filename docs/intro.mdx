@@ -43,7 +43,7 @@ Every inference route needs a bearer token unless you explicitly set `ALLOW_UNAU
 |---|---|
 | **30 AI providers** | OpenAI, Anthropic, Gemini, Vertex AI, Mistral, Groq, Cohere, DeepSeek, Together, Perplexity, Fireworks, AI21, Azure OpenAI, Azure AI Foundry, xAI, Ollama, Ollama Cloud, Replicate, AWS Bedrock, Hugging Face, Cerebras, NVIDIA NIM, Cloudflare Workers AI, Databricks, Novita, Qwen, Moonshot, SambaNova, DeepInfra, OpenRouter — [see the matrix →](/providers) |
 | **8 routing strategies** | Single, fallback, weighted load balancing, least-latency, cost-optimized, conditional, content-based, and A/B test — [routing guide →](/routing) |
-| **6 built-in plugins** | Word filter, max-token, rate limit, budget, response cache, request logger — plus [5 Ferro Labs Managed](/plugins/enterprise) security plugins. [Plugin catalogue →](/plugins) |
+| **11 built-in OSS plugins** | Word filter, max-token, rate limit, budget, response cache, request logger, plus [five content guardrails](/plugins/guardrails) for regex, PII, secrets, prompt injection, and response schemas. [Plugin catalogue →](/plugins) |
 | **Unified request pipeline** | Chat, streaming, embeddings, and image generation share one routing pipeline — retry, circuit breaking, per-target concurrency, timeouts, metrics, and request logging are true of every surface. |
 | **Native endpoints** | Chat completions, embeddings, images, **rerank, moderations, audio (STT/TTS), files & batches, and `/v1/responses`** — governed and priced, not blindly proxied. [API reference →](/api-reference/overview) |
 | **MCP tool-calling** | Model Context Protocol servers over **HTTP or stdio** (run any `npx`/`uvx` server as a managed subprocess), with per-turn guardrails and budgeting on agentic loops. [MCP guide →](/guides/mcp) |
@@ -67,7 +67,7 @@ The dashboard now ships **embedded** in the OSS binary, all four core surfaces s
 ### Core reference
 - [Providers](/providers) — all 30 providers, supported endpoints, and how to enable them
 - [Routing](/routing) — the 8 strategies, with pool-vs-named behaviour and examples
-- [Plugins](/plugins) — the 6 built-in plugins, config, and pipeline stages
+- [Plugins](/plugins) — the 11 built-in plugins, config, and pipeline stages
 - [Dashboard](/guides/dashboard) — the embedded console
 - [API reference](/api-reference/overview) — endpoints, streaming, admin, and errors
 
@@ -78,7 +78,7 @@ The dashboard now ships **embedded** in the OSS binary, all four core surfaces s
 - [Troubleshooting](/guides/troubleshooting)
 
 :::info Ferro Labs Managed
-Need multi-tenancy, hosted infrastructure, semantic caching, and enterprise security plugins on top of the OSS engine? [Ferro Labs Managed](/ferrocloud/overview) is in early access — [join the waitlist →](https://www.ferrolabs.ai/).
+Need multi-tenancy, hosted infrastructure, semantic caching, SSO, and managed operations on top of the OSS engine? [Ferro Labs Managed](/ferrocloud/overview) is in early access — [join the waitlist →](https://www.ferrolabs.ai/).
 :::
 
 {/* No page-local JSON-LD here: the site-wide graph in docusaurus.config.ts

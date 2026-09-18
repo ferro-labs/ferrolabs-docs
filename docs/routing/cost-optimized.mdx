@@ -4,7 +4,7 @@ description: "Configure strategy.mode: cost-optimized in Ferro Labs AI Gateway t
 keywords: [cost-optimized routing, AI gateway cost routing, LLM cost optimization, unpriced_strategy, cheapest model routing, model catalog pricing, ai-gateway strategy.mode]
 ---
 
-Cost-optimized routes each request to the cheapest model-compatible target, ranked by **estimated input plus output cost** from the built-in model catalog. It optimizes for **spend** — not failover order (`fallback`), distribution (`loadbalance`), or latency (`least-latency`). Set `strategy.mode: cost-optimized` to use it.
+Cost-optimized routes each request to the cheapest model-compatible target, ranked by **estimated input plus output cost** from the built-in model catalog. It optimizes for **spend** — not failover order (`fallback`), distribution (`load-balance`), or latency (`least-latency`). Set `strategy.mode: cost-optimized` to use it.
 
 :::tip In plain words
 Each request goes to the cheapest provider that serves the model, using the built-in price list, a rough guess at how many tokens the prompt is, and the completion budget the request asked for. If the cheapest one is unreachable, times out or is overloaded, the next-cheapest takes over; two providers that cost the same share the traffic by `weight`. A provider with no known price is used last (the default), skipped, or treated as free — your choice.
